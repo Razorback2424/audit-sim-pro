@@ -4,8 +4,11 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // --- Helper Functions ---
+    function getUserRole() {
+      return get(/databases/$(database)/documents/roles/$(request.auth.uid)).data.role;
+    }
     function isAuthenticated() {
-      return request.auth != null;
+      return getUserRole() != null;
     }
 
     // Ensures the appId from the path matches the app_id custom claim in the user's auth token.
@@ -14,24 +17,22 @@ service cloud.firestore {
       return request.auth.token.app_id != null && request.auth.token.app_id == appIdWildcardFromPath;
     }
 
-    function getUserData(userId, appIdWildcard) {
-        return get(/databases/$(database)/documents/artifacts/$(appIdWildcard)/users/$(userId)/userProfileData/profile).data;
-    }
-
-    function getUserRole(userId, appIdWildcard) {
-      return getUserData(userId, appIdWildcard).role;
-    }
-
     function currentRequestingUserIsAdmin(appIdWildcard) {
-      return isAuthenticated() && getUserRole(request.auth.uid, appIdWildcard) == 'admin';
+      return isAuthenticated() && getUserRole() == 'admin';
     }
 
     function currentRequestingUserIsTrainee(appIdWildcard) {
-      return isAuthenticated() && getUserRole(request.auth.uid, appIdWildcard) == 'trainee';
+      return isAuthenticated() && getUserRole() == 'trainee';
     }
 
     function isOwner(userIdFromPath) {
       return isAuthenticated() && request.auth.uid == userIdFromPath;
+    }
+
+    // --- Roles ---
+    // Path: roles/{uid}
+    match /roles/{uid} {
+      allow read, write: if request.auth.uid == uid;
     }
 
     // --- User Profiles ---

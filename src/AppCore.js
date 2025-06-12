@@ -15,6 +15,7 @@ import {
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage'; // << MOVED IMPORT TO TOP
 import { XCircle, Loader2 } from 'lucide-react';
+import { getRole } from './services/roleService';
 
 /* global __firebase_config, __app_id, __initial_auth_token */
 
@@ -346,6 +347,48 @@ const useAuth = () => {
   return ctx;
 };
 
+// ---------- User Context ----------
+const UserContext = createContext({ role: null, loadingRole: true });
+
+const UserProvider = ({ children }) => {
+  const { currentUser } = useAuth();
+  const [role, setRole] = useState(null);
+  const [loadingRole, setLoadingRole] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      if (!currentUser) {
+        if (active) { setRole(null); setLoadingRole(false); }
+        return;
+      }
+      setLoadingRole(true);
+      try {
+        const r = await getRole(db, currentUser.uid);
+        if (active) setRole(r);
+      } catch (e) {
+        if (active) setRole(null);
+      } finally {
+        if (active) setLoadingRole(false);
+      }
+    };
+    load();
+    return () => { active = false; };
+  }, [currentUser]);
+
+  return (
+    <UserContext.Provider value={{ role, loadingRole }}>
+      {children}
+    </UserContext.Provider>
+  );
+};
+
+const useUser = () => {
+  const ctx = useContext(UserContext);
+  if (ctx === undefined) throw new Error('useUser must be used within a UserProvider');
+  return ctx;
+};
+
 // ---------- Exports ----------
 export {
   // Firebase services and core variables
@@ -364,6 +407,10 @@ export {
   // Auth related
   AuthProvider,
   useAuth,
+
+  // User related
+  UserProvider,
+  useUser,
 
   // UI Components
   Button,
