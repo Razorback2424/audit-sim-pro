@@ -11,16 +11,17 @@ service firebase.storage {
     // Role is tied to the user, across any app instance they might access.
     // If appId for user roles is fixed or always the same as the one in storage path, it simplifies.
     // Let's assume the user's role is determined from a known (or wildcarded from path) appId.
-    function getUserRole(userId, appIdFromStoragePath) {
-      return firestore.get(/databases/(default)/documents/artifacts/$(appIdFromStoragePath)/users/$(userId)/userProfileData/profile).data.role;
+    function getUserRole() {
+      return request.auth != null ?
+        firestore.get(/databases/$(database)/documents/roles/$(request.auth.uid)).data.role : null;
     }
 
     function isUserAdminForApp(appIdFromStoragePath) {
-      return request.auth != null && getUserRole(request.auth.uid, appIdFromStoragePath) == 'admin';
+      return getUserRole() == 'admin';
     }
 
     function isUserTraineeForApp(appIdFromStoragePath) {
-      return request.auth != null && getUserRole(request.auth.uid, appIdFromStoragePath) == 'trainee';
+      return getUserRole() == 'trainee';
     }
 
     // Function to check if a trainee can access a specific case's files
@@ -41,7 +42,7 @@ service firebase.storage {
       //   Simplification for V1: If you are an authenticated trainee, you can read.
       //   Relies on client not guessing URLs or having a more robust mechanism for URL generation.
       //   A better rule would check if the user has access to `caseId` via Firestore lookup.
-      allow read: if request.auth != null &&
+      allow read: if getUserRole() != null &&
                    ( isUserAdminForApp(appIdForFilePath) ||
                      ( isUserTraineeForApp(appIdForFilePath) &&
                        firestore.exists(
@@ -54,7 +55,7 @@ service firebase.storage {
       // Who can write (upload)?
       // - Only Admins (during case creation/edit).
       // - Validate file type (PDF) and size if needed.
-      allow write: if request.auth != null && isUserAdminForApp(appIdForFilePath) &&
+      allow write: if getUserRole() != null && isUserAdminForApp(appIdForFilePath) &&
                       request.resource.contentType.matches('application/pdf') &&
                       request.resource.size < 5 * 1024 * 1024; // Example: 5MB limit
     }
@@ -63,7 +64,7 @@ service firebase.storage {
     // New Path: artifacts/{appIdForFilePath}/case_documents/{caseId}/{fileName}
     match /artifacts/{appIdForFilePath}/case_documents/{caseId}/{originalFileName} {
       // Who can read? (Similar logic to AP Aging)
-      allow read: if request.auth != null &&
+      allow read: if getUserRole() != null &&
                    ( isUserAdminForApp(appIdForFilePath) ||
                      ( isUserTraineeForApp(appIdForFilePath) &&
                        firestore.exists(
@@ -75,7 +76,7 @@ service firebase.storage {
 
       // Who can write (upload)?
       // - Only Admins.
-      allow write: if request.auth != null && isUserAdminForApp(appIdForFilePath) &&
+      allow write: if getUserRole() != null && isUserAdminForApp(appIdForFilePath) &&
                       request.resource.contentType.matches('application/pdf') &&
                       request.resource.size < 5 * 1024 * 1024; // Example: 5MB limit
     }
