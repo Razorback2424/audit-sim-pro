@@ -325,7 +325,7 @@ const AuthProvider = ({ children }) => {
   };
 
   return (
-    <AuthContext.Providerp
+    <AuthContext.Provider
       value={{
         currentUser,
         userProfile,
