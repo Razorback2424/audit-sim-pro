@@ -29,12 +29,13 @@ import {
 // Ensure AppCore.js correctly exports all of these.
 import {
     Button, Input, Textarea, Select,
-    useModal, useAuth, useRoute, // Core hooks
-    ModalProvider, AuthProvider, RouterProvider, // Core providers
+    useModal, useAuth, useUser, useRoute, // Core hooks
+    ModalProvider, AuthProvider, UserProvider, RouterProvider, // Core providers
     CLASSIFICATION_OPTIONS, // Constants
     db, storage, FirestorePaths, appId,
     firebaseApp
 } from './AppCore'; // Assuming AppCore.js is in the same directory or path is adjusted
+import RoleRoute from './routes/RoleRoute';
 
 // --- Pages ---
 const RoleSelectionPage = () => {
@@ -70,6 +71,14 @@ const RoleSelectionPage = () => {
         </div>
     );
 };
+
+const UnauthorizedPage = () => (
+    <div className="min-h-screen flex flex-col items-center justify-center p-6 text-center">
+        <XCircle size={48} className="text-red-500 mb-4" />
+        <h1 className="text-2xl font-bold mb-2">Unauthorized</h1>
+        <p>You do not have permission to view this page.</p>
+    </div>
+);
 
 const AdminDashboardPage = () => {
     const { navigate } = useRoute();
@@ -1122,54 +1131,48 @@ const TraineeCaseViewPage = ({ params }) => {
 
 // --- Main App Component ---
 function App() {
-    const { currentUser, userProfile, loadingAuth, logout } = useAuth(); // Changed: userId to currentUser
+    const { currentUser, loadingAuth, logout } = useAuth();
+    const { role, loadingRole } = useUser();
     const { route, navigate } = useRoute();
 
     useEffect(() => {
-        if (loadingAuth) return;
+        if (loadingAuth || loadingRole) return;
         if (currentUser) {
-            if (!userProfile && route !== '/select-role') navigate('/select-role');
-            else if (userProfile && route === '/select-role') navigate('/');
-        } else if (route !== '/select-role') {
-             // Consider implications if not authenticated and not on role selection.
-             // For now, if no currentUser and not on select-role, it might default to RoleSelectionPage anyway.
-             // If you want to force to /select-role if not logged in:
-             // navigate('/select-role');
+            if (!role && route !== '/select-role') navigate('/select-role');
+            else if (role && route === '/select-role') navigate('/');
         }
-    }, [loadingAuth, currentUser, userProfile, route, navigate]);
+    }, [loadingAuth, loadingRole, currentUser, role, route, navigate]);
 
     if (loadingAuth) return <div className="min-h-screen flex flex-col items-center justify-center bg-gray-100 p-4 text-center"><Loader2 size={48} className="animate-spin text-blue-600 mb-4" /><h1 className="text-xl font-semibold text-gray-700">Loading AuditSim Pro...</h1><p className="text-sm text-gray-500">Initializing...</p></div>;
 
     let pageComponent = null;
-    if (!currentUser && route !== '/select-role') { // If not logged in, and not already trying to select a role, show role selection.
+    if (route === '/unauthorized') {
+        pageComponent = <UnauthorizedPage />;
+    } else if (!currentUser && route !== '/select-role') {
         pageComponent = <RoleSelectionPage />;
-    } else if (currentUser && !userProfile) { // Logged in, but no profile (role not set yet)
+    } else if (currentUser && !role) {
         pageComponent = <RoleSelectionPage />;
-    } else if (userProfile) { // Logged in and profile exists
-        if (userProfile.role === 'admin') {
-            const p = route.split('/');
-            if (route === '/' || route.startsWith('/admin/dashboard') || route === '/admin' || route === '') pageComponent = <AdminDashboardPage />;
-            else if (route === '/admin/create-case') pageComponent = <CaseFormPage />;
-            else if (p[0] === '' && p[1] === 'admin' && p[2] === 'edit-case' && p[3]) pageComponent = <CaseFormPage params={{ caseId: p[3] }} />;
-            else if (route === '/admin/user-management') pageComponent = <AdminUserManagementPage />;
-            else if (p[0] === '' && p[1] === 'admin' && p[2] === 'case-submissions' && p[3]) pageComponent = <AdminCaseSubmissionsPage params={{ caseId: p[3] }} />;
-            else pageComponent = <AdminDashboardPage />;
-        } else if (userProfile.role === 'trainee') {
-            const p = route.split('/');
-            if (route === '/' || route.startsWith('/trainee/dashboard') || route === '/trainee' || route === '') pageComponent = <TraineeDashboardPage />;
-            else if (p[0] === '' && p[1] === 'trainee' && p[2] === 'case' && p[3]) pageComponent = <TraineeCaseViewPage params={{ caseId: p[3] }} />;
-            else pageComponent = <TraineeDashboardPage />;
-        } else { // Has a profile but unknown role, or trying to access /select-role with a profile
-             pageComponent = <RoleSelectionPage />; // Default to role selection if role is invalid or they are on /select-role with a profile
-        }
-    } else { // Default catch-all, likely means no currentUser and on /select-role
+    } else if (role === 'admin') {
+        const p = route.split('/');
+        if (route === '/' || route.startsWith('/admin/dashboard') || route === '/admin' || route === '') pageComponent = <RoleRoute allowed={['admin']}><AdminDashboardPage /></RoleRoute>;
+        else if (route === '/admin/create-case') pageComponent = <RoleRoute allowed={['admin']}><CaseFormPage /></RoleRoute>;
+        else if (p[0] === '' && p[1] === 'admin' && p[2] === 'edit-case' && p[3]) pageComponent = <RoleRoute allowed={['admin']}><CaseFormPage params={{ caseId: p[3] }} /></RoleRoute>;
+        else if (route === '/admin/user-management') pageComponent = <RoleRoute allowed={['admin']}><AdminUserManagementPage /></RoleRoute>;
+        else if (p[0] === '' && p[1] === 'admin' && p[2] === 'case-submissions' && p[3]) pageComponent = <RoleRoute allowed={['admin']}><AdminCaseSubmissionsPage params={{ caseId: p[3] }} /></RoleRoute>;
+        else pageComponent = <RoleRoute allowed={['admin']}><AdminDashboardPage /></RoleRoute>;
+    } else if (role === 'trainee') {
+        const p = route.split('/');
+        if (route === '/' || route.startsWith('/trainee/dashboard') || route === '/trainee' || route === '') pageComponent = <TraineeDashboardPage />;
+        else if (p[0] === '' && p[1] === 'trainee' && p[2] === 'case' && p[3]) pageComponent = <TraineeCaseViewPage params={{ caseId: p[3] }} />;
+        else pageComponent = <TraineeDashboardPage />;
+    } else {
         pageComponent = <RoleSelectionPage />;
     }
 
 
     return (
         <div className="font-sans antialiased text-gray-900 bg-gray-100 flex flex-col min-h-screen">
-            <header className="bg-blue-700 text-white shadow-md sticky top-0 z-40"><div className="container mx-auto px-4 py-3 flex justify-between items-center"><h1 className="text-xl sm:text-2xl font-bold cursor-pointer hover:opacity-90" onClick={() => navigate('/')}>AuditSim Pro</h1><div className="flex items-center space-x-3 sm:space-x-4">{userProfile && <span className="text-xs sm:text-sm capitalize hidden sm:inline">Role: {userProfile.role}</span>}{currentUser?.uid && <span className="text-xs text-blue-200 hidden md:inline" title={currentUser.uid}>UID: {currentUser.uid.substring(0,8)}...</span>}{currentUser && (<Button onClick={logout} variant="secondary" className="text-xs sm:text-sm px-2 py-1 sm:px-3"><LogOut size={16} className="inline mr-1" /> Logout</Button>)}</div></div></header> {/* Changed: userId to currentUser?.uid */}
+            <header className="bg-blue-700 text-white shadow-md sticky top-0 z-40"><div className="container mx-auto px-4 py-3 flex justify-between items-center"><h1 className="text-xl sm:text-2xl font-bold cursor-pointer hover:opacity-90" onClick={() => navigate('/')}>AuditSim Pro</h1><div className="flex items-center space-x-3 sm:space-x-4">{role && <span className="text-xs sm:text-sm capitalize hidden sm:inline">Role: {role}</span>}{currentUser?.uid && <span className="text-xs text-blue-200 hidden md:inline" title={currentUser.uid}>UID: {currentUser.uid.substring(0,8)}...</span>}{currentUser && (<Button onClick={logout} variant="secondary" className="text-xs sm:text-sm px-2 py-1 sm:px-3"><LogOut size={16} className="inline mr-1" /> Logout</Button>)}</div></div></header> {/* Changed: userId to currentUser?.uid */}
             <main className="flex-grow container mx-auto px-2 sm:px-4 py-4 sm:py-6">{pageComponent}</main>
             <footer className="bg-gray-800 text-white text-center p-4 text-xs sm:text-sm"><p>&copy; {new Date().getFullYear()} AuditSim Pro. For training purposes.</p>{appId && <p className="text-xs text-gray-400 mt-1">App ID: {appId}</p>}</footer>
         </div>
@@ -1178,12 +1181,23 @@ function App() {
 
 // This is the main export that will be used by the legacy default export in the entry point (index.js or similar)
 export default function AuditSimProAppWithProviders() {
-    return (<ModalProvider><AuthProvider><RouterProvider><App /></RouterProvider></AuthProvider></ModalProvider>);
+    return (
+        <ModalProvider>
+            <AuthProvider>
+                <UserProvider>
+                    <RouterProvider>
+                        <App />
+                    </RouterProvider>
+                </UserProvider>
+            </AuthProvider>
+        </ModalProvider>
+    );
 }
 
 // Export individual pages if they need to be imported elsewhere, though typically App is the main entry.
 export {
     RoleSelectionPage,
+    UnauthorizedPage,
     AdminDashboardPage,
     AdminUserManagementPage,
     AdminCaseSubmissionsPage,
