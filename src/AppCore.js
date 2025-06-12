@@ -291,9 +291,11 @@ const AuthProvider = ({ children }) => {
       if (showModal) showModal('Cannot set role: not signed in.', 'Authentication Error');
       return;
     }
-    const ref = doc(db, FirestorePaths.USER_PROFILE(currentUser.uid));
+    const profileRef = doc(db, FirestorePaths.USER_PROFILE(currentUser.uid));
+    const roleRef = doc(db, FirestorePaths.ROLE_DOCUMENT(currentUser.uid));
     try {
-      const snap = await getDoc(ref); // Check if profile exists before deciding to create or update
+      await setDoc(roleRef, { role }, { merge: true });
+      const snap = await getDoc(profileRef); // Check if profile exists before deciding to create or update
       if (!snap.exists()) {
         const newProfile = {
           uid: currentUser.uid,
@@ -302,11 +304,11 @@ const AuthProvider = ({ children }) => {
           createdAt: Timestamp.now(),
           lastUpdatedAt: Timestamp.now()
         };
-        await setDoc(ref, newProfile);
+        await setDoc(profileRef, newProfile);
         setUserProfile(newProfile);
       } else {
         const update = { role, lastUpdatedAt: Timestamp.now() };
-        await setDoc(ref, update, { merge: true });
+        await setDoc(profileRef, update, { merge: true });
         setUserProfile((prev) => ({ ...prev, ...update }));
       }
     } catch (err) {
