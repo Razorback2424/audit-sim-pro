@@ -1,0 +1,83 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o { // {bucket} is your storage bucket name
+
+    // Helper function to get user role from Firestore
+    // Note: This path needs to be absolute and correct.
+    // $(appIdWildcard) here must come from the path of the file being accessed,
+    // so it needs to be part of the storage path if rules depend on it.
+    // However, user role is usually independent of the file's appId.
+    // Role is tied to the user, across any app instance they might access.
+    // If appId for user roles is fixed or always the same as the one in storage path, it simplifies.
+    // Let's assume the user's role is determined from a known (or wildcarded from path) appId.
+    function getUserRole(userId, appIdFromStoragePath) {
+      return firestore.get(/databases/(default)/documents/artifacts/$(appIdFromStoragePath)/users/$(userId)/userProfileData/profile).data.role;
+    }
+
+    function isUserAdminForApp(appIdFromStoragePath) {
+      return request.auth != null && getUserRole(request.auth.uid, appIdFromStoragePath) == 'admin';
+    }
+
+    function isUserTraineeForApp(appIdFromStoragePath) {
+      return request.auth != null && getUserRole(request.auth.uid, appIdFromStoragePath) == 'trainee';
+    }
+
+    // Function to check if a trainee can access a specific case's files
+    // This requires knowing the case data (visibleToUserIds) for the given caseId
+    // This is more complex as storage rules have limited ways to query related data dynamically.
+    // Often, file URLs are vended by a Cloud Function that does these checks,
+    // or files are placed in user-specific paths if permissions are highly granular and dynamic per file.
+    // A simpler approach for V1: if a trainee can read the case details in Firestore,
+    // they can read associated files. This implies the client app is responsible for
+    // only showing links to files for cases the trainee legitimately accessed.
+
+    // --- Rules for AP Aging Reports ---
+    // New Path: artifacts/{appIdForFilePath}/case_ap_aging/{caseId}/{fileName}
+    match /artifacts/{appIdForFilePath}/case_ap_aging/{caseId}/{fileName} {
+      // Who can read?
+      // - Admins.
+      // - Trainees who can access this caseId (this is the tricky part without direct case data lookup here).
+      //   Simplification for V1: If you are an authenticated trainee, you can read.
+      //   Relies on client not guessing URLs or having a more robust mechanism for URL generation.
+      //   A better rule would check if the user has access to `caseId` via Firestore lookup.
+      allow read: if request.auth != null &&
+                   ( isUserAdminForApp(appIdForFilePath) ||
+                     ( isUserTraineeForApp(appIdForFilePath) &&
+                       firestore.exists(
+                         /databases/$(database)/documents/
+                         artifacts/$(appIdForFilePath)/users/$(request.auth.uid)/caseSubmissions/$(caseId)
+                       )
+                     )
+                   );
+
+      // Who can write (upload)?
+      // - Only Admins (during case creation/edit).
+      // - Validate file type (PDF) and size if needed.
+      allow write: if request.auth != null && isUserAdminForApp(appIdForFilePath) &&
+                      request.resource.contentType.matches('application/pdf') &&
+                      request.resource.size < 5 * 1024 * 1024; // Example: 5MB limit
+    }
+
+    // --- Rules for Invoice PDF Mappings ---
+    // New Path: artifacts/{appIdForFilePath}/case_documents/{caseId}/{fileName}
+    match /artifacts/{appIdForFilePath}/case_documents/{caseId}/{originalFileName} {
+      // Who can read? (Similar logic to AP Aging)
+      allow read: if request.auth != null &&
+                   ( isUserAdminForApp(appIdForFilePath) ||
+                     ( isUserTraineeForApp(appIdForFilePath) &&
+                       firestore.exists(
+                         /databases/$(database)/documents/
+                         artifacts/$(appIdForFilePath)/users/$(request.auth.uid)/caseSubmissions/$(caseId)
+                       )
+                     )
+                   );
+
+      // Who can write (upload)?
+      // - Only Admins.
+      allow write: if request.auth != null && isUserAdminForApp(appIdForFilePath) &&
+                      request.resource.contentType.matches('application/pdf') &&
+                      request.resource.size < 5 * 1024 * 1024; // Example: 5MB limit
+    }
+  }
+}
