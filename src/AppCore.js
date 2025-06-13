@@ -15,7 +15,7 @@ import {
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage'; // << MOVED IMPORT TO TOP
 import { XCircle, Loader2 } from 'lucide-react';
-import { getRole } from './services/roleService';
+import { getRole, cacheRole } from './services/roleService';
 
 /* global __firebase_config, __app_id, __initial_auth_token */
 
