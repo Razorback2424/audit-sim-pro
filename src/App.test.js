@@ -1,8 +1,8 @@
 import { render, screen } from '@testing-library/react';
 import App from './App';
 
-test('renders loading message initially', () => {
+test('shows login screen after initial load', async () => {
   render(<App />);
-  const loadingElement = screen.getByText(/loading auditsim pro/i);
-  expect(loadingElement).toBeInTheDocument();
+  const roleHeading = await screen.findByText(/select your role/i);
+  expect(roleHeading).toBeInTheDocument();
 });
