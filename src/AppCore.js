@@ -188,6 +188,10 @@ const useRoute = () => {
 // ---------- Authentication Context ----------
 const AuthContext = createContext(null);
 
+let signInAsGuest = async () => {
+  throw new Error('AuthProvider not mounted');
+};
+
 const AuthProvider = ({ children }) => {
   const [currentUser, setCurrentUser] = useState(null);
   const [userProfile, setUserProfile] = useState(null);
@@ -199,34 +203,16 @@ const AuthProvider = ({ children }) => {
 
     const attemptInitialAuth = async () => {
       const tokenToUse = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : window.__initial_auth_token;
-      let signedIn = false;
 
       if (tokenToUse) {
         try {
           await signInWithCustomToken(auth, tokenToUse);
-          signedIn = true; // onAuthStateChanged will pick this up
         } catch (customTokenError) {
           console.error('Custom token sign-in error:', customTokenError);
-          // Will fall through to anonymous sign-in if custom token fails
+          // If custom token fails we'll fall back to Firebase session restoration
         }
       }
-
-      // If not signed in via custom token (either no token or it failed)
-      // and if there isn't already a current user (e.g. from a previous session restored by Firebase)
-      if (!signedIn && !auth.currentUser) {
-        try {
-          await signInAnonymously(auth);
-          // onAuthStateChanged will pick this up
-        } catch (anonError) {
-          console.error('Failed to sign in anonymously during initial attempt:', anonError);
-          if (showModal) showModal(`Failed to authenticate: ${anonError.message}. Please try refreshing.`, "Authentication Error");
-          setLoadingAuth(false); // Explicitly set loading to false if all auth attempts fail
-        }
-      } else if (auth.currentUser) {
-          // If there's already a currentUser (e.g. session restored),
-          // onAuthStateChanged will fire for them. We don't need to do another sign-in.
-          // setLoadingAuth(false) will be handled by onAuthStateChanged
-      }
+      // If no token is provided we rely on Firebase to restore any existing session.
     };
 
     attemptInitialAuth(); // Call the initial auth attempt
@@ -333,6 +319,19 @@ const AuthProvider = ({ children }) => {
     }
   };
 
+  const signInAsGuestInternal = async () => {
+    try {
+      setLoadingAuth(true);
+      await signInAnonymously(auth);
+    } catch (err) {
+      console.error('Anonymous sign-in error:', err);
+      if (showModal) showModal(`Failed to sign in anonymously: ${err.message} (Code: ${err.code})`, 'Authentication Error');
+      setLoadingAuth(false);
+    }
+  };
+
+  signInAsGuest = signInAsGuestInternal;
+
   return (
     <AuthContext.Provider
       value={{
@@ -341,6 +340,7 @@ const AuthProvider = ({ children }) => {
         loadingAuth,
         userId: currentUser ? currentUser.uid : null,
         setRole,
+        signInAsGuest,
         logout,
       }}
     >
@@ -415,6 +415,7 @@ export {
   // Auth related
   AuthProvider,
   useAuth,
+  signInAsGuest,
 
   // User related
   UserProvider,
