@@ -1,33 +1,31 @@
 // ---------- React and Firebase Imports (Core) ----------
-import React, { useState, useEffect, createContext, useContext, useCallback, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 
 // ---------- Firebase Service Imports (from AppCore, assuming they are correctly exported there) ----------
-import {
-    doc, setDoc, getDoc, deleteDoc,
-    collection, addDoc, query, where,
-    Timestamp, onSnapshot, collectionGroup
-} from 'firebase/firestore';
-import { getFunctions, httpsCallable } from 'firebase/functions';
-import { ref as storageRef, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+// Firebase utilities are used within dedicated page components
 
 // ---------- Icon Imports (Lucide) ----------
 import {
-    PlusCircle, BookOpen, User, LogOut, Eye, Trash2, Edit3, FileText,
-    Send, Briefcase, Users, FilePlus, ListChecks, UploadCloud, Users2, Paperclip,
-    ListFilter, AlertTriangle, CheckCircle2, Loader2, FileQuestion, XCircle
+    Users, Briefcase, User, LogOut, Loader2, XCircle
 } from 'lucide-react';
 
 // ---------- Core App Logic Imports (from AppCore.js) ----------
 import {
-    Button, Input, Textarea, Select,
-    useModal, useAuth, useUser, useRoute,
+    Button,
+    useAuth, useUser, useRoute,
     ModalProvider, AuthProvider, UserProvider, RouterProvider,
-    CLASSIFICATION_OPTIONS,
-    db, storage, FirestorePaths, appId,
-    firebaseApp
+    appId
 } from './AppCore';
 
 import RoleRoute from './routes/RoleRoute';
+
+// Import dedicated page components
+import AdminDashboardPage from './pages/AdminDashboardPage';
+import AdminUserManagementPage from './pages/AdminUserManagementPage';
+import AdminCaseSubmissionsPage from './pages/AdminCaseSubmissionsPage';
+import CaseFormPage from './pages/CaseFormPage';
+import TraineeDashboardPage from './pages/TraineeDashboardPage';
+import TraineeCaseViewPage from './pages/TraineeCaseViewPage';
 
 // --- Pages ---
 const RoleSelectionPage = () => {
@@ -82,50 +80,7 @@ const UnauthorizedPage = () => (
     </div>
 );
 
-// --- Placeholder Pages for Demo Purposes ---
-// These simple components allow the application to compile even
-// when the full page implementations are not present.
-const AdminDashboardPage = () => (
-    <div className="p-4 text-center">
-        <h2 className="text-xl font-semibold mb-2">Admin Dashboard</h2>
-        <p>Welcome to the admin dashboard.</p>
-    </div>
-);
-
-const AdminUserManagementPage = () => (
-    <div className="p-4 text-center">
-        <h2 className="text-xl font-semibold mb-2">User Management</h2>
-        <p>Manage your users here.</p>
-    </div>
-);
-
-const AdminCaseSubmissionsPage = ({ params }) => (
-    <div className="p-4 text-center">
-        <h2 className="text-xl font-semibold mb-2">Case Submissions</h2>
-        {params?.caseId && <p>Viewing submissions for case {params.caseId}</p>}
-    </div>
-);
-
-const CaseFormPage = ({ params }) => (
-    <div className="p-4 text-center">
-        <h2 className="text-xl font-semibold mb-2">Case Form</h2>
-        {params?.caseId ? <p>Editing case {params.caseId}</p> : <p>Create a new case</p>}
-    </div>
-);
-
-const TraineeDashboardPage = () => (
-    <div className="p-4 text-center">
-        <h2 className="text-xl font-semibold mb-2">Trainee Dashboard</h2>
-        <p>Welcome trainee.</p>
-    </div>
-);
-
-const TraineeCaseViewPage = ({ params }) => (
-    <div className="p-4 text-center">
-        <h2 className="text-xl font-semibold mb-2">Case View</h2>
-        {params?.caseId && <p>Viewing case {params.caseId}</p>}
-    </div>
-);
+// --- Page Components imported above are used for routing ---
 
 // --- routes configuration ---
 const adminRoutes = {
