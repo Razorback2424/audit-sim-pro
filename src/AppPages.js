@@ -31,7 +31,8 @@ import RoleRoute from './routes/RoleRoute';
 
 // --- Pages ---
 const RoleSelectionPage = () => {
-    const { setRole, userProfile, currentUser, loadingAuth, signInAsGuest } = useAuth();
+    const { currentUser, loadingAuth, signInAsGuest } = useAuth();
+    const { setRole, userProfile } = useUser();
     const { navigate } = useRoute();
     const [isSettingRole, setIsSettingRole] = useState(false);
 
@@ -126,6 +127,26 @@ const TraineeCaseViewPage = ({ params }) => (
     </div>
 );
 
+// --- routes configuration ---
+const adminRoutes = {
+    '/': <AdminDashboardPage />,
+    '/admin/dashboard': <AdminDashboardPage />,
+    '/admin': <AdminDashboardPage />,
+    '': <AdminDashboardPage />,
+    '/admin/create-case': <CaseFormPage />,
+    '/admin/edit-case/:caseId': (params) => <CaseFormPage params={params} />,
+    '/admin/user-management': <AdminUserManagementPage />,
+    '/admin/case-submissions/:caseId': (params) => <AdminCaseSubmissionsPage params={params} />,
+};
+
+const traineeRoutes = {
+    '/': <TraineeDashboardPage />,
+    '/trainee/dashboard': <TraineeDashboardPage />,
+    '/trainee': <TraineeDashboardPage />,
+    '': <TraineeDashboardPage />,
+    '/trainee/case/:caseId': (params) => <TraineeCaseViewPage params={params} />,
+};
+
 
 // --- Main App Component ---
 function App() {
@@ -141,28 +162,49 @@ function App() {
         }
     }, [loadingAuth, loadingRole, currentUser, role, route, navigate]);
 
-    if (loadingAuth) return <div className="min-h-screen flex flex-col items-center justify-center bg-gray-100 p-4 text-center"><Loader2 size={48} className="animate-spin text-blue-600 mb-4" /><h1 className="text-xl font-semibold text-gray-700">Loading AuditSim Pro...</h1><p className="text-sm text-gray-500">Initializing...</p></div>;
+    if (loadingAuth || loadingRole) {
+        return <div className="min-h-screen flex flex-col items-center justify-center bg-gray-100 p-4 text-center"><Loader2 size={48} className="animate-spin text-blue-600 mb-4" /><h1 className="text-xl font-semibold text-gray-700">Loading AuditSim Pro...</h1><p className="text-sm text-gray-500">Initializing...</p></div>;
+    }
 
-    let pageComponent = null;
     if (route === '/unauthorized') {
-        pageComponent = <UnauthorizedPage />;
-    } else if (!currentUser && route !== '/select-role') {
-        pageComponent = <RoleSelectionPage />;
-    } else if (currentUser && !role) {
-        pageComponent = <RoleSelectionPage />;
-    } else if (role === 'admin') {
-        const p = route.split('/');
-        if (route === '/' || route.startsWith('/admin/dashboard') || route === '/admin' || route === '') pageComponent = <RoleRoute allowed={['admin']}><AdminDashboardPage /></RoleRoute>;
-        else if (route === '/admin/create-case') pageComponent = <RoleRoute allowed={['admin']}><CaseFormPage /></RoleRoute>;
-        else if (p[0] === '' && p[1] === 'admin' && p[2] === 'edit-case' && p[3]) pageComponent = <RoleRoute allowed={['admin']}><CaseFormPage params={{ caseId: p[3] }} /></RoleRoute>;
-        else if (route === '/admin/user-management') pageComponent = <RoleRoute allowed={['admin']}><AdminUserManagementPage /></RoleRoute>;
-        else if (p[0] === '' && p[1] === 'admin' && p[2] === 'case-submissions' && p[3]) pageComponent = <RoleRoute allowed={['admin']}><AdminCaseSubmissionsPage params={{ caseId: p[3] }} /></RoleRoute>;
-        else pageComponent = <RoleRoute allowed={['admin']}><AdminDashboardPage /></RoleRoute>;
+        return <UnauthorizedPage />;
+    }
+
+    if (!currentUser || !role) {
+        return <RoleSelectionPage />;
+    }
+
+    const renderRoute = (routes) => {
+        for (const path in routes) {
+            const pathSegments = path.split('/');
+            const routeSegments = route.split('/');
+
+            if (pathSegments.length === routeSegments.length) {
+                const params = {};
+                const match = pathSegments.every((segment, i) => {
+                    if (segment.startsWith(':')) {
+                        params[segment.substring(1)] = routeSegments[i];
+                        return true;
+                    }
+                    return segment === routeSegments[i];
+                });
+
+                if (match) {
+                    const component = routes[path];
+                    return typeof component === 'function' ? component(params) : component;
+                }
+            }
+        }
+        return null;
+    };
+
+    let pageComponent;
+    if (role === 'admin') {
+        pageComponent = renderRoute(adminRoutes) || <AdminDashboardPage />;
+        pageComponent = <RoleRoute allowed={['admin']}>{pageComponent}</RoleRoute>;
     } else if (role === 'trainee') {
-        const p = route.split('/');
-        if (route === '/' || route.startsWith('/trainee/dashboard') || route === '/trainee' || route === '') pageComponent = <TraineeDashboardPage />;
-        else if (p[0] === '' && p[1] === 'trainee' && p[2] === 'case' && p[3]) pageComponent = <TraineeCaseViewPage params={{ caseId: p[3] }} />;
-        else pageComponent = <TraineeDashboardPage />;
+        pageComponent = renderRoute(traineeRoutes) || <TraineeDashboardPage />;
+        pageComponent = <RoleRoute allowed={['trainee']}>{pageComponent}</RoleRoute>;
     } else {
         pageComponent = <RoleSelectionPage />;
     }

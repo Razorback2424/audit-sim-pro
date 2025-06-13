@@ -11,7 +11,6 @@ import {
   doc,
   setDoc,
   getDoc,
-  Timestamp,
   serverTimestamp
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage'; // << MOVED IMPORT TO TOP
@@ -194,9 +193,8 @@ let signInAsGuest = async () => {
 
 const AuthProvider = ({ children }) => {
   const [currentUser, setCurrentUser] = useState(null);
-  const [userProfile, setUserProfile] = useState(null);
   const [loadingAuth, setLoadingAuth] = useState(true);
-  const { showModal } = useModal(); // Ensure useModal is available
+  const { showModal } = useModal();
 
   useEffect(() => {
     setLoadingAuth(true); // Set loading true at the start of the effect
@@ -217,78 +215,14 @@ const AuthProvider = ({ children }) => {
 
     attemptInitialAuth(); // Call the initial auth attempt
 
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
       setCurrentUser(user);
-      if (user) {
-        let profilePath = "ERROR: FirestorePaths.USER_PROFILE is not defined or user.uid is missing";
-        const S_appId = typeof __app_id !== 'undefined' ? __app_id : window.__app_id;
-        if (FirestorePaths && typeof FirestorePaths.USER_PROFILE === 'function' && user.uid) {
-          profilePath = FirestorePaths.USER_PROFILE(user.uid);
-        } else if (user.uid && S_appId) {
-          profilePath = `artifacts/${S_appId}/users/${user.uid}/userProfileData/profile`;
-        }
-
-        const ref = doc(db, profilePath);
-        try {
-          const snap = await getDoc(ref);
-          if (snap.exists()) {
-            setUserProfile({ uid: user.uid, ...snap.data() });
-          } else {
-            setUserProfile(null);
-            console.log(`User profile for ${user.uid} does not exist yet (snap.exists() is false). This is NOT a permission error.`);
-          }
-        } catch (err) {
-          console.error(`Fetching profile failed for UID ${user.uid} (raw error object):`, err);
-          console.error('Error Code:', err.code);
-          console.error('Error Name:', err.name);
-          console.error('Error Message:', err.message);
-          setUserProfile(null);
-          if (err.code === 'permission-denied') {
-            console.warn('Permission denied when fetching profile; this likely means the role document does not yet exist for this user.');
-          } else if (showModal) {
-            showModal(`Error fetching your profile for UID ${user.uid}: ${err.message} (Code: ${err.code})`, 'Profile Error');
-          }
-        }
-      } else {
-        setUserProfile(null);
-      }
-      setLoadingAuth(false); // Set loading to false after auth state is processed
+      setLoadingAuth(false);
     });
 
     return () => unsubscribe();
   }, [showModal]);
 
-  const setRole = async (role, userOverride = null) => {
-    const user = userOverride || currentUser;
-    if (!user) {
-      if (showModal) showModal('Cannot set role: not signed in.', 'Authentication Error');
-      return;
-    }
-    const profileRef = doc(db, FirestorePaths.USER_PROFILE(user.uid));
-    const roleRef = doc(db, FirestorePaths.ROLE_DOCUMENT(user.uid));
-    try {
-      await setDoc(roleRef, { role }, { merge: true });
-      const snap = await getDoc(profileRef); // Check if profile exists before deciding to create or update
-      if (!snap.exists()) {
-        const newProfile = {
-          uid: currentUser.uid,
-          email: currentUser.email ?? `anon-${currentUser.uid}@example.com`, // Fallback for anonymous
-          role,
-          createdAt: serverTimestamp(),
-          lastUpdatedAt: serverTimestamp()
-        };
-        await setDoc(profileRef, newProfile);
-        setUserProfile(newProfile);
-      } else {
-        const update = { role, lastUpdatedAt: serverTimestamp() };
-        await setDoc(profileRef, update, { merge: true });
-        setUserProfile((prev) => ({ ...prev, ...update }));
-      }
-    } catch (err) {
-      console.error('setRole error:', err);
-      if (showModal) showModal(`Error setting role: ${err.message} (Code: ${err.code})`, 'Error Setting Role');
-    }
-  };
 
   const logout = async () => {
     try {
@@ -319,10 +253,8 @@ const AuthProvider = ({ children }) => {
     <AuthContext.Provider
       value={{
         currentUser,
-        userProfile,
         loadingAuth,
         userId: currentUser ? currentUser.uid : null,
-        setRole,
         signInAsGuest,
         logout,
       }}
@@ -339,36 +271,82 @@ const useAuth = () => {
 };
 
 // ---------- User Context ----------
-const UserContext = createContext({ role: null, loadingRole: true });
+const UserContext = createContext({ role: null, loadingRole: true, userProfile: null, setRole: () => {} });
 
 const UserProvider = ({ children }) => {
   const { currentUser } = useAuth();
-  const [role, setRole] = useState(null);
+  const { showModal } = useModal();
+  const [role, setRoleState] = useState(null);
   const [loadingRole, setLoadingRole] = useState(true);
+  const [userProfile, setUserProfile] = useState(null);
 
   useEffect(() => {
     let active = true;
     const load = async () => {
       if (!currentUser) {
-        if (active) { setRole(null); setLoadingRole(false); }
+        if (active) { setRoleState(null); setUserProfile(null); setLoadingRole(false); }
         return;
       }
       setLoadingRole(true);
       try {
         const r = await getRole(db, currentUser.uid);
-        if (active) setRole(r);
+        if (active) setRoleState(r);
       } catch (e) {
-        if (active) setRole(null);
+        if (active) setRoleState(null);
       } finally {
         if (active) setLoadingRole(false);
+      }
+      try {
+        const ref = doc(db, FirestorePaths.USER_PROFILE(currentUser.uid));
+        const snap = await getDoc(ref);
+        if (active) {
+          setUserProfile(snap.exists() ? { uid: currentUser.uid, ...snap.data() } : null);
+        }
+      } catch (err) {
+        console.error('Profile fetch error:', err);
+        if (active) setUserProfile(null);
       }
     };
     load();
     return () => { active = false; };
   }, [currentUser]);
 
+  const setRole = async (newRole, userOverride = null) => {
+    const user = userOverride || currentUser;
+    if (!user) {
+      if (showModal) showModal('Cannot set role: not signed in.', 'Authentication Error');
+      return;
+    }
+    const profileRef = doc(db, FirestorePaths.USER_PROFILE(user.uid));
+    const roleRef = doc(db, FirestorePaths.ROLE_DOCUMENT(user.uid));
+    try {
+      await setDoc(roleRef, { role: newRole }, { merge: true });
+      cacheRole(user.uid, newRole);
+      const snap = await getDoc(profileRef);
+      if (!snap.exists()) {
+        const newProfile = {
+          uid: user.uid,
+          email: user.email ?? `anon-${user.uid}@example.com`,
+          role: newRole,
+          createdAt: serverTimestamp(),
+          lastUpdatedAt: serverTimestamp()
+        };
+        await setDoc(profileRef, newProfile);
+        setUserProfile(newProfile);
+      } else {
+        const update = { role: newRole, lastUpdatedAt: serverTimestamp() };
+        await setDoc(profileRef, update, { merge: true });
+        setUserProfile((prev) => ({ ...prev, ...update }));
+      }
+      setRoleState(newRole);
+    } catch (err) {
+      console.error('setRole error:', err);
+      if (showModal) showModal(`Error setting role: ${err.message} (Code: ${err.code})`, 'Error Setting Role');
+    }
+  };
+
   return (
-    <UserContext.Provider value={{ role, loadingRole }}>
+    <UserContext.Provider value={{ role, loadingRole, userProfile, setRole }}>
       {children}
     </UserContext.Provider>
   );
