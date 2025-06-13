@@ -220,33 +220,13 @@ const AuthProvider = ({ children }) => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
       if (user) {
-        // --- START OF DIAGNOSTIC LOGGING ---
-        console.log('----------------------------------------------------');
-        console.log('[AUTH STATE CHANGED - USER EXISTS]');
-        if (db && db.app && db.app.options) {
-          console.log('Firebase App Project ID (from client config):', db.app.options.projectId);
-        } else {
-          console.error('Firestore `db` object or its config is not available for logging projectId.');
-        }
-        if (auth && auth.currentUser) {
-          console.log('Auth Service currentUser object:', auth.currentUser);
-        } else {
-          console.log('Auth Service currentUser object is null/undefined at this point.');
-        }
-        console.log('onAuthStateChanged user.uid:', user.uid);
-        console.log('onAuthStateChanged user.email:', user.email);
-        console.log('onAuthStateChanged user.isAnonymous:', user.isAnonymous);
-        const S_appId = typeof __app_id !== 'undefined' ? __app_id : window.__app_id;
-        console.log('Client-side App ID variable (__app_id):', S_appId);
         let profilePath = "ERROR: FirestorePaths.USER_PROFILE is not defined or user.uid is missing";
+        const S_appId = typeof __app_id !== 'undefined' ? __app_id : window.__app_id;
         if (FirestorePaths && typeof FirestorePaths.USER_PROFILE === 'function' && user.uid) {
           profilePath = FirestorePaths.USER_PROFILE(user.uid);
         } else if (user.uid && S_appId) {
           profilePath = `artifacts/${S_appId}/users/${user.uid}/userProfileData/profile`;
         }
-        console.log('Constructed Firestore Path for getDoc:', profilePath);
-        console.log('----------------------------------------------------');
-        // --- END OF DIAGNOSTIC LOGGING ---
 
         const ref = doc(db, profilePath);
         try {
