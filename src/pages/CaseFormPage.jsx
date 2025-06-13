@@ -243,6 +243,7 @@ export default function CaseFormPage({ params }) {
           createdBy: userId,
           createdAt: Timestamp.now(),
           updatedAt: Timestamp.now(),
+          _deleted: false,
         };
         const casesCollectionRef = collection(db, FirestorePaths.CASES_COLLECTION());
         const newCaseRef = await addDoc(casesCollectionRef, tempCaseData);
@@ -279,6 +280,7 @@ export default function CaseFormPage({ params }) {
         updatedAt: Timestamp.now(),
         createdBy: isNewCaseCreation || !originalCaseData?.createdBy ? userId : originalCaseData.createdBy,
         createdAt: isNewCaseCreation || !originalCaseData?.createdAt ? Timestamp.now() : originalCaseData.createdAt,
+        _deleted: originalCaseData?._deleted ?? false,
       };
 
       const caseRef = doc(db, FirestorePaths.CASE_DOCUMENT(currentCaseId));
