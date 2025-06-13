@@ -38,10 +38,7 @@ service firebase.storage {
       allow read: if getUserRole() != null &&
                    ( isUserAdminForApp(appIdForFilePath) ||
                      ( isUserTraineeForApp(appIdForFilePath) &&
-                       firestore.exists(
-                         /databases/$(database)/documents/
-                         artifacts/$(appIdForFilePath)/users/$(request.auth.uid)/caseSubmissions/$(caseId)
-                       )
+                       firestore.exists(/databases/$(database)/documents/artifacts/$(appIdForFilePath)/users/$(request.auth.uid)/caseSubmissions/$(caseId))
                      )
                    );
 
@@ -60,10 +57,7 @@ service firebase.storage {
       allow read: if getUserRole() != null &&
                    ( isUserAdminForApp(appIdForFilePath) ||
                      ( isUserTraineeForApp(appIdForFilePath) &&
-                       firestore.exists(
-                         /databases/$(database)/documents/
-                         artifacts/$(appIdForFilePath)/users/$(request.auth.uid)/caseSubmissions/$(caseId)
-                       )
+                       firestore.exists(/databases/$(database)/documents/artifacts/$(appIdForFilePath)/users/$(request.auth.uid)/caseSubmissions/$(caseId))
                      )
                    );
 

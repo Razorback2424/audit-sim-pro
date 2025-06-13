@@ -11,7 +11,8 @@ import {
   doc,
   setDoc,
   getDoc,
-  Timestamp
+  Timestamp,
+  serverTimestamp
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage'; // << MOVED IMPORT TO TOP
 import { XCircle, Loader2 } from 'lucide-react';
@@ -306,13 +307,13 @@ const AuthProvider = ({ children }) => {
           uid: currentUser.uid,
           email: currentUser.email ?? `anon-${currentUser.uid}@example.com`, // Fallback for anonymous
           role,
-          createdAt: Timestamp.now(),
-          lastUpdatedAt: Timestamp.now()
+          createdAt: serverTimestamp(),
+          lastUpdatedAt: serverTimestamp()
         };
         await setDoc(profileRef, newProfile);
         setUserProfile(newProfile);
       } else {
-        const update = { role, lastUpdatedAt: Timestamp.now() };
+        const update = { role, lastUpdatedAt: serverTimestamp() };
         await setDoc(profileRef, update, { merge: true });
         setUserProfile((prev) => ({ ...prev, ...update }));
       }
