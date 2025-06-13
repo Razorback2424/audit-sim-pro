@@ -51,6 +51,7 @@ const FirestorePaths = {
   CASE_DOCUMENT: (caseId) => `artifacts/${appId}/public/data/cases/${caseId}`,
   USERS_COLLECTION: () => `artifacts/${appId}/users`,
   USER_CASE_SUBMISSION: (userId, caseId) => `artifacts/${appId}/users/${userId}/caseSubmissions/${caseId}`,
+  ROLE_DOCUMENT: (userId) => `roles/${userId}`,
   // Add any other paths here as needed for your project
 };
 
@@ -275,7 +276,11 @@ const AuthProvider = ({ children }) => {
           console.error('Error Name:', err.name);
           console.error('Error Message:', err.message);
           setUserProfile(null);
-          if (showModal) showModal(`Error fetching your profile for UID ${user.uid}: ${err.message} (Code: ${err.code})`, 'Profile Error');
+          if (err.code === 'permission-denied') {
+            console.warn('Permission denied when fetching profile; this likely means the role document does not yet exist for this user.');
+          } else if (showModal) {
+            showModal(`Error fetching your profile for UID ${user.uid}: ${err.message} (Code: ${err.code})`, 'Profile Error');
+          }
         }
       } else {
         setUserProfile(null);
