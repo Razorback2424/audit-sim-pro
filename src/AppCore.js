@@ -258,13 +258,14 @@ const AuthProvider = ({ children }) => {
     return () => unsubscribe();
   }, [showModal]);
 
-  const setRole = async (role) => {
-    if (!currentUser) {
+  const setRole = async (role, userOverride = null) => {
+    const user = userOverride || currentUser;
+    if (!user) {
       if (showModal) showModal('Cannot set role: not signed in.', 'Authentication Error');
       return;
     }
-    const profileRef = doc(db, FirestorePaths.USER_PROFILE(currentUser.uid));
-    const roleRef = doc(db, FirestorePaths.ROLE_DOCUMENT(currentUser.uid));
+    const profileRef = doc(db, FirestorePaths.USER_PROFILE(user.uid));
+    const roleRef = doc(db, FirestorePaths.ROLE_DOCUMENT(user.uid));
     try {
       await setDoc(roleRef, { role }, { merge: true });
       const snap = await getDoc(profileRef); // Check if profile exists before deciding to create or update
@@ -302,11 +303,13 @@ const AuthProvider = ({ children }) => {
   const signInAsGuestInternal = async () => {
     try {
       setLoadingAuth(true);
-      await signInAnonymously(auth);
+      const cred = await signInAnonymously(auth);
+      return cred.user;
     } catch (err) {
       console.error('Anonymous sign-in error:', err);
       if (showModal) showModal(`Failed to sign in anonymously: ${err.message} (Code: ${err.code})`, 'Authentication Error');
       setLoadingAuth(false);
+      throw err;
     }
   };
 

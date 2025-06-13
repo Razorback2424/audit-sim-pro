@@ -41,10 +41,16 @@ const RoleSelectionPage = () => {
 
     const handleSelectRole = async (role) => {
         setIsSettingRole(true);
-        if (!currentUser) {
-            await signInAsGuest();
+        let user = currentUser;
+        if (!user) {
+            try {
+                user = await signInAsGuest();
+            } catch (err) {
+                setIsSettingRole(false);
+                return;
+            }
         }
-        await setRole(role);
+        await setRole(role, user);
         setIsSettingRole(false);
     };
 
