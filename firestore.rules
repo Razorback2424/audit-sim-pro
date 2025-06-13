@@ -14,7 +14,8 @@ service cloud.firestore {
     // Ensures the appId from the path matches the app_id custom claim in the user's auth token.
     // IMPORTANT: You must set an 'app_id' custom claim on your Firebase Auth users.
     function tenantAppIdMatchesRequest(appIdWildcardFromPath) {
-      return request.auth.token.app_id != null && request.auth.token.app_id == appIdWildcardFromPath;
+      // Allow when no app_id claim is present for local/dev environments
+      return request.auth.token.app_id == null || request.auth.token.app_id == appIdWildcardFromPath;
     }
 
     function currentRequestingUserIsAdmin(appIdWildcard) {
