@@ -31,7 +31,7 @@ import RoleRoute from './routes/RoleRoute'; // CHANGED: RoleRoute imported
 
 // --- Pages ---
 const RoleSelectionPage = () => {
-    const { setRole, userProfile, currentUser, loadingAuth } = useAuth();
+    const { setRole, userProfile, currentUser, loadingAuth, signInAsGuest } = useAuth();
     const { navigate } = useRoute();
     const [isSettingRole, setIsSettingRole] = useState(false);
 
@@ -41,6 +41,9 @@ const RoleSelectionPage = () => {
 
     const handleSelectRole = async (role) => {
         setIsSettingRole(true);
+        if (!currentUser) {
+            await signInAsGuest();
+        }
         await setRole(role);
         setIsSettingRole(false);
     };
@@ -57,7 +60,7 @@ const RoleSelectionPage = () => {
                     <Button onClick={() => handleSelectRole('admin')} className="w-full py-3 text-lg" isLoading={isSettingRole} disabled={isSettingRole}><Briefcase size={20} className="inline mr-2" /> Administrator / Instructor</Button>
                     <Button onClick={() => handleSelectRole('trainee')} variant="secondary" className="w-full py-3 text-lg" isLoading={isSettingRole} disabled={isSettingRole}><User size={20} className="inline mr-2" /> Auditor Trainee</Button>
                 </div>
-                <p className="mt-6 text-sm text-gray-500">Your User ID: {currentUser?.uid || "Not Available"}</p>
+                <p className="mt-6 text-sm text-gray-500">Your User ID: {currentUser?.uid || "Not signed in"}</p>
             </div>
         </div>
     );

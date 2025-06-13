@@ -2,6 +2,10 @@
 
 This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
 
+## Login Behavior
+
+On each launch the app shows a role selection screen. No user ID is created until you choose a role, at which point the app signs in anonymously and stores your selection.
+
 ## Available Scripts
 
 In the project directory, you can run:
