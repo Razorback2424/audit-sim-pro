@@ -1,10 +1,54 @@
-// WARNING: Completely open rules – do NOT use in production!
 rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
+    function getUserRole() {
+      return request.auth != null ?
+        get(/databases/$(database)/documents/roles/$(request.auth.uid)).data.role :
+        null;
+    }
+
+    function isAdmin() {
+      return getUserRole() == 'admin';
+    }
+
+    function isTrainee() {
+      return getUserRole() == 'trainee';
+    }
+
+    function traineeHasAccessToCase(caseId) {
+      return exists(/databases/$(database)/documents/artifacts/$(appId)/cases/$(caseId)/authorizedTrainees/$(request.auth.uid));
+    }
+
+    match /roles/{userId} {
+      allow read, write: if request.auth != null &&
+        (request.auth.uid == userId || isAdmin());
+    }
+
+    match /artifacts/{appId}/public/data/cases/{caseId} {
+      allow read: if request.auth != null && (
+        isAdmin() ||
+        (isTrainee() && traineeHasAccessToCase(caseId))
+      );
+      allow write: if request.auth != null && isAdmin();
+    }
+
+    match /artifacts/{appId}/users/{userId}/userProfileData/profile {
+      allow read: if request.auth != null && (request.auth.uid == userId || isAdmin());
+      allow write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    match /artifacts/{appId}/users/{userId}/caseSubmissions/{caseId} {
+      allow read: if request.auth != null && (isAdmin() || request.auth.uid == userId);
+      allow write: if request.auth != null && request.auth.uid == userId && isTrainee();
+    }
+
+    match /artifacts/{appId}/cases/{caseId}/authorizedTrainees/{traineeId} {
+      allow read, write: if request.auth != null && isAdmin();
+    }
+
     match /{document=**} {
-      allow read, write: if true;  // All users can read and write anything
+      allow read, write: if false;
     }
   }
 }
