@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
-import { db, FirestorePaths, Button, useRoute, useModal, useAuth } from '../AppCore';
+import { Button, useRoute, useModal, useAuth } from '../AppCore';
+import { subscribeToActiveCases } from '../services/caseService';
 import { ListChecks, BookOpen } from 'lucide-react';
 
 export default function TraineeDashboardPage() {
@@ -15,18 +15,13 @@ export default function TraineeDashboardPage() {
       setLoadingCases(false);
       return;
     }
-    const casesCollectionRef = collection(db, FirestorePaths.CASES_COLLECTION());
-    const q = query(casesCollectionRef, where('_deleted', '!=', true));
 
-    const unsubscribe = onSnapshot(
-      q,
-      (querySnapshot) => {
-        const casesData = querySnapshot.docs
-          .map((doc) => ({ id: doc.id, ...doc.data() }))
-          .filter((caseDoc) => {
-            return !caseDoc.visibleToUserIds || caseDoc.visibleToUserIds.length === 0 || caseDoc.visibleToUserIds.includes(userId);
-          });
-        setCases(casesData);
+    const unsubscribe = subscribeToActiveCases(
+      (data) => {
+        const filtered = data.filter(
+          (caseDoc) => !caseDoc.visibleToUserIds || caseDoc.visibleToUserIds.length === 0 || caseDoc.visibleToUserIds.includes(userId)
+        );
+        setCases(filtered);
         setLoadingCases(false);
       },
       (error) => {

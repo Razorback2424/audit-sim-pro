@@ -13,6 +13,13 @@ Admins can read and write all case and user data. Trainees may only read the
 cases they are authorized for and submit their own selections. See
 `firestore.rules` and `storage.rules` for the exact RBAC logic.
 
+## Firebase Service Modules
+
+Firestore queries and mutations are centralized under `src/services/`. Pages
+import these modules (e.g. `caseService.js`, `submissionService.js`) instead of
+calling Firestore directly. This makes page components slimmer and allows tests
+to easily mock Firebase interactions.
+
 ## Available Scripts
 
 In the project directory, you can run:

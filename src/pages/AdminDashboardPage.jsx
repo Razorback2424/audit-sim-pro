@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { collection, onSnapshot, query, doc, setDoc, Timestamp } from 'firebase/firestore';
 import { FilePlus, Users2, Edit3, ListFilter, Trash2 } from 'lucide-react';
-import { db, FirestorePaths, Button, useRoute, useModal } from '../AppCore';
+import { Button, useRoute, useModal } from '../AppCore';
+import { subscribeToCases, markCaseDeleted } from '../services/caseService';
 
 export default function AdminDashboardPage() {
   const { navigate } = useRoute();
@@ -10,17 +10,17 @@ export default function AdminDashboardPage() {
   const [loadingCases, setLoadingCases] = useState(true);
 
   useEffect(() => {
-    const casesCollectionRef = collection(db, FirestorePaths.CASES_COLLECTION());
-    const q = query(casesCollectionRef);
-    const unsubscribe = onSnapshot(q, (querySnapshot) => {
-      const casesData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setCases(casesData);
-      setLoadingCases(false);
-    }, (error) => {
-      console.error('Error fetching cases: ', error);
-      showModal('Error fetching cases: ' + error.message, 'Error');
-      setLoadingCases(false);
-    });
+    const unsubscribe = subscribeToCases(
+      (data) => {
+        setCases(data);
+        setLoadingCases(false);
+      },
+      (error) => {
+        console.error('Error fetching cases: ', error);
+        showModal('Error fetching cases: ' + error.message, 'Error');
+        setLoadingCases(false);
+      }
+    );
     return () => unsubscribe();
   }, [showModal]);
 
@@ -37,7 +37,7 @@ export default function AdminDashboardPage() {
             onClick={async () => {
               hideModal();
               try {
-                await setDoc(doc(db, FirestorePaths.CASE_DOCUMENT(caseId)), { _deleted: true, updatedAt: Timestamp.now() }, { merge: true });
+                await markCaseDeleted(caseId);
                 showModal('Case marked for deletion.', 'Success');
               } catch (error) {
                 console.error('Error deleting case:', error);

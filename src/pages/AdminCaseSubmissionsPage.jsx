@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { doc, getDoc, collection, getDocs } from 'firebase/firestore';
-import { db, FirestorePaths, Button, useRoute, useModal } from '../AppCore';
+import { Button, useRoute, useModal } from '../AppCore';
+import { fetchCase } from '../services/caseService';
+import { fetchSubmissionsForCase } from '../services/submissionService';
 
 export default function AdminCaseSubmissionsPage({ params }) {
   const { caseId } = params;
@@ -17,25 +18,12 @@ export default function AdminCaseSubmissionsPage({ params }) {
     }
     setLoadingSubmissions(true);
 
-    const caseRef = doc(db, FirestorePaths.CASE_DOCUMENT(caseId));
-    getDoc(caseRef).then(docSnap => {
-      if (docSnap.exists()) {
-        setCaseName(docSnap.data().caseName);
-      }
+    fetchCase(caseId).then((caseDoc) => {
+      if (caseDoc) setCaseName(caseDoc.caseName);
     });
 
-    const usersCollectionRef = collection(db, FirestorePaths.USERS_COLLECTION());
-    getDocs(usersCollectionRef)
-      .then(async (userDocsSnapshot) => {
-        const allSubmissions = [];
-        for (const userDoc of userDocsSnapshot.docs) {
-          const userId = userDoc.id;
-          const submissionRef = doc(db, FirestorePaths.USER_CASE_SUBMISSION(userId, caseId));
-          const submissionSnap = await getDoc(submissionRef);
-          if (submissionSnap.exists()) {
-            allSubmissions.push({ id: submissionSnap.id, userId, ...submissionSnap.data() });
-          }
-        }
+    fetchSubmissionsForCase(caseId)
+      .then((allSubmissions) => {
         setSubmissions(allSubmissions);
         setLoadingSubmissions(false);
       })

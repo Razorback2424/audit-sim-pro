@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { doc, getDoc, setDoc, collection, addDoc, Timestamp } from 'firebase/firestore';
+import { Timestamp } from 'firebase/firestore';
 import { storage } from '../AppCore';
 import { ref as storageRef, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { useAuth, db, FirestorePaths, Input, Textarea, Button, useRoute, useModal } from '../AppCore';
+import { useAuth, Input, Textarea, Button, useRoute, useModal } from '../AppCore';
+import { fetchCase, createCase, updateCase } from '../services/caseService';
 import { PlusCircle, Trash2, Paperclip, CheckCircle2, AlertTriangle, UploadCloud } from 'lucide-react';
 
 export default function CaseFormPage({ params }) {
@@ -26,11 +27,9 @@ export default function CaseFormPage({ params }) {
   useEffect(() => {
     if (isEditing && editingCaseId) {
       setLoading(true);
-      const caseRef = doc(db, FirestorePaths.CASE_DOCUMENT(editingCaseId));
-      getDoc(caseRef)
-        .then((docSnap) => {
-          if (docSnap.exists()) {
-            const data = docSnap.data();
+      fetchCase(editingCaseId)
+        .then((data) => {
+          if (data) {
             setOriginalCaseData(data);
             setCaseName(data.caseName || '');
             setVisibleToUserIdsStr((data.visibleToUserIds || []).join(', '));
@@ -245,9 +244,7 @@ export default function CaseFormPage({ params }) {
           updatedAt: Timestamp.now(),
           _deleted: false,
         };
-        const casesCollectionRef = collection(db, FirestorePaths.CASES_COLLECTION());
-        const newCaseRef = await addDoc(casesCollectionRef, tempCaseData);
-        currentCaseId = newCaseRef.id;
+        currentCaseId = await createCase(tempCaseData);
         showModal(`Case structure created (ID: ${currentCaseId}). Uploading files... This may take a moment. Please do not navigate away.`, 'Processing', null);
       } else if (editingCaseId) {
         currentCaseId = editingCaseId;
@@ -283,8 +280,7 @@ export default function CaseFormPage({ params }) {
         _deleted: originalCaseData?._deleted ?? false,
       };
 
-      const caseRef = doc(db, FirestorePaths.CASE_DOCUMENT(currentCaseId));
-      await setDoc(caseRef, caseDataPayload, { merge: true });
+      await updateCase(currentCaseId, caseDataPayload);
 
       showModal(`Case ${isNewCaseCreation ? 'created' : 'updated'} successfully!`, 'Success');
       navigate('/admin');
