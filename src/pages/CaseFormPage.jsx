@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Timestamp } from 'firebase/firestore';
-import { storage } from '../AppCore';
+import { storage, appId } from '../AppCore';
 import { ref as storageRef, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
 import { useAuth, Input, Textarea, Button, useRoute, useModal } from '../AppCore';
 import { fetchCase, createCase, updateCase } from '../services/caseService';
+import getUUID from '../utils/getUUID';
 import { PlusCircle, Trash2, Paperclip, CheckCircle2, AlertTriangle, UploadCloud } from 'lucide-react';
 
 export default function CaseFormPage({ params }) {
@@ -13,8 +14,8 @@ export default function CaseFormPage({ params }) {
   const { userId } = useAuth();
   const { showModal } = useModal();
 
-  const initialDisbursement = () => ({ _tempId: crypto.randomUUID(), paymentId: '', payee: '', amount: '', paymentDate: '' });
-  const initialMapping = () => ({ _tempId: crypto.randomUUID(), paymentId: '', fileName: '', storagePath: '', clientSideFile: null, uploadProgress: undefined, uploadError: null, downloadURL: '' });
+  const initialDisbursement = () => ({ _tempId: getUUID(), paymentId: '', payee: '', amount: '', paymentDate: '' });
+  const initialMapping = () => ({ _tempId: getUUID(), paymentId: '', fileName: '', storagePath: '', clientSideFile: null, uploadProgress: undefined, uploadError: null, downloadURL: '' });
 
   const [caseName, setCaseName] = useState('');
   const [visibleToUserIdsStr, setVisibleToUserIdsStr] = useState('');
@@ -33,9 +34,9 @@ export default function CaseFormPage({ params }) {
             setOriginalCaseData(data);
             setCaseName(data.caseName || '');
             setVisibleToUserIdsStr((data.visibleToUserIds || []).join(', '));
-            setDisbursements(data.disbursements?.map((d) => ({ ...d, _tempId: d._tempId || crypto.randomUUID() })) || [initialDisbursement()]);
+            setDisbursements(data.disbursements?.map((d) => ({ ...d, _tempId: d._tempId || getUUID() })) || [initialDisbursement()]);
             setInvoiceMappings(
-              data.invoiceMappings?.map((m) => ({ ...m, _tempId: m._tempId || crypto.randomUUID(), clientSideFile: null, uploadProgress: m.storagePath ? 100 : undefined, uploadError: null })) || [initialMapping()]
+              data.invoiceMappings?.map((m) => ({ ...m, _tempId: m._tempId || getUUID(), clientSideFile: null, uploadProgress: m.storagePath ? 100 : undefined, uploadError: null })) || [initialMapping()]
             );
           } else {
             showModal('Case not found.', 'Error');
@@ -114,7 +115,7 @@ export default function CaseFormPage({ params }) {
               const [paymentId, payee, amount, paymentDate] = parts;
               if (paymentId && payee && amount && paymentDate) {
                 return {
-                  _tempId: crypto.randomUUID(),
+                  _tempId: getUUID(),
                   paymentId: paymentId.trim(),
                   payee: payee.trim(),
                   amount: amount.trim(),
@@ -156,7 +157,7 @@ export default function CaseFormPage({ params }) {
       setInvoiceMappings((prev) => prev.map((m) => (m._tempId === mappingItem._tempId ? { ...m, uploadError: errorMsg, uploadProgress: undefined } : m)));
       throw new Error(errorMsg);
     }
-    const finalStoragePath = `case_documents/${caseIdForUpload}/${file.name}`;
+    const finalStoragePath = `artifacts/${appId}/case_documents/${caseIdForUpload}/${file.name}`;
 
     setInvoiceMappings((prev) => prev.map((m) => (m._tempId === mappingItem._tempId ? { ...m, storagePath: finalStoragePath, uploadProgress: 0, uploadError: null } : m)));
 

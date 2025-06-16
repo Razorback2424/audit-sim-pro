@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
-import { db, FirestorePaths, Button, useRoute, useModal } from '../AppCore';
+import { Button, useRoute, useModal } from '../AppCore';
+import { fetchUsersWithProfiles } from '../services/userService';
 
 export default function AdminUserManagementPage() {
   const [users, setUsers] = useState([]);
@@ -10,21 +10,9 @@ export default function AdminUserManagementPage() {
 
   useEffect(() => {
     setLoadingUsers(true);
-    const usersCollectionRef = collection(db, FirestorePaths.USERS_COLLECTION());
-    getDocs(usersCollectionRef)
-      .then(async (userDocsSnapshot) => {
-        const usersData = [];
-        for (const userDoc of userDocsSnapshot.docs) {
-          const userId = userDoc.id;
-          const profileRef = doc(db, FirestorePaths.USER_PROFILE(userId));
-          const profileSnap = await getDoc(profileRef);
-          if (profileSnap.exists()) {
-            usersData.push({ id: userId, ...profileSnap.data() });
-          } else {
-            usersData.push({ id: userId, role: 'N/A (No profile data)' });
-          }
-        }
-        setUsers(usersData);
+    fetchUsersWithProfiles()
+      .then((data) => {
+        setUsers(data);
         setLoadingUsers(false);
       })
       .catch((error) => {
