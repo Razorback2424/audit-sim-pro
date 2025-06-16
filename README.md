@@ -1,88 +1,52 @@
-# Getting Started with Create React App
+# AuditSim Pro
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+AuditSim Pro is a React and Firebase based training app for simulating audit procedures. It uses Firestore, Storage and Authentication via the Firebase client SDK. The project is bootstrapped with Create React App and styled with Tailwind and MUI.
 
-## Login Behavior
+## Environment Setup
 
-On each launch the app shows a role selection screen. No user ID is created until you choose a role, at which point the app signs in anonymously and stores your selection.
+1. Install dependencies:
+   ```bash
+   npm install
+   ```
+2. Create a `.env` file in the project root with at least the following keys:
+   ```bash
+   REACT_APP_FIREBASE_CONFIG="{...firebaseConfigJson}"
+   REACT_APP_APP_ID=auditsim-pro-default-dev
+   ```
+   `REACT_APP_FIREBASE_CONFIG` should contain your Firebase configuration JSON and `REACT_APP_APP_ID` identifies the dataset in Firestore.
 
-## Security Rules Overview
+### Firebase Emulators
 
-The application relies on Firebase security rules for both Firestore and Storage.
-Admins can read and write all case and user data. Trainees may only read the
-cases they are authorized for and submit their own selections. See
-`firestore.rules` and `storage.rules` for the exact RBAC logic.
+To work locally without touching production data you can run the Firebase emulators. Install the Firebase CLI and start the emulators:
 
-## Firebase Service Modules
+```bash
+npm install -g firebase-tools
+firebase emulators:start --only firestore,storage,auth
+```
 
-Firestore queries and mutations are centralized under `src/services/`. Pages
-import these modules (e.g. `caseService.js`, `submissionService.js`) instead of
-calling Firestore directly. This makes page components slimmer and allows tests
-to easily mock Firebase interactions.
+The app will automatically connect to the emulators if the config in `.env` points to them.
 
 ## Available Scripts
 
-In the project directory, you can run:
+- `npm start` – run the app in development mode
+- `npm test` – execute Jest and React Testing Library tests
+- `npm run build` – build the production bundle
 
-### `npm start`
+To generate a coverage report run:
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+```bash
+npm test -- --coverage
+```
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## Login Behavior
 
-### `npm test`
+On first load the app shows a role selection screen. No user ID is created until you choose a role at which point the app signs in anonymously and stores the selection.
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+## Security Rules Overview
 
-### `npm run build`
+The application relies on Firebase security rules for both Firestore and Storage. Administrators can read and write all case and user data. Trainees may only read the cases they are authorized for and submit their own selections. See `firestore.rules` and `storage.rules` for the exact RBAC logic.
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+## Firebase Service Modules
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+Firestore queries and mutations are centralized under `src/services/`. Pages import these modules instead of calling Firestore directly. This keeps page components slimmer and allows tests to easily mock Firebase interactions.
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
-
-### `npm run eject`
-
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
-
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
-
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
