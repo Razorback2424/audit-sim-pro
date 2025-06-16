@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { doc, onSnapshot, setDoc, Timestamp } from 'firebase/firestore';
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
-import { db, storage, FirestorePaths, Button, useRoute, useAuth, useModal } from '../AppCore';
+import { Timestamp } from 'firebase/firestore';
+import { storage, Button, useRoute, useAuth, useModal } from '../AppCore';
+import { subscribeToCase } from '../services/caseService';
+import { saveSubmission } from '../services/submissionService';
 import { Send, FileText, Eye } from 'lucide-react';
 
 export default function TraineeCaseViewPage({ params }) {
@@ -22,18 +24,16 @@ export default function TraineeCaseViewPage({ params }) {
       return;
     }
     setLoading(true);
-    const caseRef = doc(db, FirestorePaths.CASE_DOCUMENT(caseId));
-    const unsubscribe = onSnapshot(
-      caseRef,
-      (docSnap) => {
-        if (docSnap.exists() && !docSnap.data()._deleted) {
-          const data = docSnap.data();
-          if (data.visibleToUserIds && data.visibleToUserIds.length > 0 && !data.visibleToUserIds.includes(userId)) {
+    const unsubscribe = subscribeToCase(
+      caseId,
+      (caseDoc) => {
+        if (caseDoc && !caseDoc._deleted) {
+          if (caseDoc.visibleToUserIds && caseDoc.visibleToUserIds.length > 0 && !caseDoc.visibleToUserIds.includes(userId)) {
             showModal('You do not have permission to view this case.', 'Access Denied');
             navigate('/trainee');
             return;
           }
-          setCaseData({ id: docSnap.id, ...data });
+          setCaseData(caseDoc);
         } else {
           showModal('Case not found or has been removed.', 'Error');
           navigate('/trainee');
@@ -79,18 +79,13 @@ export default function TraineeCaseViewPage({ params }) {
     setSubmittedDocuments(documents);
 
     try {
-      const submissionRef = doc(db, FirestorePaths.USER_CASE_SUBMISSION(userId, caseId));
-      await setDoc(
-        submissionRef,
-        {
-          caseId,
-          caseName: caseData.caseName,
-          selectedPaymentIds: selectedIds,
-          retrievedDocuments: documents,
-          submittedAt: Timestamp.now(),
-        },
-        { merge: true }
-      );
+      await saveSubmission(userId, caseId, {
+        caseId,
+        caseName: caseData.caseName,
+        selectedPaymentIds: selectedIds,
+        retrievedDocuments: documents,
+        submittedAt: Timestamp.now(),
+      });
       showModal('Selections submitted. Review your documents below.', 'Submission Successful');
     } catch (error) {
       console.error('Error saving submission:', error);
