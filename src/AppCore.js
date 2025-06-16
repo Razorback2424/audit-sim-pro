@@ -8,14 +8,12 @@ import {
 } from 'firebase/auth';
 import {
   getFirestore,
-  doc,
-  setDoc,
-  getDoc,
   serverTimestamp
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage'; // << MOVED IMPORT TO TOP
 import { XCircle, Loader2 } from 'lucide-react';
 import { getRole, cacheRole } from './services/roleService';
+import { fetchUserProfile, setUserRole, upsertUserProfile } from './services/userService';
 
 /* global __firebase_config, __app_id, __initial_auth_token */
 
@@ -297,10 +295,9 @@ const UserProvider = ({ children }) => {
         if (active) setLoadingRole(false);
       }
       try {
-        const ref = doc(db, FirestorePaths.USER_PROFILE(currentUser.uid));
-        const snap = await getDoc(ref);
+        const profile = await fetchUserProfile(currentUser.uid);
         if (active) {
-          setUserProfile(snap.exists() ? { uid: currentUser.uid, ...snap.data() } : null);
+          setUserProfile(profile ? { uid: currentUser.uid, ...profile } : null);
         }
       } catch (err) {
         console.error('Profile fetch error:', err);
@@ -317,13 +314,11 @@ const UserProvider = ({ children }) => {
       if (showModal) showModal('Cannot set role: not signed in.', 'Authentication Error');
       return;
     }
-    const profileRef = doc(db, FirestorePaths.USER_PROFILE(user.uid));
-    const roleRef = doc(db, FirestorePaths.ROLE_DOCUMENT(user.uid));
     try {
-      await setDoc(roleRef, { role: newRole }, { merge: true });
+      await setUserRole(user.uid, newRole);
       cacheRole(user.uid, newRole);
-      const snap = await getDoc(profileRef);
-      if (!snap.exists()) {
+      const existing = await fetchUserProfile(user.uid);
+      if (!existing) {
         const newProfile = {
           uid: user.uid,
           email: user.email ?? `anon-${user.uid}@example.com`,
@@ -331,11 +326,11 @@ const UserProvider = ({ children }) => {
           createdAt: serverTimestamp(),
           lastUpdatedAt: serverTimestamp()
         };
-        await setDoc(profileRef, newProfile);
+        await upsertUserProfile(user.uid, newProfile);
         setUserProfile(newProfile);
       } else {
         const update = { role: newRole, lastUpdatedAt: serverTimestamp() };
-        await setDoc(profileRef, update, { merge: true });
+        await upsertUserProfile(user.uid, update);
         setUserProfile((prev) => ({ ...prev, ...update }));
       }
       setRoleState(newRole);
