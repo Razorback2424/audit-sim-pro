@@ -1,71 +1,30 @@
 rules_version = '2';
 
 service firebase.storage {
-  match /b/{bucket}/o { // {bucket} is your storage bucket name
+  match /b/{bucket}/o {
 
-    // Helper function to get user role from Firestore
     function getUserRole() {
       return request.auth != null ?
         firestore.get(/databases/$(database)/documents/roles/$(request.auth.uid)).data.role : null;
     }
 
-    function isUserAdminForApp(appIdFromStoragePath) {
+    function isAdmin() {
       return getUserRole() == 'admin';
     }
 
-    function isUserTraineeForApp(appIdFromStoragePath) {
-      return getUserRole() == 'trainee';
+    function traineeHasAccessToCase(caseId) {
+      return firestore.exists(/databases/$(database)/documents/artifacts/$(appId)/cases/$(caseId)/authorizedTrainees/$(request.auth.uid));
     }
 
-    // Function to check if a trainee can access a specific case's files
-    // This requires knowing the case data (visibleToUserIds) for the given caseId
-    // This is more complex as storage rules have limited ways to query related data dynamically.
-    // Often, file URLs are vended by a Cloud Function that does these checks,
-    // or files are placed in user-specific paths if permissions are highly granular and dynamic per file.
-    // A simpler approach for V1: if a trainee can read the case details in Firestore,
-    // they can read associated files. This implies the client app is responsible for
-    // only showing links to files for cases the trainee legitimately accessed.
-
-    // --- Rules for AP Aging Reports ---
-    // New Path: artifacts/{appIdForFilePath}/case_ap_aging/{caseId}/{fileName}
-    match /artifacts/{appIdForFilePath}/case_ap_aging/{caseId}/{fileName} {
-      // Who can read?
-      // - Admins.
-      // - Trainees who can access this caseId (this is the tricky part without direct case data lookup here).
-      //   Simplification for V1: If you are an authenticated trainee, you can read.
-      //   Relies on client not guessing URLs or having a more robust mechanism for URL generation.
-      //   A better rule would check if the user has access to `caseId` via Firestore lookup.
+    match /artifacts/{appId}/case_documents/{caseId}/{fileName} {
       allow read: if getUserRole() != null &&
-                   ( isUserAdminForApp(appIdForFilePath) ||
-                     ( isUserTraineeForApp(appIdForFilePath) &&
-                       firestore.exists(/databases/$(database)/documents/artifacts/$(appIdForFilePath)/users/$(request.auth.uid)/caseSubmissions/$(caseId))
-                     )
+                   ( isAdmin() || 
+                     (getUserRole() == 'trainee' && traineeHasAccessToCase(caseId))
                    );
 
-      // Who can write (upload)?
-      // - Only Admins (during case creation/edit).
-      // - Validate file type (PDF) and size if needed.
-      allow write: if getUserRole() != null && isUserAdminForApp(appIdForFilePath) &&
+      allow write: if getUserRole() != null && isAdmin() &&
                       request.resource.contentType.matches('application/pdf') &&
-                      request.resource.size < 5 * 1024 * 1024; // Example: 5MB limit
-    }
-
-    // --- Rules for Invoice PDF Mappings ---
-    // New Path: artifacts/{appIdForFilePath}/case_documents/{caseId}/{fileName}
-    match /artifacts/{appIdForFilePath}/case_documents/{caseId}/{originalFileName} {
-      // Who can read? (Similar logic to AP Aging)
-      allow read: if getUserRole() != null &&
-                   ( isUserAdminForApp(appIdForFilePath) ||
-                     ( isUserTraineeForApp(appIdForFilePath) &&
-                       firestore.exists(/databases/$(database)/documents/artifacts/$(appIdForFilePath)/users/$(request.auth.uid)/caseSubmissions/$(caseId))
-                     )
-                   );
-
-      // Who can write (upload)?
-      // - Only Admins.
-      allow write: if getUserRole() != null && isUserAdminForApp(appIdForFilePath) &&
-                      request.resource.contentType.matches('application/pdf') &&
-                      request.resource.size < 5 * 1024 * 1024; // Example: 5MB limit
+                      request.resource.size < 5 * 1024 * 1024;
     }
   }
 }
