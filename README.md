@@ -58,6 +58,15 @@ The application relies on Firebase security rules for both Firestore and Storage
    summary of a case. Links from this page allow quick access to editing and to
    trainee submissions.
 
+## Trainee Workflow
+
+1. From the Trainee Dashboard select a case to work on.
+2. On the case view page choose which disbursements to test and classify each
+   selected item using the provided options.
+3. Submit your selections to store them with your user record. A confirmation
+   screen summarizes the payment IDs chosen and any retrieved invoice PDFs with
+   links to open them.
+
 ## Firebase Service Modules
 
 Firestore queries and mutations are centralized under `src/services/`. Pages import these modules instead of calling Firestore directly. This keeps page components slimmer and allows tests to easily mock Firebase interactions.
