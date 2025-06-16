@@ -1,8 +1,11 @@
 rules_version = '2';
 
+// Cloud Storage rules for AuditSim Pro
+// Uses Firestore role documents to enforce RBAC
 service firebase.storage {
   match /b/{bucket}/o {
 
+    // Retrieves user role from Firestore
     function getUserRole() {
       return request.auth != null ?
         firestore.get(/databases/$(database)/documents/roles/$(request.auth.uid)).data.role : null;
@@ -12,13 +15,15 @@ service firebase.storage {
       return getUserRole() == 'admin';
     }
 
+    // Verifies the trainee has access to the specified case
     function traineeHasAccessToCase(caseId) {
       return firestore.exists(/databases/$(database)/documents/artifacts/$(appId)/cases/$(caseId)/authorizedTrainees/$(request.auth.uid));
     }
 
+    // PDF documents attached to a case
     match /artifacts/{appId}/case_documents/{caseId}/{fileName} {
       allow read: if getUserRole() != null &&
-                   ( isAdmin() || 
+                   ( isAdmin() ||
                      (getUserRole() == 'trainee' && traineeHasAccessToCase(caseId))
                    );
 
