@@ -46,6 +46,18 @@ On first load the app shows a role selection screen. No user ID is created until
 
 The application relies on Firebase security rules for both Firestore and Storage. Administrators can read and write all case and user data. Trainees may only read the cases they are authorized for and submit their own selections. See `firestore.rules` and `storage.rules` for the exact RBAC logic.
 
+## Admin Workflow
+
+1. From the Admin Dashboard you can create or edit a case using the Case Form.
+   Disbursements may be uploaded via CSV or entered manually. Invoice PDFs can be
+   attached to each payment.
+2. When the form is saved, each PDF is uploaded under
+   `artifacts/&lt;appId&gt;/case_documents/&lt;caseId&gt;/` and the Firestore document
+   records its `downloadURL` for trainees to access.
+3. Use the new **Case Overview** page from the dashboard to view a read-only
+   summary of a case. Links from this page allow quick access to editing and to
+   trainee submissions.
+
 ## Firebase Service Modules
 
 Firestore queries and mutations are centralized under `src/services/`. Pages import these modules instead of calling Firestore directly. This keeps page components slimmer and allows tests to easily mock Firebase interactions.
