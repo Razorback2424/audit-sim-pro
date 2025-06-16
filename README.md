@@ -6,6 +6,13 @@ This project was bootstrapped with [Create React App](https://github.com/faceboo
 
 On each launch the app shows a role selection screen. No user ID is created until you choose a role, at which point the app signs in anonymously and stores your selection.
 
+## Security Rules Overview
+
+The application relies on Firebase security rules for both Firestore and Storage.
+Admins can read and write all case and user data. Trainees may only read the
+cases they are authorized for and submit their own selections. See
+`firestore.rules` and `storage.rules` for the exact RBAC logic.
+
 ## Available Scripts
 
 In the project directory, you can run:
