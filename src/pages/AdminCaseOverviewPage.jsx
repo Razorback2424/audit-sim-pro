@@ -1,0 +1,102 @@
+import React, { useEffect, useState } from 'react';
+import { ref as storageRef, getDownloadURL } from 'firebase/storage';
+import { storage, Button, useRoute, useModal } from '../AppCore';
+import { fetchCase } from '../services/caseService';
+
+export default function AdminCaseOverviewPage({ params }) {
+  const { caseId } = params;
+  const { navigate } = useRoute();
+  const { showModal } = useModal();
+
+  const [caseData, setCaseData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (!caseId) {
+      navigate('/admin');
+      return;
+    }
+    setLoading(true);
+    fetchCase(caseId)
+      .then((doc) => {
+        setCaseData(doc);
+        setLoading(false);
+      })
+      .catch((err) => {
+        console.error('Error fetching case:', err);
+        showModal('Error fetching case: ' + err.message, 'Error');
+        setLoading(false);
+      });
+  }, [caseId, navigate, showModal]);
+
+  const handleView = async (mapping) => {
+    if (mapping.downloadURL) {
+      window.open(mapping.downloadURL, '_blank');
+      return;
+    }
+    if (!mapping.storagePath) {
+      showModal('No file path available.', 'Error');
+      return;
+    }
+    try {
+      const url = await getDownloadURL(storageRef(storage, mapping.storagePath));
+      window.open(url, '_blank');
+    } catch (err) {
+      console.error('Error getting URL:', err);
+      showModal('Could not get document URL.', 'Error');
+    }
+  };
+
+  if (loading) return <div className="p-4 text-center">Loading case...</div>;
+  if (!caseData) return <div className="p-4 text-center">Case not found.</div>;
+
+  const currency = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+
+  return (
+    <div className="p-6 bg-gray-50 min-h-screen">
+      <div className="max-w-4xl mx-auto space-y-4">
+        <div className="flex justify-between">
+          <Button onClick={() => navigate('/admin')} variant="secondary" className="text-sm">&larr; Back</Button>
+          <div className="space-x-2">
+            <Button onClick={() => navigate(`/admin/edit-case/${caseId}`)} variant="secondary" className="text-sm">Edit Case</Button>
+            <Button onClick={() => navigate(`/admin/case-submissions/${caseId}`)} variant="secondary" className="text-sm">View Submissions</Button>
+          </div>
+        </div>
+        <div className="bg-white p-6 rounded-lg shadow">
+          <h1 className="text-3xl font-bold text-gray-800 mb-4">{caseData.caseName}</h1>
+          <h2 className="text-xl font-semibold text-gray-700 mt-4 mb-2">Disbursements</h2>
+          {caseData.disbursements && caseData.disbursements.length > 0 ? (
+            <ul className="space-y-2">
+              {caseData.disbursements.map((d) => (
+                <li key={d.paymentId} className="p-3 border rounded-md grid grid-cols-2 md:grid-cols-4 gap-2 text-sm">
+                  <span><strong>ID:</strong> {d.paymentId}</span>
+                  <span><strong>Payee:</strong> {d.payee}</span>
+                  <span><strong>Amount:</strong> {currency.format(parseFloat(d.amount || 0))}</span>
+                  <span><strong>Date:</strong> {d.paymentDate}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-gray-500">No disbursements recorded.</p>
+          )}
+
+          <h2 className="text-xl font-semibold text-gray-700 mt-6 mb-2">Invoice PDFs</h2>
+          {caseData.invoiceMappings && caseData.invoiceMappings.length > 0 ? (
+            <ul className="space-y-2">
+              {caseData.invoiceMappings.map((m, idx) => (
+                <li key={idx} className="p-3 border rounded-md flex items-center justify-between text-sm">
+                  <span className="mr-2 flex-1 truncate">
+                    <strong>{m.paymentId}:</strong> {m.fileName}
+                  </span>
+                  <Button onClick={() => handleView(m)} variant="secondary" className="text-xs px-2 py-1">Open</Button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-gray-500">No invoices uploaded.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
