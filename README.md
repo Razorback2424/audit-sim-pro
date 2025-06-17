@@ -57,6 +57,10 @@ The application relies on Firebase security rules for both Firestore and Storage
 3. Use the new **Case Overview** page from the dashboard to view a read-only
    summary of a case. Links from this page allow quick access to editing and to
    trainee submissions.
+4. From the submissions list you can drill down into a **Submission Detail** page
+   to review each trainee's selections and classifications. If a trainee has
+   attempted the same case multiple times the detail page shows each attempt
+   chronologically along with any recorded grade.
 
 ## Trainee Workflow
 

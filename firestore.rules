@@ -22,7 +22,12 @@ service cloud.firestore {
 
     // Checks if the trainee is allowed to view a case
     function traineeHasAccessToCase(caseId) {
-      return exists(/databases/$(database)/documents/artifacts/$(appId)/cases/$(caseId)/authorizedTrainees/$(request.auth.uid));
+      let caseDoc = get(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId));
+      return caseDoc.exists() && (
+        !(caseDoc.data.visibleToUserIds is list) ||
+        caseDoc.data.visibleToUserIds.size() == 0 ||
+        request.auth.uid in caseDoc.data.visibleToUserIds
+      );
     }
 
     // Role documents store whether a user is an admin or trainee
@@ -52,10 +57,6 @@ service cloud.firestore {
       allow write: if request.auth != null && request.auth.uid == userId && isTrainee();
     }
 
-    // List of trainees allowed to access a case
-    match /artifacts/{appId}/cases/{caseId}/authorizedTrainees/{traineeId} {
-      allow read, write: if request.auth != null && isAdmin();
-    }
 
     // Deny all other access by default
     match /{document=**} {

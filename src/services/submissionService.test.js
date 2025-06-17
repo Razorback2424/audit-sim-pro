@@ -1,5 +1,5 @@
-import { saveSubmission, fetchSubmissionsForCase } from './submissionService';
-import { doc, setDoc, getDoc, getDocs, collection } from 'firebase/firestore';
+import { saveSubmission, fetchSubmissionsForCase, fetchSubmission } from './submissionService';
+import { doc, setDoc, getDoc, getDocs, collection, serverTimestamp, arrayUnion } from 'firebase/firestore';
 import { FirestorePaths, db } from '../AppCore';
 
 jest.mock('firebase/firestore', () => ({
@@ -8,6 +8,8 @@ jest.mock('firebase/firestore', () => ({
   getDoc: jest.fn(),
   getDocs: jest.fn(),
   collection: jest.fn(),
+  serverTimestamp: jest.fn(() => 'now'),
+  arrayUnion: jest.fn((v) => v),
 }));
 
 jest.mock('../AppCore', () => ({
@@ -35,5 +37,12 @@ describe('submissionService', () => {
     const result = await fetchSubmissionsForCase('c1');
     expect(collection).toHaveBeenCalled();
     expect(result[0].userId).toBe('u1');
+  });
+
+  test('fetchSubmission returns single submission', async () => {
+    getDoc.mockResolvedValue({ exists: () => true, id: 'sub', data: () => ({ a: 1 }) });
+    const result = await fetchSubmission('u1', 'c1');
+    expect(doc).toHaveBeenCalled();
+    expect(result.id).toBe('sub');
   });
 });
