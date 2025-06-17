@@ -34,7 +34,16 @@ if (!window.__initial_auth_token) {
 // ---------- Firebase Initialization ----------
 const firebaseConfigString =
   typeof __firebase_config !== 'undefined' ? __firebase_config : window.__firebase_config;
-const firebaseConfig = JSON.parse(firebaseConfigString);
+let firebaseConfig;
+try {
+  firebaseConfig = JSON.parse(firebaseConfigString);
+} catch (err) {
+  console.error('Invalid Firebase config JSON. Check REACT_APP_FIREBASE_CONFIG in your .env file.');
+  throw err;
+}
+if (!firebaseConfig.apiKey || /<apiKey>/i.test(firebaseConfig.apiKey)) {
+  throw new Error('Missing or invalid Firebase API key. Ensure .env contains your project\'s credentials.');
+}
 const appId = typeof __app_id !== 'undefined' ? __app_id : window.__app_id;
 
 const firebaseApp = initializeApp(firebaseConfig);

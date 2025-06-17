@@ -13,7 +13,8 @@ AuditSim Pro is a React and Firebase based training app for simulating audit pro
    cp .env.example .env
    # then edit .env with your values
    ```
-   `REACT_APP_FIREBASE_CONFIG` contains your Firebase configuration JSON and `REACT_APP_APP_ID` identifies the dataset in Firestore. Keep `.env` out of version control.
+   `REACT_APP_FIREBASE_CONFIG` contains your Firebase configuration JSON and `REACT_APP_APP_ID` identifies the dataset in Firestore.
+   Make sure the JSON string in `REACT_APP_FIREBASE_CONFIG` uses **your real Firebase credentials** and does not contain the `<apiKey>` placeholder. Keep `.env` out of version control.
 
 ### Firebase Emulators
 
