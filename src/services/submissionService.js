@@ -1,9 +1,32 @@
-import { collection, doc, getDoc, getDocs, setDoc } from 'firebase/firestore';
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  setDoc,
+  serverTimestamp,
+  arrayUnion,
+} from 'firebase/firestore';
 import { db, FirestorePaths } from '../AppCore';
 
 export const saveSubmission = async (userId, caseId, data) => {
   const ref = doc(db, FirestorePaths.USER_CASE_SUBMISSION(userId, caseId));
-  await setDoc(ref, data, { merge: true });
+  const attemptData = { ...data, submittedAt: serverTimestamp() };
+  await setDoc(
+    ref,
+    {
+      ...data,
+      submittedAt: serverTimestamp(),
+      attempts: arrayUnion(attemptData),
+    },
+    { merge: true }
+  );
+};
+
+export const fetchSubmission = async (userId, caseId) => {
+  const ref = doc(db, FirestorePaths.USER_CASE_SUBMISSION(userId, caseId));
+  const snap = await getDoc(ref);
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
 };
 
 export const fetchSubmissionsForCase = async (caseId) => {

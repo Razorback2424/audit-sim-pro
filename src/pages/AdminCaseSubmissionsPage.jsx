@@ -84,6 +84,19 @@ export default function AdminCaseSubmissionsPage({ params }) {
                     <p className="text-sm text-gray-500">None</p>
                   )}
                 </div>
+                {submission.attempts && submission.attempts.length > 1 && (
+                  <p className="text-sm text-gray-500 mt-1">Attempts: {submission.attempts.length}</p>
+                )}
+                {submission.overallGrade !== undefined && (
+                  <p className="text-sm text-gray-700 mt-1">Grade: {submission.overallGrade}</p>
+                )}
+                <Button
+                  onClick={() => navigate(`/admin/submission-detail/${caseId}/${submission.userId}`)}
+                  variant="secondary"
+                  className="mt-4 text-sm"
+                >
+                  View Details
+                </Button>
               </div>
             ))}
           </div>
