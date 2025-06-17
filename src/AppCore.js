@@ -37,12 +37,26 @@ const firebaseConfigString =
 let firebaseConfig;
 try {
   firebaseConfig = JSON.parse(firebaseConfigString);
+  if (!firebaseConfig.apiKey || /<apiKey>/i.test(firebaseConfig.apiKey)) {
+    throw new Error(
+      'Missing or invalid Firebase API key. Ensure .env contains your project\'s credentials.'
+    );
+  }
 } catch (err) {
-  console.error('Invalid Firebase config JSON. Check REACT_APP_FIREBASE_CONFIG in your .env file.');
+  console.error(
+    'Invalid Firebase configuration:',
+    err.message || err
+  );
+  if (typeof document !== 'undefined') {
+    const rootEl = document.getElementById('root');
+    if (rootEl) {
+      rootEl.innerHTML =
+        '<div style="font-family:sans-serif;padding:1rem"><h1>Configuration Error</h1><pre>' +
+        String(err.message || err) +
+        '</pre></div>';
+    }
+  }
   throw err;
-}
-if (!firebaseConfig.apiKey || /<apiKey>/i.test(firebaseConfig.apiKey)) {
-  throw new Error('Missing or invalid Firebase API key. Ensure .env contains your project\'s credentials.');
 }
 const appId = typeof __app_id !== 'undefined' ? __app_id : window.__app_id;
 
