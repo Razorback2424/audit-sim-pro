@@ -5,29 +5,34 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
 
-    // Retrieves user role from Firestore
-    function getUserRole() {
-      return request.auth != null ?
-        firestore.get(/databases/$(database)/documents/roles/$(request.auth.uid)).data.role : null;
-    }
-
+    // Check user role from custom claims
     function isAdmin() {
-      return getUserRole() == 'admin';
+      return request.auth != null && request.auth.token.role == 'admin';
+    }
+    function isTrainee() {
+      return request.auth != null && request.auth.token.role == 'trainee';
     }
 
-    // Verifies the trainee has access to the specified case
-    function traineeHasAccessToCase(caseId) {
-      return firestore.exists(/databases/$(database)/documents/artifacts/$(appId)/cases/$(caseId)/authorizedTrainees/$(request.auth.uid));
+    // Verifies the trainee has access to the specified case by checking the Firestore case document
+    // This requires a read from Firestore, which is allowed for 'get' operations in Storage rules.
+    function traineeHasAccessToCase(appId, caseId) {
+      let caseDoc = get(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId));
+      return caseDoc.exists() && (
+        !(caseDoc.data.visibleToUserIds is list) ||
+        caseDoc.data.visibleToUserIds.size() == 0 ||
+        request.auth.uid in caseDoc.data.visibleToUserIds
+      );
     }
 
     // PDF documents attached to a case
     match /artifacts/{appId}/case_documents/{caseId}/{fileName} {
-      allow read: if getUserRole() != null &&
-                   ( isAdmin() ||
-                     (getUserRole() == 'trainee' && traineeHasAccessToCase(caseId))
+      allow read: if request.auth != null &&
+                   (
+                     isAdmin() || // Admins can read all case documents
+                     (isTrainee() && traineeHasAccessToCase(appId, caseId)) // Trainees can read if authorized
                    );
 
-      allow write: if getUserRole() != null && isAdmin() &&
+      allow write: if request.auth != null && isAdmin() && // Only admins can write case documents
                       request.resource.contentType.matches('application/pdf') &&
                       request.resource.size < 5 * 1024 * 1024;
     }

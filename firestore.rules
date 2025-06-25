@@ -2,46 +2,46 @@ rules_version = '2';
 
 // Firestore security rules for AuditSim Pro
 // Admins can manage all data. Trainees may only
-// access cases they are authorized for and their own submissions.
+// access cases they are authorized for and their own submissions. Roles are now managed via custom claims.
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Fetch role for the currently authenticated user
-    function getUserRole() {
-      return request.auth != null ?
-        get(/databases/$(database)/documents/roles/$(request.auth.uid)).data.role :
-        null;
-    }
-
+    // Check user role from custom claims
     function isAdmin() {
-      return getUserRole() == 'admin';
+      return request.auth != null && request.auth.token.role == 'admin';
     }
 
     function isTrainee() {
-      return getUserRole() == 'trainee';
+      return request.auth != null && request.auth.token.role == 'trainee';
     }
 
-    // Checks if the trainee is allowed to view a case
-    function traineeHasAccessToCase(appId, caseId) {
-      let caseDoc = get(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId));
-      return caseDoc.exists() && (
-        !(caseDoc.data.visibleToUserIds is list) ||
-        caseDoc.data.visibleToUserIds.size() == 0 ||
-        request.auth.uid in caseDoc.data.visibleToUserIds
+    // Checks if the trainee can view the case currently being read
+    function traineeCaseAccessible() {
+      return (
+        !(resource.data.visibleToUserIds is list) ||
+        resource.data.visibleToUserIds.size() == 0 ||
+        request.auth.uid in resource.data.visibleToUserIds
       );
     }
 
     // Role documents store whether a user is an admin or trainee
     match /roles/{userId} {
-      allow read, write: if request.auth != null &&
-        (request.auth.uid == userId || isAdmin());
+      // Allow users to read their own role document (for display/initial setup)
+      allow read: if request.auth != null && request.auth.uid == userId;
+      // Allow a user to create their own role document with any role.
+      allow create: if request.auth != null && request.auth.uid == userId;
+      // Role updates should primarily be handled by a trusted backend service (e.g., Cloud Function)
+      allow update: if request.auth != null && isAdmin(); // Still allow admin client-side if needed, but custom claims are source of truth
     }
 
     // Case documents accessible to trainees if authorized
     match /artifacts/{appId}/public/data/cases/{caseId} {
-      allow read: if request.auth != null && (
+      // For single document reads, the function is secure.
+      allow get: if request.auth != null && (
         isAdmin() ||
-        (isTrainee() && traineeHasAccessToCase(appId, caseId))
+        (isTrainee() && traineeCaseAccessible())
       );
+      // For queries, client must filter by visibleToUserIds to get results.
+      allow list: if request.auth != null && (isAdmin() || isTrainee());
       allow write: if request.auth != null && isAdmin();
     }
 

@@ -11,12 +11,12 @@ import { db, FirestorePaths } from '../AppCore';
 
 export const saveSubmission = async (userId, caseId, data) => {
   const ref = doc(db, FirestorePaths.USER_CASE_SUBMISSION(userId, caseId));
-  const attemptData = { ...data, submittedAt: serverTimestamp() };
+  const attemptData = { ...data }; // `data` already contains `submittedAt: Timestamp.now()` from client.
   await setDoc(
     ref,
     {
-      ...data,
-      submittedAt: serverTimestamp(),
+      // This `submittedAt` is for the document itself, not the array element.
+      submittedAt: serverTimestamp(), // Use serverTimestamp for the document's last update time.
       attempts: arrayUnion(attemptData),
     },
     { merge: true }

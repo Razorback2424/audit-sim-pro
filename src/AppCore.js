@@ -11,7 +11,7 @@ import {
   serverTimestamp
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage'; // << MOVED IMPORT TO TOP
-import { XCircle, Loader2 } from 'lucide-react';
+import { XCircle, Loader2 } from 'lucide-react'; // << MOVED IMPORT TO TOP
 import { getRole, cacheRole } from './services/roleService';
 import { fetchUserProfile, setUserRole, upsertUserProfile } from './services/userService';
 
@@ -310,7 +310,11 @@ const UserProvider = ({ children }) => {
       }
       setLoadingRole(true);
       try {
-        const r = await getRole(db, currentUser.uid);
+        // Get the latest ID token result to ensure custom claims are up-to-date
+        const idTokenResult = await currentUser.getIdTokenResult(true);
+        const r = idTokenResult.claims.role;
+        // Cache the role locally for immediate use, though custom claims are primary source for rules
+        cacheRole(currentUser.uid, r);
         if (active) setRoleState(r);
       } catch (e) {
         if (active) setRoleState(null);
@@ -357,6 +361,14 @@ const UserProvider = ({ children }) => {
         setUserProfile((prev) => ({ ...prev, ...update }));
       }
       setRoleState(newRole);
+      // After setting the role in Firestore and updating local state,
+      // This refresh might be redundant, but ensure we have the latest token
+      // force ID token refresh and then update local role state from claims
+      const idTokenResult = await user.getIdTokenResult(true);
+      setRoleState(idTokenResult.claims.role); // Ensure local state matches claims
+      // Force ID token refresh to get updated custom claims
+      await user.getIdToken(true);
+      console.log("ID token refreshed after role set.");
     } catch (err) {
       console.error('setRole error:', err);
       if (showModal) showModal(`Error setting role: ${err.message} (Code: ${err.code})`, 'Error Setting Role');

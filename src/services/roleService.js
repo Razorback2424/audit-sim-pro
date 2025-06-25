@@ -1,5 +1,3 @@
-import { doc, getDoc } from 'firebase/firestore';
-
 const roleCache = {};
 
 function readSession(uid) {
@@ -13,21 +11,14 @@ function writeSession(uid, role) {
   }
 }
 
-export async function getRole(db, uid) {
+export async function getRole(uid) { // Removed 'db' parameter as it's no longer needed for direct Firestore read
   if (roleCache[uid]) return roleCache[uid];
   const stored = readSession(uid);
   if (stored) {
     roleCache[uid] = stored;
     return stored;
   }
-  const snap = await getDoc(doc(db, 'roles', uid));
-  if (!snap.exists()) {
-    throw new Error('Role not found');
-  }
-  const data = snap.data();
-  roleCache[uid] = data.role;
-  writeSession(uid, data.role);
-  return data.role;
+  return null; // If not in cache/session, return null. The UserProvider will get it from custom claims.
 }
 
 export function cacheRole(uid, role) {
