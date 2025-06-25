@@ -5,12 +5,17 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
 
-    // Check user role from custom claims
+    // Check user role from custom claims or fallback role document
+    function getRole() {
+      return get(/databases/$(database)/documents/roles/$(request.auth.uid)).data.role;
+    }
     function isAdmin() {
-      return request.auth != null && request.auth.token.role == 'admin';
+      return request.auth != null &&
+             (request.auth.token.role == 'admin' || getRole() == 'admin');
     }
     function isTrainee() {
-      return request.auth != null && request.auth.token.role == 'trainee';
+      return request.auth != null &&
+             (request.auth.token.role == 'trainee' || getRole() == 'trainee');
     }
 
     // Verifies the trainee has access to the specified case by checking the Firestore case document
