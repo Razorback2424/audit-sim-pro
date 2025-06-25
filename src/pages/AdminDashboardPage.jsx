@@ -89,6 +89,9 @@ export default function AdminDashboardPage() {
                     <p className="text-sm text-gray-500">Visible to: {caseData.visibleToUserIds && caseData.visibleToUserIds.length > 0 ? `${caseData.visibleToUserIds.length} user(s)` : 'All Users'}</p>
                   </div>
                   <div className="flex flex-col space-y-2 items-end">
+                    <Button onClick={() => navigate(`/admin/case-overview/${caseData.id}`)} variant="secondary" className="px-3 py-1 text-sm w-full">
+                      <Edit3 size={16} className="inline mr-1" /> View Case
+                    </Button>
                     <Button onClick={() => navigate(`/admin/case-submissions/${caseData.id}`)} variant="secondary" className="px-3 py-1 text-sm w-full">
                       <ListFilter size={16} className="inline mr-1" /> View Submissions
                     </Button>

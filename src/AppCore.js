@@ -8,14 +8,14 @@ import {
 } from 'firebase/auth';
 import {
   getFirestore,
+  serverTimestamp,
   doc,
-  setDoc,
-  getDoc,
-  serverTimestamp
+  getDoc
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage'; // << MOVED IMPORT TO TOP
-import { XCircle, Loader2 } from 'lucide-react';
-import { getRole, cacheRole } from './services/roleService';
+import { XCircle, Loader2 } from 'lucide-react'; // << MOVED IMPORT TO TOP
+import { cacheRole } from './services/roleService';
+import { fetchUserProfile, setUserRole, upsertUserProfile } from './services/userService';
 
 /* global __firebase_config, __app_id, __initial_auth_token */
 
@@ -36,7 +36,30 @@ if (!window.__initial_auth_token) {
 // ---------- Firebase Initialization ----------
 const firebaseConfigString =
   typeof __firebase_config !== 'undefined' ? __firebase_config : window.__firebase_config;
-const firebaseConfig = JSON.parse(firebaseConfigString);
+let firebaseConfig;
+try {
+  firebaseConfig = JSON.parse(firebaseConfigString);
+  if (!firebaseConfig.apiKey || /<apiKey>/i.test(firebaseConfig.apiKey)) {
+    throw new Error(
+      'Missing or invalid Firebase API key. Ensure .env contains your project\'s credentials.'
+    );
+  }
+} catch (err) {
+  console.error(
+    'Invalid Firebase configuration:',
+    err.message || err
+  );
+  if (typeof document !== 'undefined') {
+    const rootEl = document.getElementById('root');
+    if (rootEl) {
+      rootEl.innerHTML =
+        '<div style="font-family:sans-serif;padding:1rem"><h1>Configuration Error</h1><pre>' +
+        String(err.message || err) +
+        '</pre></div>';
+    }
+  }
+  throw err;
+}
 const appId = typeof __app_id !== 'undefined' ? __app_id : window.__app_id;
 
 const firebaseApp = initializeApp(firebaseConfig);
@@ -289,7 +312,11 @@ const UserProvider = ({ children }) => {
       }
       setLoadingRole(true);
       try {
-        const r = await getRole(db, currentUser.uid);
+        // Get the latest ID token result to ensure custom claims are up-to-date
+        const idTokenResult = await currentUser.getIdTokenResult(true);
+        const r = idTokenResult.claims.role;
+        // Cache the role locally for immediate use, though custom claims are primary source for rules
+        cacheRole(currentUser.uid, r);
         if (active) setRoleState(r);
       } catch (e) {
         if (active) setRoleState(null);
@@ -297,10 +324,9 @@ const UserProvider = ({ children }) => {
         if (active) setLoadingRole(false);
       }
       try {
-        const ref = doc(db, FirestorePaths.USER_PROFILE(currentUser.uid));
-        const snap = await getDoc(ref);
+        const profile = await fetchUserProfile(currentUser.uid);
         if (active) {
-          setUserProfile(snap.exists() ? { uid: currentUser.uid, ...snap.data() } : null);
+          setUserProfile(profile ? { uid: currentUser.uid, ...profile } : null);
         }
       } catch (err) {
         console.error('Profile fetch error:', err);
@@ -317,31 +343,51 @@ const UserProvider = ({ children }) => {
       if (showModal) showModal('Cannot set role: not signed in.', 'Authentication Error');
       return;
     }
-    const profileRef = doc(db, FirestorePaths.USER_PROFILE(user.uid));
-    const roleRef = doc(db, FirestorePaths.ROLE_DOCUMENT(user.uid));
+
     try {
-      await setDoc(roleRef, { role: newRole }, { merge: true });
-      cacheRole(user.uid, newRole);
-      const snap = await getDoc(profileRef);
-      if (!snap.exists()) {
+      // Check if the role document exists BEFORE trying to write.
+      const roleRef = doc(db, FirestorePaths.ROLE_DOCUMENT(user.uid));
+      const roleSnap = await getDoc(roleRef);
+
+      // Only attempt to write to the role document if it doesn't exist,
+      // or if the role is actually changing. The security rule will handle
+      // the admin check for updates.
+      if (!roleSnap.exists() || roleSnap.data().role !== newRole) {
+        await setUserRole(user.uid, newRole); // This will be a create or an update.
+      } else {
+        console.log("Role document already exists with the correct role. Skipping write.");
+      }
+
+      // The rest of the logic for profile update can proceed.
+      const existingProfile = await fetchUserProfile(user.uid);
+      if (!existingProfile) {
         const newProfile = {
           uid: user.uid,
           email: user.email ?? `anon-${user.uid}@example.com`,
           role: newRole,
           createdAt: serverTimestamp(),
-          lastUpdatedAt: serverTimestamp()
+          lastUpdatedAt: serverTimestamp(),
         };
-        await setDoc(profileRef, newProfile);
+        await upsertUserProfile(user.uid, newProfile); // This is allowed by rules
         setUserProfile(newProfile);
       } else {
         const update = { role: newRole, lastUpdatedAt: serverTimestamp() };
-        await setDoc(profileRef, update, { merge: true });
+        await upsertUserProfile(user.uid, update); // This is allowed by rules
         setUserProfile((prev) => ({ ...prev, ...update }));
       }
+
+      // Update local state and refresh token
       setRoleState(newRole);
+      cacheRole(user.uid, newRole);
+      await user.getIdToken(true); // Force refresh to get latest custom claims
+      console.log("ID token refreshed after role set.");
     } catch (err) {
       console.error('setRole error:', err);
-      if (showModal) showModal(`Error setting role: ${err.message} (Code: ${err.code})`, 'Error Setting Role');
+      if (err.code === 'permission-denied') {
+        if (showModal) showModal('You do not have permission to change your role once it has been set. Please contact an administrator.', 'Permission Denied');
+      } else {
+        if (showModal) showModal(`Error setting role: ${err.message} (Code: ${err.code})`, 'Error Setting Role');
+      }
     }
   };
 

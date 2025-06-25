@@ -23,6 +23,8 @@ import RoleRoute from './routes/RoleRoute';
 import AdminDashboardPage from './pages/AdminDashboardPage';
 import AdminUserManagementPage from './pages/AdminUserManagementPage';
 import AdminCaseSubmissionsPage from './pages/AdminCaseSubmissionsPage';
+import AdminSubmissionDetailPage from './pages/AdminSubmissionDetailPage';
+import AdminCaseOverviewPage from './pages/AdminCaseOverviewPage';
 import CaseFormPage from './pages/CaseFormPage';
 import TraineeDashboardPage from './pages/TraineeDashboardPage';
 import TraineeCaseViewPage from './pages/TraineeCaseViewPage';
@@ -90,8 +92,10 @@ const adminRoutes = {
     '': <AdminDashboardPage />,
     '/admin/create-case': <CaseFormPage />,
     '/admin/edit-case/:caseId': (params) => <CaseFormPage params={params} />,
+    '/admin/case-overview/:caseId': (params) => <AdminCaseOverviewPage params={params} />,
     '/admin/user-management': <AdminUserManagementPage />,
     '/admin/case-submissions/:caseId': (params) => <AdminCaseSubmissionsPage params={params} />,
+    '/admin/submission-detail/:caseId/:userId': (params) => <AdminSubmissionDetailPage params={params} />,
 };
 
 const traineeRoutes = {
@@ -207,6 +211,8 @@ export {
     AdminDashboardPage,
     AdminUserManagementPage,
     AdminCaseSubmissionsPage,
+    AdminSubmissionDetailPage,
+    AdminCaseOverviewPage,
     CaseFormPage,
     TraineeDashboardPage,
     TraineeCaseViewPage,

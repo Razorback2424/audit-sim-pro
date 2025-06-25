@@ -1,88 +1,78 @@
-# Getting Started with Create React App
+# AuditSim Pro
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+AuditSim Pro is a React and Firebase based training app for simulating audit procedures. It uses Firestore, Storage and Authentication via the Firebase client SDK. The project is bootstrapped with Create React App and styled with Tailwind and MUI.
 
-## Login Behavior
+## Environment Setup
 
-On each launch the app shows a role selection screen. No user ID is created until you choose a role, at which point the app signs in anonymously and stores your selection.
+1. Install dependencies:
+   ```bash
+   npm install
+   ```
+2. Copy `.env.example` to `.env` and fill in your Firebase project settings:
+   ```bash
+   cp .env.example .env
+   # then edit .env with your values
+   ```
+   `REACT_APP_FIREBASE_CONFIG` contains your Firebase configuration JSON and `REACT_APP_APP_ID` identifies the dataset in Firestore.
+   Make sure the JSON string in `REACT_APP_FIREBASE_CONFIG` uses **your real Firebase credentials** and does not contain the `<apiKey>` placeholder. Keep `.env` out of version control.
 
-## Security Rules Overview
+### Firebase Emulators
 
-The application relies on Firebase security rules for both Firestore and Storage.
-Admins can read and write all case and user data. Trainees may only read the
-cases they are authorized for and submit their own selections. See
-`firestore.rules` and `storage.rules` for the exact RBAC logic.
+To work locally without touching production data you can run the Firebase emulators. Install the Firebase CLI and start the emulators:
 
-## Firebase Service Modules
+```bash
+npm install -g firebase-tools
+firebase emulators:start --only firestore,storage,auth
+```
 
-Firestore queries and mutations are centralized under `src/services/`. Pages
-import these modules (e.g. `caseService.js`, `submissionService.js`) instead of
-calling Firestore directly. This makes page components slimmer and allows tests
-to easily mock Firebase interactions.
+The app will automatically connect to the emulators if the config in `.env` points to them.
 
 ## Available Scripts
 
-In the project directory, you can run:
+- `npm start` – run the app in development mode
+- `npm test` – execute Jest and React Testing Library tests
+- `npm run build` – build the production bundle
 
-### `npm start`
+To generate a coverage report run:
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+```bash
+npm test -- --coverage
+```
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+## Login Behavior
 
-### `npm test`
+On first load the app shows a role selection screen. No user ID is created until you choose a role at which point the app signs in anonymously and stores the selection.
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+## Security Rules Overview
 
-### `npm run build`
+The application relies on Firebase security rules for both Firestore and Storage. Administrators can read and write all case and user data. Trainees may only read the cases they are authorized for and submit their own selections. See `firestore.rules` and `storage.rules` for the exact RBAC logic.
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+## Admin Workflow
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+1. From the Admin Dashboard you can create or edit a case using the Case Form.
+   Disbursements may be uploaded via CSV or entered manually. Invoice PDFs can be
+   attached to each payment.
+2. When the form is saved, each PDF is uploaded under
+   `artifacts/&lt;appId&gt;/case_documents/&lt;caseId&gt;/` and the Firestore document
+   records its `downloadURL` for trainees to access.
+3. Use the new **Case Overview** page from the dashboard to view a read-only
+   summary of a case. Links from this page allow quick access to editing and to
+   trainee submissions.
+4. From the submissions list you can drill down into a **Submission Detail** page
+   to review each trainee's selections and classifications. If a trainee has
+   attempted the same case multiple times the detail page shows each attempt
+   chronologically along with any recorded grade.
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+## Trainee Workflow
 
-### `npm run eject`
+1. From the Trainee Dashboard select a case to work on.
+2. On the case view page choose which disbursements to test and classify each
+   selected item using the provided options.
+3. Submit your selections to store them with your user record. A confirmation
+   screen summarizes the payment IDs chosen and any retrieved invoice PDFs with
+   links to open them.
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+## Firebase Service Modules
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+Firestore queries and mutations are centralized under `src/services/`. Pages import these modules instead of calling Firestore directly. This keeps page components slimmer and allows tests to easily mock Firebase interactions.
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
-
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)

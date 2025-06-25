@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { Timestamp } from 'firebase/firestore';
-import { storage, Button, useRoute, useAuth, useModal } from '../AppCore';
+import { storage, Button, Select, CLASSIFICATION_OPTIONS, useRoute, useAuth, useModal } from '../AppCore';
 import { subscribeToCase } from '../services/caseService';
 import { saveSubmission } from '../services/submissionService';
 import { Send, FileText, Eye } from 'lucide-react';
@@ -14,7 +14,11 @@ export default function TraineeCaseViewPage({ params }) {
 
   const [caseData, setCaseData] = useState(null);
   const [selectedDisbursements, setSelectedDisbursements] = useState({});
+  const [disbursementClassifications, setDisbursementClassifications] = useState({});
+  const [confirmedClassifications, setConfirmedClassifications] = useState({});
   const [submittedDocuments, setSubmittedDocuments] = useState(null);
+  const [confirmedIds, setConfirmedIds] = useState([]);
+  const [showConfirmation, setShowConfirmation] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -51,10 +55,21 @@ export default function TraineeCaseViewPage({ params }) {
   }, [caseId, navigate, userId, showModal]);
 
   const handleSelectionChange = (paymentId) => {
-    setSelectedDisbursements((prev) => ({
-      ...prev,
-      [paymentId]: !prev[paymentId],
-    }));
+    setSelectedDisbursements((prev) => {
+      const newVal = !prev[paymentId];
+      if (!newVal) {
+        setDisbursementClassifications((cls) => {
+          const updated = { ...cls };
+          delete updated[paymentId];
+          return updated;
+        });
+      }
+      return { ...prev, [paymentId]: newVal };
+    });
+  };
+
+  const handleClassificationChange = (paymentId, value) => {
+    setDisbursementClassifications((prev) => ({ ...prev, [paymentId]: value }));
   };
 
   const handleSubmitSelections = async () => {
@@ -76,6 +91,10 @@ export default function TraineeCaseViewPage({ params }) {
         }
       });
     });
+    const classificationData = {};
+    selectedIds.forEach((pid) => {
+      classificationData[pid] = disbursementClassifications[pid] || '';
+    });
     setSubmittedDocuments(documents);
 
     try {
@@ -84,9 +103,12 @@ export default function TraineeCaseViewPage({ params }) {
         caseName: caseData.caseName,
         selectedPaymentIds: selectedIds,
         retrievedDocuments: documents,
+        disbursementClassifications: classificationData,
         submittedAt: Timestamp.now(),
       });
-      showModal('Selections submitted. Review your documents below.', 'Submission Successful');
+      setConfirmedIds(selectedIds);
+      setConfirmedClassifications(classificationData);
+      setShowConfirmation(true);
     } catch (error) {
       console.error('Error saving submission:', error);
       showModal('Error saving submission: ' + error.message, 'Error');
@@ -134,6 +156,43 @@ export default function TraineeCaseViewPage({ params }) {
   if (loading) return <div className="p-4 text-center">Loading case details...</div>;
   if (!caseData) return <div className="p-4 text-center">Case not found or you may not have access. Redirecting...</div>;
 
+  if (showConfirmation) {
+    return (
+      <div className="p-6 bg-gray-50 min-h-screen">
+        <div className="max-w-4xl mx-auto">
+          <div className="bg-white p-8 rounded-lg shadow-xl">
+            <h1 className="text-3xl font-bold text-gray-800 mb-2">Submission Confirmed</h1>
+            <p className="text-gray-600 mb-6">You submitted selections for {caseData.caseName}.</p>
+            <h2 className="text-xl font-semibold text-gray-700 mb-2">Selected Disbursements</h2>
+            <ul className="list-disc list-inside text-sm mb-4">
+              {confirmedIds.map((pid) => (
+                <li key={pid}>{pid}{confirmedClassifications[pid] ? ` — ${confirmedClassifications[pid]}` : ''}</li>
+              ))}
+            </ul>
+            <h2 className="text-xl font-semibold text-gray-700 mb-2">Retrieved Documents</h2>
+            {submittedDocuments && submittedDocuments.length > 0 ? (
+              <ul className="space-y-3 mb-6">
+                {submittedDocuments.map((docInfo, index) => (
+                  <li key={index} className="text-gray-700 flex items-center justify-between p-3 bg-gray-50 rounded-md">
+                    <span className="flex items-center">
+                      <FileText size={18} className="text-blue-500 mr-2 flex-shrink-0" /> {docInfo.fileName}
+                    </span>
+                    <Button onClick={() => handleViewDocument(docInfo)} variant="secondary" className="text-xs px-2 py-1">
+                      <Eye size={14} className="inline mr-1" /> View PDF
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-gray-500 mb-6">No documents correspond to your selections.</p>
+            )}
+            <Button onClick={() => navigate('/trainee')} variant="secondary">Back to Cases</Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
       <div className="max-w-4xl mx-auto">
@@ -163,6 +222,9 @@ export default function TraineeCaseViewPage({ params }) {
                       <strong className="font-medium">Date:</strong> {d.paymentDate}
                     </span>
                   </label>
+                  <div className="ml-4 w-44">
+                    <Select options={CLASSIFICATION_OPTIONS} value={disbursementClassifications[d.paymentId] || ''} onChange={(e) => handleClassificationChange(d.paymentId, e.target.value)} disabled={!selectedDisbursements[d.paymentId]} />
+                  </div>
                 </div>
               ))}
             </div>
