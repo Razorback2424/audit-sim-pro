@@ -8,7 +8,9 @@ import {
 } from 'firebase/auth';
 import {
   getFirestore,
-  serverTimestamp
+  serverTimestamp,
+  doc,
+  getDoc
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage'; // << MOVED IMPORT TO TOP
 import { XCircle, Loader2 } from 'lucide-react'; // << MOVED IMPORT TO TOP
@@ -341,37 +343,51 @@ const UserProvider = ({ children }) => {
       if (showModal) showModal('Cannot set role: not signed in.', 'Authentication Error');
       return;
     }
+
     try {
-      await setUserRole(user.uid, newRole);
-      cacheRole(user.uid, newRole);
-      const existing = await fetchUserProfile(user.uid);
-      if (!existing) {
+      // Check if the role document exists BEFORE trying to write.
+      const roleRef = doc(db, FirestorePaths.ROLE_DOCUMENT(user.uid));
+      const roleSnap = await getDoc(roleRef);
+
+      // Only attempt to write to the role document if it doesn't exist,
+      // or if the role is actually changing. The security rule will handle
+      // the admin check for updates.
+      if (!roleSnap.exists() || roleSnap.data().role !== newRole) {
+        await setUserRole(user.uid, newRole); // This will be a create or an update.
+      } else {
+        console.log("Role document already exists with the correct role. Skipping write.");
+      }
+
+      // The rest of the logic for profile update can proceed.
+      const existingProfile = await fetchUserProfile(user.uid);
+      if (!existingProfile) {
         const newProfile = {
           uid: user.uid,
           email: user.email ?? `anon-${user.uid}@example.com`,
           role: newRole,
           createdAt: serverTimestamp(),
-          lastUpdatedAt: serverTimestamp()
+          lastUpdatedAt: serverTimestamp(),
         };
-        await upsertUserProfile(user.uid, newProfile);
+        await upsertUserProfile(user.uid, newProfile); // This is allowed by rules
         setUserProfile(newProfile);
       } else {
         const update = { role: newRole, lastUpdatedAt: serverTimestamp() };
-        await upsertUserProfile(user.uid, update);
+        await upsertUserProfile(user.uid, update); // This is allowed by rules
         setUserProfile((prev) => ({ ...prev, ...update }));
       }
+
+      // Update local state and refresh token
       setRoleState(newRole);
-      // After setting the role in Firestore and updating local state,
-      // This refresh might be redundant, but ensure we have the latest token
-      // force ID token refresh and then update local role state from claims
-      const idTokenResult = await user.getIdTokenResult(true);
-      setRoleState(idTokenResult.claims.role); // Ensure local state matches claims
-      // Force ID token refresh to get updated custom claims
-      await user.getIdToken(true);
+      cacheRole(user.uid, newRole);
+      await user.getIdToken(true); // Force refresh to get latest custom claims
       console.log("ID token refreshed after role set.");
     } catch (err) {
       console.error('setRole error:', err);
-      if (showModal) showModal(`Error setting role: ${err.message} (Code: ${err.code})`, 'Error Setting Role');
+      if (err.code === 'permission-denied') {
+        if (showModal) showModal('You do not have permission to change your role once it has been set. Please contact an administrator.', 'Permission Denied');
+      } else {
+        if (showModal) showModal(`Error setting role: ${err.message} (Code: ${err.code})`, 'Error Setting Role');
+      }
     }
   };
 
