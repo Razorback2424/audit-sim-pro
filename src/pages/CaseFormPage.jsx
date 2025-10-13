@@ -25,6 +25,11 @@ export default function CaseFormPage({ params }) {
   const [originalCaseData, setOriginalCaseData] = useState(null);
   const disbursementCsvInputRef = React.useRef(null);
 
+  // ---- upload helpers (no console or flags needed)
+  const MAX_PDF_BYTES = 5 * 1024 * 1024; // 5 MB (must match storage.rules)
+  const UPLOAD_TIMEOUT_MS = 120000; // 2 minutes
+  const ulog = () => {}; // no-op; keep calls for easy re-enable during development
+
   useEffect(() => {
     if (isEditing && editingCaseId) {
       setLoading(true);
@@ -74,12 +79,29 @@ export default function CaseFormPage({ params }) {
   };
 
   const handleMappingFileSelect = (index, file) => {
+    if (!file) return;
+    const isPdfMime =
+      file.type === 'application/pdf' ||
+      file.type === 'application/x-pdf' ||
+      file.type.startsWith('application/pdf');
+    const isPdfExt = /\.pdf$/i.test(file.name || '');
+
+    if (!isPdfMime && !isPdfExt) {
+      ulog('reject:not-pdf', { index, name: file.name, type: file.type });
+      showModal('Please upload a PDF file.', 'Invalid File Type');
+      return;
+    }
+    if (file.size > MAX_PDF_BYTES) {
+      ulog('reject:too-large', { index, name: file.name, size: file.size });
+      showModal(`PDF must be under ${Math.round(MAX_PDF_BYTES / (1024 * 1024))} MB.`, 'File Too Large');
+      return;
+    }
+    ulog('select', { index, name: file.name, type: file.type, size: file.size });
     setInvoiceMappings((prevMappings) =>
       prevMappings.map((m, i) =>
         i === index ? { ...m, clientSideFile: file, fileName: file.name, storagePath: '', uploadProgress: 0, uploadError: null, downloadURL: '' } : m
       )
     );
-    console.log(`File selected: ${file.name}. It will be uploaded on save.`);
   };
 
   const addMapping = () => {
@@ -146,55 +168,119 @@ export default function CaseFormPage({ params }) {
 
   const uploadFileAndGetMetadata = async (mappingItem, caseIdForUpload) => {
     if (!mappingItem.clientSideFile) {
-      const { clientSideFile, uploadProgress, uploadError, _tempId, ...restOfMapping } = mappingItem;
-      return restOfMapping.fileName ? restOfMapping : null;
+      return mappingItem.fileName
+        ? { paymentId: mappingItem.paymentId, fileName: mappingItem.fileName, storagePath: mappingItem.storagePath, downloadURL: mappingItem.downloadURL || '' }
+        : null;
     }
 
     const file = mappingItem.clientSideFile;
+    const uploadId = `u_${Math.random().toString(36).slice(2, 8)}`;
+    ulog(uploadId, 'start', { paymentId: mappingItem.paymentId, caseIdForUpload, name: file?.name, type: file?.type, size: file?.size, online: navigator.onLine });
+
+    if (!navigator.onLine) {
+      ulog(uploadId, 'offline-abort');
+      return { paymentId: mappingItem.paymentId, fileName: file?.name || 'invoice.pdf', uploadError: 'Browser is offline', storagePath: '', downloadURL: '' };
+    }
     if (!caseIdForUpload) {
       const errorMsg = 'Cannot upload file: Case ID is not yet finalized for new case.';
       console.error(errorMsg, mappingItem);
+      ulog(uploadId, 'abort:no-case-id');
       setInvoiceMappings((prev) => prev.map((m) => (m._tempId === mappingItem._tempId ? { ...m, uploadError: errorMsg, uploadProgress: undefined } : m)));
       throw new Error(errorMsg);
     }
-    const finalStoragePath = `artifacts/${appId}/case_documents/${caseIdForUpload}/${file.name}`;
 
-    setInvoiceMappings((prev) => prev.map((m) => (m._tempId === mappingItem._tempId ? { ...m, storagePath: finalStoragePath, uploadProgress: 0, uploadError: null } : m)));
+    const rawName = file?.name || 'invoice.pdf';
+    const safeName = rawName.replace(/[/\\#?[\]*<>:"|]+/g, '_').replace(/\s+/g, ' ').trim();
+    const finalStoragePath = `artifacts/${appId}/case_documents/${caseIdForUpload}/${safeName}`;
+    ulog(uploadId, 'path', { rawName, safeName, finalStoragePath });
+
+    setInvoiceMappings((prev) =>
+      prev.map((m) => (m._tempId === mappingItem._tempId ? { ...m, storagePath: finalStoragePath, uploadProgress: 0, uploadError: null } : m))
+    );
+
+    const timeoutMs = UPLOAD_TIMEOUT_MS;
+
 
     const fileRef = storageRef(storage, finalStoragePath);
-    const uploadTask = uploadBytesResumable(fileRef, file);
 
-    return new Promise((resolve) => {
-      uploadTask.on(
-        'state_changed',
-        (snapshot) => {
-          const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-          setInvoiceMappings((prev) => prev.map((m) => (m._tempId === mappingItem._tempId ? { ...m, uploadProgress: progress } : m)));
-        },
-        (error) => {
-          console.error(`Upload failed for ${file.name}:`, error);
-          setInvoiceMappings((prev) => prev.map((m) => (m._tempId === mappingItem._tempId ? { ...m, uploadError: error.message, uploadProgress: undefined } : m)));
-          resolve({ ...mappingItem, uploadError: error.message, storagePath: finalStoragePath });
-        },
-        async () => {
-          try {
-            const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
-            console.log(`Upload successful for ${file.name}, URL: ${downloadURL}`);
-            resolve({ paymentId: mappingItem.paymentId, fileName: file.name, storagePath: finalStoragePath, downloadURL });
-          } catch (error) {
-            console.error(`Failed to get download URL for ${file.name}:`, error);
-            resolve({
-              ...mappingItem,
-              paymentId: mappingItem.paymentId,
-              fileName: file.name,
-              uploadError: 'Upload Succeeded, but failed to get download URL.',
-              storagePath: finalStoragePath,
-              downloadURL: '',
-            });
+    const awaitResumable = (task) => {
+      return new Promise((resolve, reject) => {
+        let lastLogged = -10;
+        const timer = setTimeout(() => {
+          try { task.cancel(); } catch {}
+          ulog(uploadId, 'timeout', `${timeoutMs}ms`);
+          unsubscribe();
+          reject(new Error(`Upload timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+
+        const unsubscribe = task.on('state_changed',
+          (snapshot) => {
+            const pct = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+            if (pct - lastLogged >= 10) {
+              ulog(uploadId, 'progress', { pct, state: snapshot.state, bytesTransferred: snapshot.bytesTransferred, totalBytes: snapshot.totalBytes });
+              lastLogged = pct;
+            }
+            setInvoiceMappings((prev) =>
+              prev.map((m) => (m._tempId === mappingItem._tempId ? { ...m, uploadProgress: pct } : m))
+            );
+          },
+          (err) => {
+            clearTimeout(timer);
+            unsubscribe();
+            reject(err);
+          },
+          () => {
+            clearTimeout(timer);
+            unsubscribe();
+            resolve(task.snapshot);
           }
+        );
+      });
+    };
+
+
+    const runResumable = async () => {
+      ulog(uploadId, 'mode', 'resumable');
+      try {
+        const task = uploadBytesResumable(fileRef, file, { contentType: 'application/pdf' });
+        const snapshot = await awaitResumable(task);
+        const downloadURL = await getDownloadURL(snapshot.ref);
+        ulog(uploadId, 'success:resumable', { downloadURL });
+        return { paymentId: mappingItem.paymentId, fileName: safeName, storagePath: finalStoragePath, downloadURL };
+      } catch (error) {
+        const code = error?.code || '';
+        let msg = error?.message || 'Upload failed';
+        if (code === 'storage/retry-limit-exceeded') {
+          msg = 'Network was unstable for too long and the upload was aborted. Please check your connection and try again.';
         }
-      );
-    });
+        ulog(uploadId, 'error:resumable', { code, msg });
+        setInvoiceMappings((prev) =>
+          prev.map((m) => (m._tempId === mappingItem._tempId ? { ...m, uploadError: msg, uploadProgress: undefined } : m))
+        );
+        return {
+          paymentId: mappingItem.paymentId,
+          fileName: safeName,
+          uploadError: msg,
+          storagePath: finalStoragePath,
+          downloadURL: '',
+        };
+      }
+    };
+
+    // Always use resumable upload
+    const first = await runResumable();
+
+    // Optional single retry on transient failures
+    const msgLower = String(first?.uploadError || '').toLowerCase();
+    const transient = msgLower.includes('retry-limit-exceeded') || msgLower.includes('network') || msgLower.includes('500') || msgLower.includes('503') || msgLower.includes('quota') || msgLower.includes('timeout');
+
+    if (first && first.uploadError && transient) {
+      ulog(uploadId, 'retry:once', first.uploadError);
+      await new Promise((r) => setTimeout(r, 1500));
+      return await runResumable();
+    }
+
+    return first;
   };
 
   const handleSubmit = async (e) => {
@@ -254,10 +340,17 @@ export default function CaseFormPage({ params }) {
 
       if (!currentCaseId) throw new Error('Case ID is missing. Cannot proceed with file uploads.');
 
-      const uploadResults = await Promise.all(
-        invoiceMappings
-          .filter((m) => m.paymentId && (m.clientSideFile || m.fileName))
-          .map((mapping) => uploadFileAndGetMetadata(mapping, currentCaseId))
+      const candidates = invoiceMappings
+        .filter((m) => m.paymentId && (m.clientSideFile || m.fileName));
+
+      const settled = await Promise.allSettled(
+        candidates.map((mapping) => uploadFileAndGetMetadata(mapping, currentCaseId))
+      );
+
+      const uploadResults = settled.map((r, idx) =>
+        r.status === 'fulfilled'
+          ? r.value
+          : { uploadError: r.reason?.message || 'Upload failed', fileName: candidates[idx]?.fileName, paymentId: candidates[idx]?.paymentId }
       );
 
       const failedUploads = uploadResults.filter((result) => result && result.uploadError);
@@ -268,7 +361,9 @@ export default function CaseFormPage({ params }) {
         return;
       }
 
-      const finalInvoiceMappings = uploadResults.filter((r) => r && !r.uploadError).map(({ clientSideFile, uploadProgress, _tempId, ...rest }) => rest);
+      const finalInvoiceMappings = uploadResults
+        .filter((r) => r && !r.uploadError)
+        .map(({ clientSideFile, uploadProgress, _tempId, ...rest }) => rest);
 
       const caseDataPayload = {
         caseName,
@@ -296,8 +391,6 @@ export default function CaseFormPage({ params }) {
   };
 
   if (loading && isEditing) return <div className="p-4 text-center">Loading case details...</div>;
-
-  const currencyFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
@@ -341,7 +434,9 @@ export default function CaseFormPage({ params }) {
 
           <section>
             <h2 className="text-xl font-semibold text-gray-700 mb-4">Invoice PDF Mappings</h2>
-            <p className="text-sm text-gray-500 mb-3">Map Payment IDs to their invoice PDFs. Select a PDF for each mapping. Files will be uploaded to Firebase Storage on save.</p>
+            <p className="text-sm text-gray-500 mb-3">
+              Map Payment IDs to their invoice PDFs (max {Math.round(MAX_PDF_BYTES / (1024 * 1024))} MB). Select a PDF for each mapping. Files will be uploaded to Firebase Storage on save.
+            </p>
             <div className="space-y-4">
               {invoiceMappings.map((item, index) => (
                 <InvoiceMappingItem key={item._tempId} item={item} index={index} onChange={handleMappingChange} onRemove={removeMapping} availablePaymentIds={availablePaymentIdsForMapping} onFileSelect={handleMappingFileSelect} caseIdForPath={editingCaseId} />
@@ -412,7 +507,7 @@ const InvoiceMappingItem = ({ item, index, onChange, onRemove, availablePaymentI
         <label htmlFor={fileInputId} className="block text-xs font-medium text-gray-700">
           Invoice PDF
         </label>
-        <Input id={fileInputId} type="file" accept=".pdf" onChange={handleFileChange} className="mt-1" />
+        <Input id={fileInputId} type="file" accept=".pdf,application/pdf" onChange={handleFileChange} className="mt-1" />
         {item.fileName && (
           <div className="mt-1 text-xs text-gray-600 flex items-center">
             <Paperclip size={12} className="mr-1 flex-shrink-0" />
@@ -445,4 +540,3 @@ const InvoiceMappingItem = ({ item, index, onChange, onRemove, availablePaymentI
     </div>
   );
 };
-

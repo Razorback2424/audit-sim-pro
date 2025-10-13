@@ -7,7 +7,8 @@ service firebase.storage {
 
     // Check user role from custom claims or fallback role document
     function getRole() {
-      return get(/databases/$(database)/documents/roles/$(request.auth.uid)).data.role;
+      let roleDoc = firestore.get(/databases/(default)/documents/roles/$(request.auth.uid));
+      return roleDoc.exists() ? roleDoc.data.role : null;
     }
     function isAdmin() {
       return request.auth != null &&
@@ -21,11 +22,11 @@ service firebase.storage {
     // Verifies the trainee has access to the specified case by checking the Firestore case document
     // This requires a read from Firestore, which is allowed for 'get' operations in Storage rules.
     function traineeHasAccessToCase(appId, caseId) {
-      let caseDoc = get(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId));
+      let caseDoc = firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId));
       return caseDoc.exists() && (
         !(caseDoc.data.visibleToUserIds is list) ||
         caseDoc.data.visibleToUserIds.size() == 0 ||
-        request.auth.uid in caseDoc.data.visibleToUserIds
+        caseDoc.data.visibleToUserIds.hasAny([request.auth.uid])
       );
     }
 
@@ -38,8 +39,14 @@ service firebase.storage {
                    );
 
       allow write: if request.auth != null && isAdmin() && // Only admins can write case documents
-                      request.resource.contentType.matches('application/pdf') &&
-                      request.resource.size < 5 * 1024 * 1024;
+                      (
+                        request.resource.contentType == 'application/pdf' ||
+                        (
+                          request.resource.contentType == 'application/octet-stream' &&
+                          fileName.matches('(?i).*\\.pdf$')  // enforce .pdf extension when MIME is generic
+                        )
+                      ) &&
+                      request.resource.size < 5 * 1024 * 1024; // 5 MB limit
     }
   }
 }

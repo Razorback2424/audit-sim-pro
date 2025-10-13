@@ -2,15 +2,19 @@ import React, { useState, useEffect, createContext, useContext, useCallback } fr
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
-  signInAnonymously,
   onAuthStateChanged,
-  signInWithCustomToken
+  signInWithCustomToken,
+  setPersistence,
+  browserLocalPersistence,
+  signInWithEmailAndPassword,
+  signOut
 } from 'firebase/auth';
 import {
   getFirestore,
   serverTimestamp,
   doc,
-  getDoc
+  getDoc,
+  setDoc
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage'; // << MOVED IMPORT TO TOP
 import { XCircle, Loader2 } from 'lucide-react'; // << MOVED IMPORT TO TOP
@@ -210,8 +214,9 @@ const useRoute = () => {
 // ---------- Authentication Context ----------
 const AuthContext = createContext(null);
 
+// Guest sign-in is disabled to ensure a stable UID across sessions.
 let signInAsGuest = async () => {
-  throw new Error('AuthProvider not mounted');
+  throw new Error('Guest sign-in is disabled. Please log in with email/password.');
 };
 
 const AuthProvider = ({ children }) => {
@@ -223,6 +228,12 @@ const AuthProvider = ({ children }) => {
     setLoadingAuth(true); // Set loading true at the start of the effect
 
     const attemptInitialAuth = async () => {
+      // Ensure session persistence is LOCAL so the same UID is reused across reloads
+      try {
+        await setPersistence(auth, browserLocalPersistence);
+      } catch (e) {
+        console.warn('Failed to set auth persistence (will fall back to default):', e);
+      }
       const tokenToUse = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : window.__initial_auth_token;
 
       if (tokenToUse) {
@@ -239,6 +250,13 @@ const AuthProvider = ({ children }) => {
     attemptInitialAuth(); // Call the initial auth attempt
 
     const unsubscribe = onAuthStateChanged(auth, (user) => {
+      // If a legacy anonymous session is restored, clear it so we require real login
+      if (user && user.isAnonymous) {
+        try { signOut(auth); } catch {}
+        setCurrentUser(null);
+        setLoadingAuth(false);
+        return;
+      }
       setCurrentUser(user);
       setLoadingAuth(false);
     });
@@ -249,7 +267,7 @@ const AuthProvider = ({ children }) => {
 
   const logout = async () => {
     try {
-      await auth.signOut();
+      await signOut(auth);
       // onAuthStateChanged will handle setting currentUser and userProfile to null
     } catch (err) {
       console.error('Logout error:', err);
@@ -257,20 +275,18 @@ const AuthProvider = ({ children }) => {
     }
   };
 
-  const signInAsGuestInternal = async () => {
+
+  const login = async (email, password) => {
     try {
-      setLoadingAuth(true);
-      const cred = await signInAnonymously(auth);
+      await setPersistence(auth, browserLocalPersistence);
+      const cred = await signInWithEmailAndPassword(auth, email, password);
       return cred.user;
     } catch (err) {
-      console.error('Anonymous sign-in error:', err);
-      if (showModal) showModal(`Failed to sign in anonymously: ${err.message} (Code: ${err.code})`, 'Authentication Error');
-      setLoadingAuth(false);
+      console.error('Email/password sign-in error:', err);
+      if (showModal) showModal(`Failed to sign in: ${err.message} (Code: ${err.code})`, 'Authentication Error');
       throw err;
     }
   };
-
-  signInAsGuest = signInAsGuestInternal;
 
   return (
     <AuthContext.Provider
@@ -278,8 +294,9 @@ const AuthProvider = ({ children }) => {
         currentUser,
         loadingAuth,
         userId: currentUser ? currentUser.uid : null,
-        signInAsGuest,
+        login,
         logout,
+        signInAsGuest,
       }}
     >
       {children}
@@ -354,6 +371,13 @@ const UserProvider = ({ children }) => {
       // the admin check for updates.
       if (!roleSnap.exists() || roleSnap.data().role !== newRole) {
         await setUserRole(user.uid, newRole); // This will be a create or an update.
+        // Mirror role into roles/{uid} so Firebase Storage rules can authorize admin uploads
+        try {
+          const rolesDocRef = doc(db, FirestorePaths.ROLE_DOCUMENT(user.uid));
+          await setDoc(rolesDocRef, { role: newRole }, { merge: true });
+        } catch (e) {
+          console.warn('Failed to mirror role to roles/{uid}:', e);
+        }
       } else {
         console.log("Role document already exists with the correct role. Skipping write.");
       }

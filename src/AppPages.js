@@ -28,28 +28,32 @@ import AdminCaseOverviewPage from './pages/AdminCaseOverviewPage';
 import CaseFormPage from './pages/CaseFormPage';
 import TraineeDashboardPage from './pages/TraineeDashboardPage';
 import TraineeCaseViewPage from './pages/TraineeCaseViewPage';
+import LoginPage from './pages/LoginPage';
+import RegistrationPage from './pages/RegistrationPage';
 
 // --- Pages ---
 const RoleSelectionPage = () => {
-    const { currentUser, loadingAuth, signInAsGuest } = useAuth();
+    const { currentUser, loadingAuth } = useAuth();
     const { setRole, userProfile } = useUser();
     const { navigate } = useRoute();
     const [isSettingRole, setIsSettingRole] = useState(false);
 
     useEffect(() => {
-        if (!loadingAuth && userProfile?.role) navigate('/');
-    }, [userProfile, navigate, loadingAuth]);
+        if (loadingAuth) return;
+        if (!currentUser || currentUser.isAnonymous) {
+            navigate('/register?next=/select-role');
+            return;
+        }
+        if (userProfile?.role) navigate('/');
+    }, [currentUser, userProfile, navigate, loadingAuth]);
 
     const handleSelectRole = async (role) => {
         setIsSettingRole(true);
-        let user = currentUser;
-        if (!user) {
-            try {
-                user = await signInAsGuest();
-            } catch (err) {
-                setIsSettingRole(false);
-                return;
-            }
+        const user = currentUser;
+        if (!user || user.isAnonymous) {
+            setIsSettingRole(false);
+            navigate('/register?next=/select-role');
+            return;
         }
         await setRole(role, user);
         setIsSettingRole(false);
@@ -115,10 +119,19 @@ function App() {
 
     useEffect(() => {
         if (loadingAuth || loadingRole) return;
-        if (currentUser) {
-            if (!role && route !== '/select-role') navigate('/select-role');
-            else if (role && route === '/select-role') navigate('/');
+        const isOnLogin = typeof route === 'string' && route.startsWith('/login');
+        const isOnRegister = typeof route === 'string' && route.startsWith('/register');
+
+        if (!currentUser || currentUser.isAnonymous) {
+            if (!isOnLogin && !isOnRegister) navigate('/register');
+            return;
         }
+        if (isOnLogin || isOnRegister) {
+            navigate('/');
+            return;
+        }
+        if (!role && route !== '/select-role') navigate('/select-role');
+        else if (role && route === '/select-role') navigate('/');
     }, [loadingAuth, loadingRole, currentUser, role, route, navigate]);
 
     if (loadingAuth || loadingRole) {
@@ -129,7 +142,12 @@ function App() {
         return <UnauthorizedPage />;
     }
 
-    if (!currentUser || !role) {
+    if (!currentUser || currentUser.isAnonymous) {
+        if (typeof route === 'string' && route.startsWith('/register')) return <RegistrationPage />;
+        return <LoginPage />;
+    }
+
+    if (!role) {
         return <RoleSelectionPage />;
     }
 

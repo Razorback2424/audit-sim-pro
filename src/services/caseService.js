@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, getDocs, addDoc, setDoc, query, onSnapshot, where, Timestamp } from 'firebase/firestore';
+import { collection, doc, getDoc, addDoc, setDoc, query, onSnapshot, where, Timestamp } from 'firebase/firestore';
 import { db, FirestorePaths } from '../AppCore';
 
 export const subscribeToCases = (onData, onError) => {
