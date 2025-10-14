@@ -26,9 +26,19 @@ export default function CaseFormPage({ params }) {
   const disbursementCsvInputRef = React.useRef(null);
 
   // ---- upload helpers (no console or flags needed)
-  const MAX_PDF_BYTES = 5 * 1024 * 1024; // 5 MB (must match storage.rules)
+  const MAX_PDF_BYTES = 5 * 1024 * 1024; // 5 MB (must align with storage.rules)
   const UPLOAD_TIMEOUT_MS = 120000; // 2 minutes
-  const ulog = () => {}; // no-op; keep calls for easy re-enable during development
+  const ulog = (event, payload) => {
+    const data = payload || {};
+    try {
+      console.info('[case-upload]', event, data);
+      if (event === 'error:resumable' && data?.error?.serverResponse) {
+        console.info('[case-upload] serverResponse', data.error.serverResponse);
+      }
+    } catch (e) {
+      // no-op
+    }
+  }; // surface errors during investigation
 
   useEffect(() => {
     if (isEditing && editingCaseId) {
@@ -80,10 +90,11 @@ export default function CaseFormPage({ params }) {
 
   const handleMappingFileSelect = (index, file) => {
     if (!file) return;
+    const normalizedType = (file.type || '').toLowerCase();
     const isPdfMime =
-      file.type === 'application/pdf' ||
-      file.type === 'application/x-pdf' ||
-      file.type.startsWith('application/pdf');
+      normalizedType === 'application/pdf' ||
+      normalizedType === 'application/x-pdf' ||
+      normalizedType.startsWith('application/pdf');
     const isPdfExt = /\.pdf$/i.test(file.name || '');
 
     if (!isPdfMime && !isPdfExt) {
@@ -190,7 +201,10 @@ export default function CaseFormPage({ params }) {
     }
 
     const rawName = file?.name || 'invoice.pdf';
-    const safeName = rawName.replace(/[/\\#?[\]*<>:"|]+/g, '_').replace(/\s+/g, ' ').trim();
+    let safeName = rawName.replace(/[/\\#?[\]*<>:"|]+/g, '_').replace(/\s+/g, ' ').trim();
+    if (!/\.pdf$/i.test(safeName)) {
+      safeName = `${safeName}.pdf`;
+    }
     const finalStoragePath = `artifacts/${appId}/case_documents/${caseIdForUpload}/${safeName}`;
     ulog(uploadId, 'path', { rawName, safeName, finalStoragePath });
 
@@ -242,7 +256,16 @@ export default function CaseFormPage({ params }) {
     const runResumable = async () => {
       ulog(uploadId, 'mode', 'resumable');
       try {
-        const task = uploadBytesResumable(fileRef, file, { contentType: 'application/pdf' });
+        const metadata = {
+          contentType: 'application/pdf',
+          customMetadata: {
+            appId: String(appId || ''),
+            caseId: String(caseIdForUpload || ''),
+            uploadedBy: String(userId || ''),
+            paymentId: String(mappingItem.paymentId || ''),
+          },
+        };
+        const task = uploadBytesResumable(fileRef, file, metadata);
         const snapshot = await awaitResumable(task);
         const downloadURL = await getDownloadURL(snapshot.ref);
         ulog(uploadId, 'success:resumable', { downloadURL });
@@ -253,7 +276,30 @@ export default function CaseFormPage({ params }) {
         if (code === 'storage/retry-limit-exceeded') {
           msg = 'Network was unstable for too long and the upload was aborted. Please check your connection and try again.';
         }
-        ulog(uploadId, 'error:resumable', { code, msg });
+        const response = error?.serverResponse ??
+          error?.customData?.serverResponse ??
+          error?.customData?._rawError ??
+          error?.message ??
+          '';
+        try {
+          console.error('[case-upload] raw error', error);
+        } catch {}
+        let parsedResponse = null;
+        if (typeof response === 'string') {
+          try { parsedResponse = JSON.parse(response); } catch {}
+        }
+        ulog(uploadId, 'error:resumable', {
+          code,
+          msg,
+          error: error ? {
+            message: error.message,
+            code: error.code,
+            name: error.name,
+            customData: error.customData,
+            serverResponse: response,
+            parsedResponse,
+          } : null,
+        });
         setInvoiceMappings((prev) =>
           prev.map((m) => (m._tempId === mappingItem._tempId ? { ...m, uploadError: msg, uploadProgress: undefined } : m))
         );

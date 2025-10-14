@@ -1,0 +1,21 @@
+[
+  {
+    "origin": [
+      "http://localhost:3000",
+      "https://auditsim-pro-dev.web.app",
+      "https://auditsim-pro-dev.firebaseapp.com"
+    ],
+    "method": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "maxAgeSeconds": 3600,
+    "responseHeader": [
+      "Content-Type",
+      "Authorization",
+      "x-goog-meta-*",
+      "x-goog-resumable",
+      "X-Goog-Upload-Protocol",
+      "X-Goog-Upload-Command",
+      "X-Goog-Upload-Content-Type",
+      "X-Goog-Upload-File-Name"
+    ]
+  }
+]

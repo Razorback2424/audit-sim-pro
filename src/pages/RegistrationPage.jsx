@@ -1,7 +1,7 @@
 
 
 import React, { useEffect, useRef, useState } from 'react';
-import { useAuth, useUser, useModal, Input, Button } from '../AppCore';
+import { useAuth, useUser, useModal, Input, Button, useRoute } from '../AppCore';
 import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
 import { getFirestore, doc, setDoc } from 'firebase/firestore';
 
@@ -9,6 +9,7 @@ const RegistrationPage = () => {
   const { currentUser } = useAuth();
   const { setRole } = useUser();
   const { showModal } = useModal();
+  const { navigate, route } = useRoute();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -54,8 +55,11 @@ const RegistrationPage = () => {
       const db = getFirestore();
       await setDoc(doc(db, 'roles', user.uid), { role }, { merge: true });
       showModal?.('Account created successfully. You are now signed in.', 'Success');
-      // Go to the app home; guards will route you to select-role if needed
-      window.location.assign('/');
+      // Respect any ?next=... redirect in the current hash route
+      const [, queryString] = (route || '').split('?');
+      const params = new URLSearchParams(queryString || '');
+      const next = params.get('next');
+      navigate(next || '/');
     } catch (err) {
       console.error('Registration error:', err);
       showModal?.(`Registration failed: ${err?.message || 'Unknown error'}`, 'Registration Error');
@@ -72,7 +76,7 @@ const RegistrationPage = () => {
           You are already signed in. Use the app or sign out before creating a new account.
         </p>
         <div className="flex gap-2">
-          <Button type="button" onClick={() => window.location.assign('/')}>Go to app</Button>
+        <Button type="button" onClick={() => navigate('/')}>Go to app</Button>
         </div>
       </div>
     );
@@ -171,7 +175,14 @@ const RegistrationPage = () => {
 
       <div className="mt-6 text-xs text-gray-400">
         <p>
-          Already have an account? <a href="/login" className="underline">Sign in</a>.
+          Already have an account?{' '}
+          <button
+            type="button"
+            onClick={() => navigate('/login')}
+            className="underline text-blue-600 hover:text-blue-700"
+          >
+            Sign in
+          </button>.
         </p>
       </div>
     </div>

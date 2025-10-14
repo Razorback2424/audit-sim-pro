@@ -69,7 +69,45 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : window.__app_id;
 const firebaseApp = initializeApp(firebaseConfig);
 const auth = getAuth(firebaseApp);
 const db = getFirestore(firebaseApp);
-const storage = getStorage(firebaseApp); // Initialize storage
+
+const resolveStorageBucketUrl = (rawBucket) => {
+  if (!rawBucket || typeof rawBucket !== 'string') return null;
+  const trimmed = rawBucket.trim();
+  if (!trimmed) return null;
+  if (/^gs:\/\//i.test(trimmed) || /^https?:\/\//i.test(trimmed)) return trimmed;
+  if (/\.firebasestorage\.app$/i.test(trimmed)) {
+    console.info('[storage] Normalizing firebasestorage.app name');
+    return `gs://${trimmed}`;
+  }
+  return `gs://${trimmed}`;
+};
+
+const storageBucketRaw =
+  process.env.REACT_APP_STORAGE_BUCKET_URL ??
+  process.env.REACT_APP_STORAGE_BUCKET ??
+  firebaseConfig.storageBucket;
+const storageBucketUrl = resolveStorageBucketUrl(storageBucketRaw);
+
+if (!storageBucketUrl && !firebaseConfig.storageBucket) {
+  console.warn(
+    'Firebase storage bucket not defined; falling back to default bucket binding.'
+  );
+}
+
+const storage = storageBucketUrl
+  ? getStorage(firebaseApp, storageBucketUrl)
+  : getStorage(firebaseApp); // Explicitly bind storage to the configured bucket if available
+
+try {
+  const configuredBucket = firebaseApp?.options?.storageBucket;
+  if (configuredBucket) {
+    console.info('[storage] Firebase config bucket:', configuredBucket);
+  }
+  const boundBucket = storageBucketUrl || storage.bucket;
+  console.info('[storage] Bound to bucket:', boundBucket || '(default)');
+} catch (e) {
+  console.warn('[storage] Unable to determine bound bucket', e);
+}
 
 // ---------- Firestore Paths ----------
 const FirestorePaths = {
@@ -353,6 +391,35 @@ const UserProvider = ({ children }) => {
     load();
     return () => { active = false; };
   }, [currentUser]);
+
+  const profileRole = userProfile?.role;
+  // --- Ensure Storage rules can see the role in roles/{uid} (self-healing) ---
+  useEffect(() => {
+    try {
+      if (!currentUser || !currentUser.uid) return;
+      if (!profileRole) return;
+      setDoc(doc(db, 'roles', currentUser.uid), { role: profileRole }, { merge: true })
+        .catch((e) => {
+          console.warn('Failed to mirror role to roles/{uid}:', e);
+        });
+    } catch (e) {
+      console.warn('Mirror role effect error:', e);
+    }
+  }, [currentUser, profileRole]);
+
+  // --- Also mirror from in-memory role (custom claim) in case profile hasn't loaded ---
+  useEffect(() => {
+    try {
+      if (!currentUser || !currentUser.uid) return;
+      if (!role) return;
+      setDoc(doc(db, 'roles', currentUser.uid), { role }, { merge: true })
+        .catch((e) => {
+          console.warn('Failed to mirror role from claim to roles/{uid}:', e);
+        });
+    } catch (e) {
+      console.warn('Mirror role (from claim) effect error:', e);
+    }
+  }, [currentUser, role]);
 
   const setRole = async (newRole, userOverride = null) => {
     const user = userOverride || currentUser;

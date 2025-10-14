@@ -1,11 +1,12 @@
 
 
 import React, { useEffect, useRef, useState } from 'react';
-import { useAuth, Input, Button, useModal } from '../AppCore';
+import { useAuth, Input, Button, useModal, useRoute } from '../AppCore';
 
 const LoginPage = () => {
   const { currentUser, userId, login, logout } = useAuth();
   const { showModal } = useModal();
+  const { route, navigate } = useRoute();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -30,10 +31,12 @@ const LoginPage = () => {
     setSubmitting(true);
     try {
       await login(email.trim(), password);
-      // Redirect to ?next=... if provided, otherwise to home
-      const params = new URLSearchParams(window.location.search);
-      const next = params.get('next') || '/';
-      window.location.assign(next);
+      // Redirect to ?next=... if provided on the hash route, otherwise to home
+      const [, queryString] = (route || '').split('?');
+      const params = new URLSearchParams(queryString || '');
+      const rawNext = params.get('next');
+      const next = rawNext && rawNext.startsWith('/') ? rawNext : '/';
+      navigate(next);
     } catch (err) {
       // login already surfaces a modal, but keep a guard here in case
       showModal?.(`Sign-in failed: ${err?.message || 'Unknown error'}`, 'Authentication Error');
@@ -64,7 +67,7 @@ const LoginPage = () => {
             You are signed in as <span className="font-medium">{currentUser.email || userId}</span>.
           </p>
           <div className="mt-3 flex gap-2">
-            <Button onClick={() => window.location.assign('/')} variant="secondary" type="button">
+            <Button onClick={() => navigate('/')} variant="secondary" type="button">
               Go to app
             </Button>
             <Button onClick={handleLogout} variant="danger" type="button">

@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { Button, useRoute, useModal } from '../AppCore';
-import { fetchUsersWithProfiles } from '../services/userService';
+import { Button, Select, useRoute, useModal, useAuth } from '../AppCore';
+import { fetchUsersWithProfiles, adminUpdateUserRole } from '../services/userService';
 
 export default function AdminUserManagementPage() {
   const [users, setUsers] = useState([]);
   const [loadingUsers, setLoadingUsers] = useState(true);
+  const [pendingRoles, setPendingRoles] = useState({});
+  const [updatingUserId, setUpdatingUserId] = useState(null);
   const { navigate } = useRoute();
   const { showModal } = useModal();
+  const { currentUser } = useAuth();
 
   useEffect(() => {
     setLoadingUsers(true);
@@ -21,6 +24,44 @@ export default function AdminUserManagementPage() {
         setLoadingUsers(false);
       });
   }, [showModal]);
+
+  const handleRoleSelection = (userId, newRole) => {
+    setPendingRoles((prev) => ({ ...prev, [userId]: newRole }));
+  };
+
+  const handleRoleUpdate = async (user) => {
+    const desiredRole = pendingRoles[user.id];
+    const currentRole = user.role ?? '';
+
+    if (!desiredRole || desiredRole === currentRole) {
+      showModal('Select a different role before saving changes.', 'No Changes Detected');
+      return;
+    }
+
+    if (currentUser?.uid === user.id) {
+      showModal('You cannot change your own role from this screen. Please ask another admin to adjust your role if needed.', 'Action Not Allowed');
+      return;
+    }
+
+    setUpdatingUserId(user.id);
+    try {
+      await adminUpdateUserRole(user.id, desiredRole);
+      setUsers((prev) =>
+        prev.map((u) => (u.id === user.id ? { ...u, role: desiredRole } : u))
+      );
+      setPendingRoles((prev) => {
+        const next = { ...prev };
+        delete next[user.id];
+        return next;
+      });
+      showModal(`Role updated to "${desiredRole}" for user ${user.id}.`, 'Success');
+    } catch (error) {
+      console.error('Error updating user role:', error);
+      showModal('Error updating user role: ' + error.message, 'Error');
+    } finally {
+      setUpdatingUserId(null);
+    }
+  };
 
   if (loadingUsers) return <div className="p-4 text-center">Loading users...</div>;
 
@@ -51,15 +92,49 @@ export default function AdminUserManagementPage() {
                   <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Profile Created At
                   </th>
+                  <th scope="col" className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Update Role
+                  </th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {users.map((user) => (
                   <tr key={user.id}>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 break-all">{user.id}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 capitalize">{user.role}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900 capitalize">
+                      {user.role ?? 'Unassigned'}
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                       {user.createdAt?.toDate ? user.createdAt.toDate().toLocaleString() : 'N/A'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-3 space-y-2 sm:space-y-0">
+                        <Select
+                          value={
+                            pendingRoles[user.id] ??
+                            (user.role ?? '')
+                          }
+                          onChange={(event) => handleRoleSelection(user.id, event.target.value)}
+                          options={[
+                            { value: '', label: 'Select role…', disabled: true },
+                            { value: 'admin', label: 'Administrator' },
+                            { value: 'trainee', label: 'Trainee' },
+                          ]}
+                          className="sm:w-40"
+                        />
+                        <Button
+                          onClick={() => handleRoleUpdate(user)}
+                          disabled={
+                            updatingUserId !== null ||
+                            !pendingRoles[user.id] ||
+                            pendingRoles[user.id] === (user.role ?? '') ||
+                            currentUser?.uid === user.id
+                          }
+                          isLoading={updatingUserId === user.id}
+                        >
+                          Save
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
