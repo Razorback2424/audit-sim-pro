@@ -28,6 +28,7 @@ import AdminUserManagementPage from './pages/AdminUserManagementPage';
 import AdminCaseSubmissionsPage from './pages/AdminCaseSubmissionsPage';
 import AdminSubmissionDetailPage from './pages/AdminSubmissionDetailPage';
 import AdminCaseOverviewPage from './pages/AdminCaseOverviewPage';
+import AdminCaseDataAuditPage from './pages/AdminCaseDataAuditPage';
 import CaseFormPage from './pages/CaseFormPage';
 import TraineeDashboardPage from './pages/TraineeDashboardPage';
 import TraineeCaseViewPage from './pages/TraineeCaseViewPage';
@@ -108,6 +109,7 @@ const adminRoutes = {
   '/admin/create-case': <CaseFormPage />,
   '/admin/edit-case/:caseId': (params) => <CaseFormPage params={params} />,
   '/admin/case-overview/:caseId': (params) => <AdminCaseOverviewPage params={params} />,
+  '/admin/case-data-audit': <AdminCaseDataAuditPage />,
   '/admin/user-management': <AdminUserManagementPage />,
   '/admin/case-submissions/:caseId': (params) => <AdminCaseSubmissionsPage params={params} />,
   '/admin/submission-detail/:caseId/:userId': (params) => <AdminSubmissionDetailPage params={params} />,
