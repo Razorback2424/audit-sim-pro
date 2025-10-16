@@ -1563,7 +1563,7 @@ export default function TraineeCaseViewPage({ params }) {
                                   variant="secondary"
                                   className="text-xs px-2 py-1"
                                 >
-                                  <Eye size={14} className="inline mr-1" /> View PDF
+                                  <Eye size={14} className="inline mr-1" /> View Document
                                 </Button>
                               )}
                             </li>
