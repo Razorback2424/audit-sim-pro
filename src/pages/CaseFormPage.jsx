@@ -30,6 +30,7 @@ export const mergeDisbursementDocuments = (disbursementList, invoiceMappings) =>
         storagePath: m.storagePath || '',
         fileName: m.fileName || '',
         downloadURL: m.downloadURL || '',
+        contentType: m.contentType || '',
       });
     });
 
@@ -42,12 +43,13 @@ export const mergeDisbursementDocuments = (disbursementList, invoiceMappings) =>
       storagePath: doc.storagePath || '',
       fileName: doc.fileName || '',
       downloadURL: doc.downloadURL || '',
+      contentType: doc.contentType || '',
     }));
 
     const dedupedDocs = [];
     const seen = new Set();
     combinedDocs.forEach((doc) => {
-      const key = `${doc.storagePath}|${doc.downloadURL}|${doc.fileName}`;
+      const key = `${doc.storagePath}|${doc.downloadURL}|${doc.fileName}|${doc.contentType}`;
       if (seen.has(key)) return;
       seen.add(key);
       if (doc.storagePath || doc.downloadURL || doc.fileName) {
@@ -67,22 +69,28 @@ export const mergeDisbursementDocuments = (disbursementList, invoiceMappings) =>
       if (primaryDoc.downloadURL) next.downloadURL = primaryDoc.downloadURL;
       else delete next.downloadURL;
 
+      if (primaryDoc.contentType) next.contentType = primaryDoc.contentType;
+      else delete next.contentType;
+
       next.supportingDocuments = [
         {
           storagePath: primaryDoc.storagePath || '',
           fileName: primaryDoc.fileName || '',
           downloadURL: primaryDoc.downloadURL || '',
+          contentType: primaryDoc.contentType || '',
         },
         ...additionalDocs.map((doc) => ({
           storagePath: doc.storagePath || '',
           fileName: doc.fileName || '',
           downloadURL: doc.downloadURL || '',
+          contentType: doc.contentType || '',
         })),
       ];
     } else {
       delete next.storagePath;
       delete next.fileName;
       delete next.downloadURL;
+      delete next.contentType;
       delete next.supportingDocuments;
     }
 
@@ -107,6 +115,7 @@ export default function CaseFormPage({ params }) {
     uploadProgress: undefined,
     uploadError: null,
     downloadURL: '',
+    contentType: '',
   });
   const initialReferenceDocument = () => ({
     _tempId: getUUID(),
@@ -116,6 +125,7 @@ export default function CaseFormPage({ params }) {
     clientSideFile: null,
     uploadProgress: undefined,
     uploadError: null,
+    contentType: '',
   });
 
   const [caseName, setCaseName] = useState('');
@@ -132,7 +142,7 @@ export default function CaseFormPage({ params }) {
   const disbursementCsvInputRef = React.useRef(null);
 
   // ---- upload helpers (no console or flags needed)
-  const MAX_PDF_BYTES = 5 * 1024 * 1024; // 5 MB (must align with storage.rules)
+  const MAX_ARTIFACT_BYTES = 5 * 1024 * 1024; // 5 MB (keep in sync with storage.rules soft limit)
   const UPLOAD_TIMEOUT_MS = 120000; // 2 minutes
   const ulog = (event, payload) => {
     const data = payload || {};
@@ -184,7 +194,14 @@ export default function CaseFormPage({ params }) {
             setDueAtStr(toDateTimeLocalInput(data.dueAt));
             setDisbursements(data.disbursements?.map((d) => ({ ...d, _tempId: d._tempId || getUUID() })) || [initialDisbursement()]);
             setInvoiceMappings(
-              data.invoiceMappings?.map((m) => ({ ...m, _tempId: m._tempId || getUUID(), clientSideFile: null, uploadProgress: m.storagePath ? 100 : undefined, uploadError: null })) || [initialMapping()]
+              data.invoiceMappings?.map((m) => ({
+                ...m,
+                _tempId: m._tempId || getUUID(),
+                clientSideFile: null,
+                uploadProgress: m.storagePath ? 100 : undefined,
+                uploadError: null,
+                contentType: m.contentType || '',
+              })) || [initialMapping()]
             );
             setReferenceDocuments(
               data.referenceDocuments && data.referenceDocuments.length > 0
@@ -196,6 +213,7 @@ export default function CaseFormPage({ params }) {
                     clientSideFile: null,
                     uploadProgress: doc.storagePath ? 100 : undefined,
                     uploadError: null,
+                    contentType: doc.contentType || '',
                   }))
                 : [initialReferenceDocument()]
             );
@@ -239,29 +257,122 @@ export default function CaseFormPage({ params }) {
     setInvoiceMappings(newMappings);
   };
 
+  const SUPPORTED_FILE_TYPES = [
+    { mime: 'application/pdf', extensions: ['.pdf'], label: 'PDF' },
+    { mime: 'application/x-pdf', extensions: ['.pdf'], label: 'PDF' },
+    { mime: 'text/csv', extensions: ['.csv'], label: 'CSV' },
+    { mime: 'application/csv', extensions: ['.csv'], label: 'CSV' },
+    { mime: 'application/vnd.ms-excel', extensions: ['.xls'], label: 'Excel (.xls)' },
+    { mime: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', extensions: ['.xlsx'], label: 'Excel (.xlsx)' },
+    { mime: 'application/vnd.ms-excel.sheet.macroenabled.12', extensions: ['.xlsm'], label: 'Excel (.xlsm)' },
+  ];
+
+  const SUPPORTED_MIME_TYPES = new Set(SUPPORTED_FILE_TYPES.map((entry) => entry.mime.toLowerCase()));
+  const SUPPORTED_EXTENSIONS = new Set(
+    SUPPORTED_FILE_TYPES.flatMap((entry) => entry.extensions.map((ext) => ext.toLowerCase()))
+  );
+
+  const prettySupportedLabels = Array.from(
+    new Set(SUPPORTED_FILE_TYPES.map((entry) => entry.label))
+  ).join(', ');
+
+  const FILE_INPUT_ACCEPT = Array.from(
+    new Set([
+      ...Array.from(SUPPORTED_EXTENSIONS),
+      ...Array.from(SUPPORTED_MIME_TYPES),
+    ])
+  ).join(',');
+
+  const getFileExtension = (name) => {
+    if (!name || typeof name !== 'string') return '';
+    const match = name.trim().toLowerCase().match(/(\.[a-z0-9]{1,8})$/i);
+    return match ? match[0].toLowerCase() : '';
+  };
+
+  const pickContentType = (file) => {
+    const declaredType = (file?.type || '').toLowerCase();
+    if (declaredType && SUPPORTED_MIME_TYPES.has(declaredType)) {
+      if (declaredType === 'application/x-pdf') return 'application/pdf';
+      return declaredType;
+    }
+    const ext = getFileExtension(file?.name || '');
+    if (ext && SUPPORTED_EXTENSIONS.has(ext)) {
+      if (ext === '.pdf') return 'application/pdf';
+      if (ext === '.csv') return 'text/csv';
+      if (ext === '.xls') return 'application/vnd.ms-excel';
+      if (ext === '.xlsx') return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      if (ext === '.xlsm') return 'application/vnd.ms-excel.sheet.macroenabled.12';
+    }
+    return declaredType || 'application/octet-stream';
+  };
+
+  const isSupportedFile = (file) => {
+    if (!file) return false;
+    const normalizedType = (file.type || '').toLowerCase();
+    const ext = getFileExtension(file.name || '');
+    if (SUPPORTED_MIME_TYPES.has(normalizedType)) return true;
+    if (SUPPORTED_EXTENSIONS.has(ext)) return true;
+    if (normalizedType === 'application/octet-stream' && SUPPORTED_EXTENSIONS.has(ext)) return true;
+    return false;
+  };
+
+  const ensureSafeStorageName = (rawName, desiredContentType) => {
+    const sanitized = (rawName || 'artifact')
+      .replace(/[/\\#?[\]*<>:"|]+/g, '_')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const baseName = sanitized || 'artifact';
+    const currentExt = getFileExtension(baseName);
+
+    const extensionForType = (() => {
+      switch (desiredContentType) {
+        case 'text/csv':
+          return '.csv';
+        case 'application/vnd.ms-excel':
+          return '.xls';
+        case 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':
+          return '.xlsx';
+        case 'application/vnd.ms-excel.sheet.macroenabled.12':
+          return '.xlsm';
+        default:
+          return '.pdf';
+      }
+    })();
+
+    if (currentExt) {
+      return baseName;
+    }
+    return `${baseName}${extensionForType}`;
+  };
+
   const handleMappingFileSelect = (index, file) => {
     if (!file) return;
-    const normalizedType = (file.type || '').toLowerCase();
-    const isPdfMime =
-      normalizedType === 'application/pdf' ||
-      normalizedType === 'application/x-pdf' ||
-      normalizedType.startsWith('application/pdf');
-    const isPdfExt = /\.pdf$/i.test(file.name || '');
-
-    if (!isPdfMime && !isPdfExt) {
-      ulog('reject:not-pdf', { index, name: file.name, type: file.type });
-      showModal('Please upload a PDF file.', 'Invalid File Type');
+    if (!isSupportedFile(file)) {
+      ulog('reject:unsupported-file', { index, name: file.name, type: file.type });
+      showModal(`Unsupported file type. Allowed formats: ${prettySupportedLabels}.`, 'Invalid File Type');
       return;
     }
-    if (file.size > MAX_PDF_BYTES) {
+    if (file.size > MAX_ARTIFACT_BYTES) {
       ulog('reject:too-large', { index, name: file.name, size: file.size });
-      showModal(`PDF must be under ${Math.round(MAX_PDF_BYTES / (1024 * 1024))} MB.`, 'File Too Large');
+      showModal(`File must be under ${Math.round(MAX_ARTIFACT_BYTES / (1024 * 1024))} MB.`, 'File Too Large');
       return;
     }
     ulog('select', { index, name: file.name, type: file.type, size: file.size });
+    const contentType = pickContentType(file);
     setInvoiceMappings((prevMappings) =>
       prevMappings.map((m, i) =>
-        i === index ? { ...m, clientSideFile: file, fileName: file.name, storagePath: '', uploadProgress: 0, uploadError: null, downloadURL: '' } : m
+        i === index
+          ? {
+              ...m,
+              clientSideFile: file,
+              fileName: file.name,
+              storagePath: '',
+              uploadProgress: 0,
+              uploadError: null,
+              downloadURL: '',
+              contentType,
+            }
+          : m
       )
     );
   };
@@ -279,24 +390,18 @@ export default function CaseFormPage({ params }) {
 
   const handleReferenceDocFileSelect = (index, file) => {
     if (!file) return;
-    const normalizedType = (file.type || '').toLowerCase();
-    const isPdfMime =
-      normalizedType === 'application/pdf' ||
-      normalizedType === 'application/x-pdf' ||
-      normalizedType.startsWith('application/pdf');
-    const isPdfExt = /\.pdf$/i.test(file.name || '');
-
-    if (!isPdfMime && !isPdfExt) {
-      ulog('reference:reject:not-pdf', { index, name: file.name, type: file.type });
-      showModal('Please upload a PDF file for reference documents.', 'Invalid File Type');
+    if (!isSupportedFile(file)) {
+      ulog('reference:reject:unsupported-file', { index, name: file.name, type: file.type });
+      showModal(`Unsupported reference material. Allowed formats: ${prettySupportedLabels}.`, 'Invalid File Type');
       return;
     }
-    if (file.size > MAX_PDF_BYTES) {
+    if (file.size > MAX_ARTIFACT_BYTES) {
       ulog('reference:reject:too-large', { index, name: file.name, size: file.size });
-      showModal(`Reference PDF must be under ${Math.round(MAX_PDF_BYTES / (1024 * 1024))} MB.`, 'File Too Large');
+      showModal(`Reference file must be under ${Math.round(MAX_ARTIFACT_BYTES / (1024 * 1024))} MB.`, 'File Too Large');
       return;
     }
 
+    const contentType = pickContentType(file);
     setReferenceDocuments((prevDocs) =>
       prevDocs.map((doc, i) =>
         i === index
@@ -308,6 +413,7 @@ export default function CaseFormPage({ params }) {
               downloadURL: '',
               uploadProgress: 0,
               uploadError: null,
+              contentType,
             }
           : doc
       )
@@ -393,7 +499,13 @@ export default function CaseFormPage({ params }) {
   const uploadFileAndGetMetadata = async (mappingItem, caseIdForUpload) => {
     if (!mappingItem.clientSideFile) {
       return mappingItem.fileName
-        ? { paymentId: mappingItem.paymentId, fileName: mappingItem.fileName, storagePath: mappingItem.storagePath, downloadURL: mappingItem.downloadURL || '' }
+        ? {
+            paymentId: mappingItem.paymentId,
+            fileName: mappingItem.fileName,
+            storagePath: mappingItem.storagePath,
+            downloadURL: mappingItem.downloadURL || '',
+            contentType: mappingItem.contentType || null,
+          }
         : null;
     }
 
@@ -403,7 +515,14 @@ export default function CaseFormPage({ params }) {
 
     if (!navigator.onLine) {
       ulog(uploadId, 'offline-abort');
-      return { paymentId: mappingItem.paymentId, fileName: file?.name || 'invoice.pdf', uploadError: 'Browser is offline', storagePath: '', downloadURL: '' };
+      return {
+        paymentId: mappingItem.paymentId,
+        fileName: file?.name || 'invoice.pdf',
+        uploadError: 'Browser is offline',
+        storagePath: '',
+        downloadURL: '',
+        contentType: mappingItem.contentType || pickContentType(file),
+      };
     }
     if (!caseIdForUpload) {
       const errorMsg = 'Cannot upload file: Case ID is not yet finalized for new case.';
@@ -413,16 +532,25 @@ export default function CaseFormPage({ params }) {
       throw new Error(errorMsg);
     }
 
+    const desiredContentType = mappingItem.contentType || pickContentType(file);
     const rawName = file?.name || 'invoice.pdf';
-    let safeName = rawName.replace(/[/\\#?[\]*<>:"|]+/g, '_').replace(/\s+/g, ' ').trim();
-    if (!/\.pdf$/i.test(safeName)) {
-      safeName = `${safeName}.pdf`;
-    }
+    const safeName = ensureSafeStorageName(rawName, desiredContentType);
     const finalStoragePath = `artifacts/${appId}/case_documents/${caseIdForUpload}/${safeName}`;
     ulog(uploadId, 'path', { rawName, safeName, finalStoragePath });
 
     setInvoiceMappings((prev) =>
-      prev.map((m) => (m._tempId === mappingItem._tempId ? { ...m, storagePath: finalStoragePath, uploadProgress: 0, uploadError: null } : m))
+      prev.map((m) =>
+        m._tempId === mappingItem._tempId
+          ? {
+              ...m,
+              storagePath: finalStoragePath,
+              uploadProgress: 0,
+              uploadError: null,
+              fileName: safeName,
+              contentType: desiredContentType,
+            }
+          : m
+      )
     );
 
     const timeoutMs = UPLOAD_TIMEOUT_MS;
@@ -470,7 +598,7 @@ export default function CaseFormPage({ params }) {
       ulog(uploadId, 'mode', 'resumable');
       try {
         const metadata = {
-          contentType: 'application/pdf',
+          contentType: desiredContentType || 'application/octet-stream',
           customMetadata: {
             appId: String(appId || ''),
             caseId: String(caseIdForUpload || ''),
@@ -482,7 +610,13 @@ export default function CaseFormPage({ params }) {
         const snapshot = await awaitResumable(task);
         const downloadURL = await getDownloadURL(snapshot.ref);
         ulog(uploadId, 'success:resumable', { downloadURL });
-        return { paymentId: mappingItem.paymentId, fileName: safeName, storagePath: finalStoragePath, downloadURL };
+        return {
+          paymentId: mappingItem.paymentId,
+          fileName: safeName,
+          storagePath: finalStoragePath,
+          downloadURL,
+          contentType: desiredContentType || 'application/octet-stream',
+        };
       } catch (error) {
         const code = error?.code || '';
         let msg = error?.message || 'Upload failed';
@@ -522,6 +656,7 @@ export default function CaseFormPage({ params }) {
           uploadError: msg,
           storagePath: finalStoragePath,
           downloadURL: '',
+          contentType: desiredContentType || 'application/octet-stream',
         };
       }
     };
@@ -556,6 +691,7 @@ export default function CaseFormPage({ params }) {
       };
       if (storagePath) payload.storagePath = storagePath;
       if (downloadURL) payload.downloadURL = downloadURL;
+      if (docItem.contentType) payload.contentType = docItem.contentType;
       return payload;
     }
 
@@ -577,6 +713,7 @@ export default function CaseFormPage({ params }) {
         uploadError: 'Browser is offline',
         storagePath: '',
         downloadURL: '',
+        contentType: docItem.contentType || pickContentType(file),
       };
     }
     if (!caseIdForUpload) {
@@ -589,11 +726,9 @@ export default function CaseFormPage({ params }) {
       throw new Error(errorMsg);
     }
 
+    const desiredContentType = docItem.contentType || pickContentType(file);
     const rawName = file?.name || fallbackName || 'reference.pdf';
-    let safeStorageName = rawName.replace(/[/\\#?[\]*<>:"|]+/g, '_').replace(/\s+/g, ' ').trim();
-    if (!/\.pdf$/i.test(safeStorageName)) {
-      safeStorageName = `${safeStorageName}.pdf`;
-    }
+    const safeStorageName = ensureSafeStorageName(rawName, desiredContentType);
     const displayName = ((docItem.fileName || '').trim() || safeStorageName).trim();
     const finalStoragePath = `artifacts/${appId}/case_reference/${caseIdForUpload}/${safeStorageName}`;
     ulog(uploadId, 'reference:path', { rawName, safeStorageName, displayName, finalStoragePath });
@@ -608,6 +743,7 @@ export default function CaseFormPage({ params }) {
               downloadURL: '',
               uploadProgress: 0,
               uploadError: null,
+              contentType: desiredContentType,
             }
           : doc
       )
@@ -663,7 +799,7 @@ export default function CaseFormPage({ params }) {
       ulog(uploadId, 'reference:mode', 'resumable');
       try {
         const metadata = {
-          contentType: 'application/pdf',
+          contentType: desiredContentType || 'application/octet-stream',
           customMetadata: {
             appId: String(appId || ''),
             caseId: String(caseIdForUpload || ''),
@@ -687,6 +823,7 @@ export default function CaseFormPage({ params }) {
           fileName: displayName,
           storagePath: finalStoragePath,
           downloadURL,
+          contentType: desiredContentType || 'application/octet-stream',
         };
       } catch (error) {
         const code = error?.code || '';
@@ -734,6 +871,7 @@ export default function CaseFormPage({ params }) {
           uploadError: msg,
           storagePath: finalStoragePath,
           downloadURL: '',
+          contentType: desiredContentType || 'application/octet-stream',
         };
       }
     };
@@ -775,7 +913,7 @@ export default function CaseFormPage({ params }) {
 
     const activeMappings = invoiceMappings.filter((m) => m.paymentId || m.clientSideFile || m.fileName);
     if (activeMappings.some((m) => !m.paymentId || (!m.fileName && !m.clientSideFile))) {
-      showModal('Each active invoice mapping must have both a Payment ID selected and a PDF file associated.', 'Validation Error');
+      showModal('Each active invoice mapping must have both a Payment ID selected and an uploaded artifact.', 'Validation Error');
       return;
     }
     if (activeMappings.some((m) => m.paymentId && !currentDisbursementIds.has(m.paymentId))) {
@@ -863,8 +1001,7 @@ export default function CaseFormPage({ params }) {
 
       if (!currentCaseId) throw new Error('Case ID is missing. Cannot proceed with file uploads.');
 
-      const candidates = invoiceMappings
-        .filter((m) => m.paymentId && (m.clientSideFile || m.fileName));
+      const candidates = invoiceMappings.filter((m) => m.paymentId && (m.clientSideFile || m.fileName));
 
       const settled = await Promise.allSettled(
         candidates.map((mapping) => uploadFileAndGetMetadata(mapping, currentCaseId))
@@ -1072,13 +1209,26 @@ export default function CaseFormPage({ params }) {
           </section>
 
           <section>
-            <h2 className="text-xl font-semibold text-gray-700 mb-4">Invoice PDF Mappings</h2>
+            <h2 className="text-xl font-semibold text-gray-700 mb-4">Invoice Document Mappings</h2>
             <p className="text-sm text-gray-500 mb-3">
-              Map Payment IDs to their invoice PDFs (max {Math.round(MAX_PDF_BYTES / (1024 * 1024))} MB). Select a PDF for each mapping. Files will be uploaded to Firebase Storage on save.
+              Map Payment IDs to their supporting documents (allowed: {prettySupportedLabels}; max {Math.round(
+                MAX_ARTIFACT_BYTES / (1024 * 1024)
+              )}{' '}
+              MB per file). Files upload to Firebase Storage when you save.
             </p>
             <div className="space-y-4">
               {invoiceMappings.map((item, index) => (
-                <InvoiceMappingItem key={item._tempId} item={item} index={index} onChange={handleMappingChange} onRemove={removeMapping} availablePaymentIds={availablePaymentIdsForMapping} onFileSelect={handleMappingFileSelect} caseIdForPath={editingCaseId} />
+                <InvoiceMappingItem
+                  key={item._tempId}
+                  item={item}
+                  index={index}
+                  onChange={handleMappingChange}
+                  onRemove={removeMapping}
+                  availablePaymentIds={availablePaymentIdsForMapping}
+                  onFileSelect={handleMappingFileSelect}
+                  caseIdForPath={editingCaseId}
+                  acceptValue={FILE_INPUT_ACCEPT}
+                />
               ))}
             </div>
             <Button onClick={addMapping} variant="secondary" className="mt-4 text-sm" type="button">
@@ -1100,6 +1250,7 @@ export default function CaseFormPage({ params }) {
                   onChange={handleReferenceDocChange}
                   onRemove={removeReferenceDocument}
                   onFileSelect={handleReferenceDocFileSelect}
+                  acceptValue={FILE_INPUT_ACCEPT}
                 />
               ))}
             </div>
@@ -1139,7 +1290,7 @@ const DisbursementItem = ({ item, index, onChange, onRemove }) => {
   );
 };
 
-const InvoiceMappingItem = ({ item, index, onChange, onRemove, availablePaymentIds, onFileSelect, caseIdForPath }) => {
+const InvoiceMappingItem = ({ item, index, onChange, onRemove, availablePaymentIds, onFileSelect, caseIdForPath, acceptValue }) => {
   const fileInputId = `pdfFile-${item._tempId}`;
 
   const handleFileChange = (event) => {
@@ -1155,7 +1306,14 @@ const InvoiceMappingItem = ({ item, index, onChange, onRemove, availablePaymentI
         <label htmlFor={`paymentId-${item._tempId}`} className="block text-xs font-medium text-gray-700">
           Payment ID
         </label>
-        <select id={`paymentId-${item._tempId}`} name="paymentId" value={item.paymentId} onChange={(e) => onChange(index, { ...item, paymentId: e.target.value, clientSideFile: item.clientSideFile, fileName: item.fileName, storagePath: item.storagePath, uploadProgress: item.uploadProgress, uploadError: item.uploadError, downloadURL: item.downloadURL })} required className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+        <select
+          id={`paymentId-${item._tempId}`}
+          name="paymentId"
+          value={item.paymentId}
+          onChange={(e) => onChange(index, { ...item, paymentId: e.target.value })}
+          required
+          className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+        >
           <option value="">Select Payment ID</option>
           {availablePaymentIds.map((pid) => (
             <option key={pid} value={pid}>
@@ -1166,9 +1324,9 @@ const InvoiceMappingItem = ({ item, index, onChange, onRemove, availablePaymentI
       </div>
       <div className="flex flex-col">
         <label htmlFor={fileInputId} className="block text-xs font-medium text-gray-700">
-          Invoice PDF
+          Invoice Document
         </label>
-        <Input id={fileInputId} type="file" accept=".pdf,application/pdf" onChange={handleFileChange} className="mt-1" />
+        <Input id={fileInputId} type="file" accept={acceptValue} onChange={handleFileChange} className="mt-1" />
         {item.fileName && (
           <div className="mt-1 text-xs text-gray-600 flex items-center">
             <Paperclip size={12} className="mr-1 flex-shrink-0" />
@@ -1202,7 +1360,7 @@ const InvoiceMappingItem = ({ item, index, onChange, onRemove, availablePaymentI
   );
 };
 
-const ReferenceDocumentItem = ({ item, index, onChange, onRemove, onFileSelect }) => {
+const ReferenceDocumentItem = ({ item, index, onChange, onRemove, onFileSelect, acceptValue }) => {
   const fileInputId = `referenceFile-${item._tempId}`;
 
   const handleChange = (event) => {
@@ -1252,9 +1410,9 @@ const ReferenceDocumentItem = ({ item, index, onChange, onRemove, onFileSelect }
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
         <div>
           <label className="block text-xs font-medium text-gray-700 mb-1" htmlFor={fileInputId}>
-            Upload PDF (optional)
+            Upload File (optional)
           </label>
-          <Input id={fileInputId} type="file" accept=".pdf,application/pdf" onChange={handleFileChange} className="mt-1" />
+          <Input id={fileInputId} type="file" accept={acceptValue} onChange={handleFileChange} className="mt-1" />
           {(item.clientSideFile || storagePathLabel) && (
             <div className="mt-1 text-xs text-gray-600 flex items-center">
               <Paperclip size={12} className="mr-1 flex-shrink-0" />

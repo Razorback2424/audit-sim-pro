@@ -12,7 +12,8 @@
  * @property {string|null} [storagePath]
  * @property {string|null} [downloadURL]
  * @property {string|null} [fileName]
- * @property {Array<{ storagePath: string|null, downloadURL: string|null, fileName: string|null }>} [supportingDocuments]
+ * @property {string|null} [contentType]
+ * @property {Array<{ storagePath: string|null, downloadURL: string|null, fileName: string|null, contentType: string|null }>} [supportingDocuments]
  * @property {string} [description]
  * @property {string} [notes]
  * @property {Record<string, any>} [meta]
@@ -23,6 +24,7 @@
  * @property {string} fileName
  * @property {string|null} [storagePath]
  * @property {string|null} [downloadURL]
+ * @property {string|null} [contentType]
  */
 
 /**
@@ -38,7 +40,7 @@
  * @property {FirestoreTimestamp} [createdAt]
  * @property {FirestoreTimestamp} [updatedAt]
  * @property {CaseDisbursement[]} [disbursements]
- * @property {Array<{ paymentId: string, storagePath: string|null, downloadURL: string|null, fileName: string|null }>} [invoiceMappings]
+ * @property {Array<{ paymentId: string, storagePath: string|null, downloadURL: string|null, fileName: string|null, contentType: string|null }>} [invoiceMappings]
  * @property {CaseReferenceDocument[]} [referenceDocuments]
  */
 

@@ -49,6 +49,7 @@ const normalizeInvoiceMappings = (mappings = []) => {
       storagePath: toOptionalString(item.storagePath),
       fileName: toOptionalString(item.fileName),
       downloadURL: toOptionalString(item.downloadURL),
+      contentType: toOptionalString(item.contentType),
     });
   });
   return cleaned;
@@ -63,15 +64,17 @@ const normalizeReferenceDocuments = (documents = []) => {
     const fileName = toOptionalString(item.fileName);
     const storagePath = toOptionalString(item.storagePath);
     const downloadURL = toOptionalString(item.downloadURL);
+    const contentType = toOptionalString(item.contentType);
     if (!fileName) return;
     if (!storagePath && !downloadURL) return;
-    const key = `${fileName}|${storagePath ?? ''}|${downloadURL ?? ''}`;
+    const key = `${fileName}|${storagePath ?? ''}|${downloadURL ?? ''}|${contentType ?? ''}`;
     if (seen.has(key)) return;
     seen.add(key);
     normalized.push({
       fileName,
       storagePath: storagePath ?? null,
       downloadURL: downloadURL ?? null,
+      contentType: contentType ?? null,
     });
   });
   return normalized;
@@ -121,6 +124,9 @@ const normalizeDisbursement = (item, index, invoiceGroups) => {
   const fileName = toOptionalString(primaryInvoice?.fileName ?? item.fileName);
   if (fileName) normalized.fileName = fileName;
 
+  const contentType = toOptionalString(primaryInvoice?.contentType ?? item.contentType);
+  if (contentType) normalized.contentType = contentType;
+
   const supportingDocsSource = Array.isArray(item.supportingDocuments) ? item.supportingDocuments : [];
   const normalizedDocs = [
     primaryInvoice,
@@ -131,6 +137,7 @@ const normalizeDisbursement = (item, index, invoiceGroups) => {
       storagePath: toOptionalString(doc.storagePath),
       fileName: toOptionalString(doc.fileName),
       downloadURL: toOptionalString(doc.downloadURL),
+      contentType: toOptionalString(doc.contentType),
     }));
 
   supportingDocsSource
@@ -140,13 +147,14 @@ const normalizeDisbursement = (item, index, invoiceGroups) => {
         storagePath: toOptionalString(doc.storagePath),
         fileName: toOptionalString(doc.fileName),
         downloadURL: toOptionalString(doc.downloadURL),
+        contentType: toOptionalString(doc.contentType),
       });
     });
 
   const dedupedDocs = [];
   const seen = new Set();
   normalizedDocs.forEach((doc) => {
-    const key = `${doc.storagePath ?? ''}|${doc.downloadURL ?? ''}|${doc.fileName ?? ''}`;
+    const key = `${doc.storagePath ?? ''}|${doc.downloadURL ?? ''}|${doc.fileName ?? ''}|${doc.contentType ?? ''}`;
     if (seen.has(key)) return;
     seen.add(key);
     if (doc.storagePath || doc.downloadURL || doc.fileName) {

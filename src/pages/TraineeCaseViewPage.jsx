@@ -34,6 +34,22 @@ const CLASSIFICATION_FIELDS = [
   { key: 'improperlyExcluded', label: 'Improperly Excluded' },
 ];
 
+const isInlinePreviewable = (contentType, fileNameOrPath) => {
+  const normalizedType = typeof contentType === 'string' ? contentType.toLowerCase() : '';
+  if (normalizedType === 'application/pdf' || normalizedType === 'application/x-pdf') {
+    return true;
+  }
+  const normalizedName = typeof fileNameOrPath === 'string' ? fileNameOrPath.toLowerCase() : '';
+  const pdfPattern = /\.pdf(?:$|[?#])/;
+  if (!normalizedType && pdfPattern.test(normalizedName)) {
+    return true;
+  }
+  if (normalizedType === 'application/octet-stream' && pdfPattern.test(normalizedName)) {
+    return true;
+  }
+  return false;
+};
+
 const computePercentComplete = (step, selectedCount, classifiedCount) => {
   if (step === FLOW_STEPS.RESULTS) return 100;
   if (selectedCount <= 0) return 0;
@@ -76,7 +92,7 @@ const isSameClassificationMap = (currentMap, nextMap) => {
 const collectSupportingDocuments = (disbursement) => {
   if (!disbursement) return [];
 
-  const fallbackFileName = disbursement.paymentId ? `Document for ${disbursement.paymentId}` : 'Document.pdf';
+  const fallbackFileName = disbursement.paymentId ? `Document for ${disbursement.paymentId}` : 'Supporting document';
 
   const rawDocs = Array.isArray(disbursement.supportingDocuments) && disbursement.supportingDocuments.length > 0
     ? disbursement.supportingDocuments
@@ -85,6 +101,7 @@ const collectSupportingDocuments = (disbursement) => {
           storagePath: disbursement.storagePath || '',
           downloadURL: disbursement.downloadURL || '',
           fileName: disbursement.fileName || '',
+          contentType: disbursement.contentType || '',
         },
       ];
 
@@ -101,6 +118,7 @@ const collectSupportingDocuments = (disbursement) => {
         storagePath,
         downloadURL,
         fileName: derivedFileName,
+        contentType: doc.contentType || '',
       };
     })
     .filter((doc) => {
@@ -134,8 +152,8 @@ export default function TraineeCaseViewPage({ params }) {
   const [referenceViewerError, setReferenceViewerError] = useState('');
   const [referenceViewerLoading, setReferenceViewerLoading] = useState(false);
 
-  const lastResolvedEvidenceRef = useRef({ evidenceId: null, storagePath: null, url: null });
-  const lastResolvedReferenceDocRef = useRef({ referenceId: null, storagePath: null, url: null });
+  const lastResolvedEvidenceRef = useRef({ evidenceId: null, storagePath: null, url: null, inlineNotSupported: false });
+  const lastResolvedReferenceDocRef = useRef({ referenceId: null, storagePath: null, url: null, inlineNotSupported: false });
   const progressSaveTimeoutRef = useRef(null);
   const activeStepRef = useRef(FLOW_STEPS.SELECTION);
   const selectionRef = useRef(selectedDisbursements);
@@ -301,6 +319,7 @@ export default function TraineeCaseViewPage({ params }) {
       const fileName = (doc.fileName || '').trim() || `Reference document ${index + 1}`;
       const storagePath = (doc.storagePath || '').trim();
       const downloadURL = (doc.downloadURL || '').trim();
+      const contentType = (doc.contentType || '').trim();
       if (!storagePath && !downloadURL) return;
       const baseId = storagePath || downloadURL || `${fileName}-${index}`;
       let id = baseId;
@@ -315,6 +334,7 @@ export default function TraineeCaseViewPage({ params }) {
         fileName,
         storagePath,
         downloadURL,
+        contentType,
       });
     });
 
@@ -401,6 +421,7 @@ export default function TraineeCaseViewPage({ params }) {
           hasLinkedDocument: false,
           storagePath: '',
           downloadURL: '',
+          contentType: item.contentType || '',
         });
         return;
       }
@@ -415,6 +436,7 @@ export default function TraineeCaseViewPage({ params }) {
           evidenceFileName: doc.fileName || displayId,
           hasLinkedDocument: Boolean(doc.storagePath || doc.downloadURL),
           documentIndex: docIndex,
+          contentType: doc.contentType || item.contentType || '',
         });
       });
     });
@@ -437,7 +459,7 @@ export default function TraineeCaseViewPage({ params }) {
       setActiveEvidenceUrl(null);
       setActiveEvidenceError('');
       setActiveEvidenceLoading(false);
-      lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null };
+      lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null, inlineNotSupported: false };
       return;
     }
 
@@ -446,7 +468,7 @@ export default function TraineeCaseViewPage({ params }) {
       setActiveEvidenceUrl(null);
       setActiveEvidenceError('');
       setActiveEvidenceLoading(false);
-      lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null };
+      lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null, inlineNotSupported: false };
       return;
     }
 
@@ -461,7 +483,7 @@ export default function TraineeCaseViewPage({ params }) {
       setReferenceViewerUrl(null);
       setReferenceViewerError('');
       setReferenceViewerLoading(false);
-      lastResolvedReferenceDocRef.current = { referenceId: null, storagePath: null, url: null };
+      lastResolvedReferenceDocRef.current = { referenceId: null, storagePath: null, url: null, inlineNotSupported: false };
       return;
     }
 
@@ -470,7 +492,7 @@ export default function TraineeCaseViewPage({ params }) {
       setReferenceViewerUrl(null);
       setReferenceViewerError('');
       setReferenceViewerLoading(false);
-      lastResolvedReferenceDocRef.current = { referenceId: null, storagePath: null, url: null };
+      lastResolvedReferenceDocRef.current = { referenceId: null, storagePath: null, url: null, inlineNotSupported: false };
       return;
     }
 
@@ -484,7 +506,7 @@ export default function TraineeCaseViewPage({ params }) {
       setReferenceViewerUrl(null);
       setReferenceViewerError('');
       setReferenceViewerLoading(false);
-      lastResolvedReferenceDocRef.current = { referenceId: null, storagePath: null, url: null };
+      lastResolvedReferenceDocRef.current = { referenceId: null, storagePath: null, url: null, inlineNotSupported: false };
       return;
     }
 
@@ -496,15 +518,33 @@ export default function TraineeCaseViewPage({ params }) {
       return;
     }
 
+    const inlinePreviewAllowed = isInlinePreviewable(
+      target.contentType,
+      target.fileName || target.storagePath || target.downloadURL
+    );
+
     if (target.downloadURL) {
-      setReferenceViewerUrl(target.downloadURL);
-      setReferenceViewerError('');
-      setReferenceViewerLoading(false);
-      lastResolvedReferenceDocRef.current = {
-        referenceId: target.id,
-        storagePath: target.storagePath || null,
-        url: target.downloadURL,
-      };
+      if (inlinePreviewAllowed) {
+        setReferenceViewerUrl(target.downloadURL);
+        setReferenceViewerError('');
+        setReferenceViewerLoading(false);
+        lastResolvedReferenceDocRef.current = {
+          referenceId: target.id,
+          storagePath: target.storagePath || null,
+          url: target.downloadURL,
+          inlineNotSupported: false,
+        };
+      } else {
+        setReferenceViewerUrl(null);
+        setReferenceViewerError('Preview not available for this file type. Use "Open in new tab" to download.');
+        setReferenceViewerLoading(false);
+        lastResolvedReferenceDocRef.current = {
+          referenceId: target.id,
+          storagePath: target.storagePath || null,
+          url: null,
+          inlineNotSupported: true,
+        };
+      }
       return;
     }
 
@@ -536,10 +576,15 @@ export default function TraineeCaseViewPage({ params }) {
     if (
       lastResolved.referenceId === target.id &&
       lastResolved.storagePath === target.storagePath &&
-      lastResolved.url
+      (lastResolved.url || lastResolved.inlineNotSupported)
     ) {
-      setReferenceViewerUrl(lastResolved.url);
-      setReferenceViewerError('');
+      if (lastResolved.inlineNotSupported) {
+        setReferenceViewerUrl(null);
+        setReferenceViewerError('Preview not available for this file type. Use "Open in new tab" to download.');
+      } else {
+        setReferenceViewerUrl(lastResolved.url);
+        setReferenceViewerError('');
+      }
       setReferenceViewerLoading(false);
       return;
     }
@@ -552,7 +597,23 @@ export default function TraineeCaseViewPage({ params }) {
       referenceId: target.id,
       storagePath: target.storagePath,
       url: null,
+      inlineNotSupported: false,
     };
+
+    if (!inlinePreviewAllowed) {
+      setReferenceViewerLoading(false);
+      setReferenceViewerUrl(null);
+      setReferenceViewerError('Preview not available for this file type. Use "Open in new tab" to download.');
+      lastResolvedReferenceDocRef.current = {
+        referenceId: target.id,
+        storagePath: target.storagePath,
+        url: null,
+        inlineNotSupported: true,
+      };
+      return () => {
+        cancelled = true;
+      };
+    }
 
     getDownloadURL(storageRef(storage, target.storagePath))
       .then((url) => {
@@ -563,6 +624,7 @@ export default function TraineeCaseViewPage({ params }) {
           referenceId: target.id,
           storagePath: target.storagePath,
           url,
+          inlineNotSupported: false,
         };
       })
       .catch((error) => {
@@ -578,6 +640,7 @@ export default function TraineeCaseViewPage({ params }) {
           referenceId: target.id,
           storagePath: target.storagePath,
           url: null,
+          inlineNotSupported: false,
         };
       })
       .finally(() => {
@@ -595,7 +658,7 @@ export default function TraineeCaseViewPage({ params }) {
       setActiveEvidenceUrl(null);
       setActiveEvidenceError('');
       setActiveEvidenceLoading(false);
-      lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null };
+      lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null, inlineNotSupported: false };
       return;
     }
 
@@ -604,19 +667,37 @@ export default function TraineeCaseViewPage({ params }) {
       setActiveEvidenceUrl(null);
       setActiveEvidenceError('');
       setActiveEvidenceLoading(false);
-      lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null };
+      lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null, inlineNotSupported: false };
       return;
     }
 
+    const inlinePreviewAllowed = isInlinePreviewable(
+      target.contentType,
+      target.evidenceFileName || target.storagePath || target.downloadURL
+    );
+
     if (target.downloadURL) {
-      setActiveEvidenceUrl(target.downloadURL);
-      setActiveEvidenceError('');
-      setActiveEvidenceLoading(false);
-      lastResolvedEvidenceRef.current = {
-        evidenceId: target.evidenceId,
-        storagePath: target.storagePath || null,
-        url: target.downloadURL,
-      };
+      if (inlinePreviewAllowed) {
+        setActiveEvidenceUrl(target.downloadURL);
+        setActiveEvidenceError('');
+        setActiveEvidenceLoading(false);
+        lastResolvedEvidenceRef.current = {
+          evidenceId: target.evidenceId,
+          storagePath: target.storagePath || null,
+          url: target.downloadURL,
+          inlineNotSupported: false,
+        };
+      } else {
+        setActiveEvidenceUrl(null);
+        setActiveEvidenceError('Preview not available for this file type. Use "Open in new tab" to download.');
+        setActiveEvidenceLoading(false);
+        lastResolvedEvidenceRef.current = {
+          evidenceId: target.evidenceId,
+          storagePath: target.storagePath || null,
+          url: null,
+          inlineNotSupported: true,
+        };
+      }
       return;
     }
 
@@ -648,10 +729,15 @@ export default function TraineeCaseViewPage({ params }) {
     if (
       lastResolved.evidenceId === target.evidenceId &&
       lastResolved.storagePath === target.storagePath &&
-      lastResolved.url
+      (lastResolved.url || lastResolved.inlineNotSupported)
     ) {
-      setActiveEvidenceUrl(lastResolved.url);
-      setActiveEvidenceError('');
+      if (lastResolved.inlineNotSupported) {
+        setActiveEvidenceUrl(null);
+        setActiveEvidenceError('Preview not available for this file type. Use "Open in new tab" to download.');
+      } else {
+        setActiveEvidenceUrl(lastResolved.url);
+        setActiveEvidenceError('');
+      }
       setActiveEvidenceLoading(false);
       return;
     }
@@ -664,7 +750,24 @@ export default function TraineeCaseViewPage({ params }) {
       evidenceId: target.evidenceId,
       storagePath: target.storagePath,
       url: null,
+      inlineNotSupported: false,
     };
+
+    if (!inlinePreviewAllowed) {
+      setActiveEvidenceLoading(false);
+      setActiveEvidenceUrl(null);
+      setActiveEvidenceError('Preview not available for this file type. Use "Open in new tab" to download.');
+      lastResolvedEvidenceRef.current = {
+        evidenceId: target.evidenceId,
+        storagePath: target.storagePath,
+        url: null,
+        inlineNotSupported: true,
+      };
+      return () => {
+        cancelled = true;
+      };
+    }
+
     getDownloadURL(storageRef(storage, target.storagePath))
       .then((url) => {
         if (cancelled) return;
@@ -674,6 +777,7 @@ export default function TraineeCaseViewPage({ params }) {
           evidenceId: target.evidenceId,
           storagePath: target.storagePath,
           url,
+          inlineNotSupported: false,
         };
       })
       .catch((error) => {
@@ -689,6 +793,7 @@ export default function TraineeCaseViewPage({ params }) {
           evidenceId: target.evidenceId,
           storagePath: target.storagePath,
           url: null,
+          inlineNotSupported: false,
         };
       })
       .finally(() => {

@@ -38,26 +38,42 @@ service firebase.storage {
       return caseData.visibleToUserIds.hasAny([request.auth.uid]);
     }
 
+    function isAllowedArtifactUpload() {
+      return request.resource != null
+        && request.resource.size <= 25 * 1024 * 1024
+        && (
+          request.resource.contentType == 'application/pdf' ||
+          request.resource.contentType == 'application/x-pdf' ||
+          request.resource.contentType == 'text/csv' ||
+          request.resource.contentType == 'application/csv' ||
+          request.resource.contentType == 'application/vnd.ms-excel' ||
+          request.resource.contentType == 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+          request.resource.contentType == 'application/vnd.ms-excel.sheet.macroenabled.12' ||
+          (
+            request.resource.contentType == 'application/octet-stream' &&
+            request.resource.name.matches('(?i).*(\\.(pdf|csv|xls|xlsx|xlsm))$')
+          )
+        );
+    }
+
     // ---------- Case document rules ----------
     // Accept any nested object names under a case
     match /artifacts/{appId}/case_documents/{caseId}/{file=**} {
 
-      // Admin-only writes; PDF only (by MIME or .pdf extension); <= 25 MB
-      allow create, update: if isAdmin(appId)
-        && request.resource != null
-        && (
-             request.resource.contentType == 'application/pdf' ||
-             (
-               request.resource.contentType == 'application/octet-stream' &&
-               request.resource.name.matches('(?i).*\\.pdf$') // tolerate generic MIME if name ends with .pdf
-             )
-           )
-        && request.resource.size <= 25 * 1024 * 1024;
+      // Admin-only writes; limited to supported formats; <= 25 MB
+      allow create, update: if isAdmin(appId) && isAllowedArtifactUpload();
 
       // Reads: admins OR trainees who can see the case
       allow get, list: if isAdmin(appId) || traineeHasAccessToCase(appId, caseId);
 
       // Deletes: admins only
+      allow delete: if isAdmin(appId);
+    }
+
+    // ---------- Reference document rules ----------
+    match /artifacts/{appId}/case_reference/{caseId}/{file=**} {
+      allow create, update: if isAdmin(appId) && isAllowedArtifactUpload();
+      allow get, list: if isAdmin(appId) || traineeHasAccessToCase(appId, caseId);
       allow delete: if isAdmin(appId);
     }
   }
