@@ -1,8 +1,9 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import TraineeCaseViewPage from './TraineeCaseViewPage';
 import { subscribeToCase } from '../services/caseService';
 import { saveSubmission } from '../services/submissionService';
+import { subscribeProgressForCases } from '../services/progressService';
 import { getDownloadURL } from 'firebase/storage';
 
 jest.mock('../services/caseService', () => ({
@@ -15,7 +16,7 @@ jest.mock('../services/submissionService', () => ({
 
 jest.mock('../services/progressService', () => ({
   saveProgress: jest.fn(),
-  subscribeProgressForCases: jest.fn(() => () => {}),
+  subscribeProgressForCases: jest.fn(() => jest.fn()),
 }));
 
 jest.mock('firebase/storage', () => ({
@@ -23,7 +24,7 @@ jest.mock('firebase/storage', () => ({
   ref: jest.fn((_, path) => ({ path })),
 }));
 
-const modalMocks = {
+const mockModal = {
   showModal: jest.fn(),
   hideModal: jest.fn(),
 };
@@ -34,7 +35,7 @@ jest.mock('../AppCore', () => {
     Button: ({ children, ...props }) => <button {...props}>{children}</button>,
     Input: (props) => <input {...props} />,
     useRoute: () => ({ navigate: navigateMock }),
-    useModal: () => modalMocks,
+    useModal: () => mockModal,
     useAuth: () => ({ userId: 'u1' }),
     storage: { app: {} },
     appId: 'test-app',
@@ -60,10 +61,18 @@ describe('TraineeCaseViewPage', () => {
   };
 
   beforeEach(() => {
-    modalMocks.showModal.mockClear();
-    modalMocks.hideModal.mockClear();
-    jest.clearAllMocks();
+    mockModal.showModal.mockClear();
+    mockModal.hideModal.mockClear();
+    subscribeToCase.mockReset();
+    subscribeProgressForCases.mockReset();
+    saveSubmission.mockReset();
     getDownloadURL.mockReset();
+    subscribeProgressForCases.mockImplementation((_params, onNext) => {
+      if (typeof onNext === 'function') {
+        onNext(new Map());
+      }
+      return jest.fn();
+    });
   });
 
   test('navigates to classification and exposes allocation inputs', async () => {
@@ -75,8 +84,10 @@ describe('TraineeCaseViewPage', () => {
     });
 
     await advanceToClassification();
-    expect(screen.getByLabelText(/Properly Included/i)).toBeEnabled();
-    expect(screen.getByLabelText(/Improperly Excluded/i)).toBeEnabled();
+    const [properlyIncluded] = await screen.findAllByLabelText(/Properly Included/i);
+    const [improperlyExcluded] = await screen.findAllByLabelText(/Improperly Excluded/i);
+    expect(properlyIncluded).toBeEnabled();
+    expect(improperlyExcluded).toBeEnabled();
   });
 
   test('fetches evidence for storage-backed documents on classification step', async () => {
@@ -137,8 +148,12 @@ describe('TraineeCaseViewPage', () => {
     await screen.findByText(/Step 1 — Select Disbursements/i);
     await userEvent.click(screen.getByRole('checkbox', { name: /ID:\s*p1/i }));
     await userEvent.click(screen.getByRole('button', { name: /Continue to Classification/i }));
-    expect(screen.queryByText(/Step 2 — Classify Results/i)).not.toBeInTheDocument();
-    expect(modalMocks.showModal).toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.queryByText(/Step 2 — Classify Results/i)).not.toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(mockModal.showModal).toHaveBeenCalled();
+    });
   });
 
   test('shows storage error when evidence document fails to load', async () => {
@@ -180,7 +195,7 @@ describe('TraineeCaseViewPage', () => {
     await advanceToClassification();
 
     const enterValue = async (label, value) => {
-      const input = screen.getByLabelText(new RegExp(label, 'i'));
+      const [input] = await screen.findAllByLabelText(new RegExp(label, 'i'));
       await userEvent.clear(input);
       await userEvent.type(input, String(value));
     };
@@ -201,5 +216,60 @@ describe('TraineeCaseViewPage', () => {
       improperlyIncluded: 0,
       improperlyExcluded: 0,
     });
+  });
+
+  test('displays reference documents panel and supports tab preview', async () => {
+    const openSpy = jest.spyOn(window, 'open').mockImplementation(() => null);
+    try {
+      renderCase({
+        caseName: 'Case',
+        disbursements: [
+          {
+            paymentId: 'p1',
+            payee: 'Vendor',
+            amount: '100',
+            paymentDate: '2024-01-01',
+            downloadURL: 'https://example.com/invoice.pdf',
+          },
+        ],
+        referenceDocuments: [
+          {
+            fileName: 'AP Aging Summary',
+            downloadURL: 'https://example.com/aging.pdf',
+          },
+        ],
+      });
+
+      await advanceToClassification();
+      expect(screen.getByRole('heading', { name: /Reference Documents/i })).toBeInTheDocument();
+      expect(screen.getByText(/AP Aging Summary/i)).toBeInTheDocument();
+      expect(await screen.findByTitle(/Reference document/i)).toBeInTheDocument();
+
+      const headerContainer = screen.getByRole('heading', { name: /Reference Documents/i }).parentElement?.parentElement;
+      const openButton = within(headerContainer).getByRole('button', { name: /Open in new tab/i });
+      await userEvent.click(openButton);
+      expect(openSpy).toHaveBeenCalledWith('https://example.com/aging.pdf', '_blank');
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  test('shows fallback message when no reference documents exist', async () => {
+    renderCase({
+      caseName: 'Case',
+      disbursements: [
+        {
+          paymentId: 'p1',
+          payee: 'Vendor',
+          amount: '100',
+          paymentDate: '2024-01-01',
+          downloadURL: 'https://example.com/invoice.pdf',
+        },
+      ],
+      referenceDocuments: [],
+    });
+
+    await advanceToClassification();
+    expect(screen.getByText(/No reference documents have been shared/i)).toBeInTheDocument();
   });
 });

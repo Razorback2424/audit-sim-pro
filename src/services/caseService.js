@@ -54,6 +54,29 @@ const normalizeInvoiceMappings = (mappings = []) => {
   return cleaned;
 };
 
+const normalizeReferenceDocuments = (documents = []) => {
+  if (!Array.isArray(documents)) return [];
+  const normalized = [];
+  const seen = new Set();
+  documents.forEach((item) => {
+    if (!isRecord(item)) return;
+    const fileName = toOptionalString(item.fileName);
+    const storagePath = toOptionalString(item.storagePath);
+    const downloadURL = toOptionalString(item.downloadURL);
+    if (!fileName) return;
+    if (!storagePath && !downloadURL) return;
+    const key = `${fileName}|${storagePath ?? ''}|${downloadURL ?? ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    normalized.push({
+      fileName,
+      storagePath: storagePath ?? null,
+      downloadURL: downloadURL ?? null,
+    });
+  });
+  return normalized;
+};
+
 const groupInvoiceMappings = (mappings = []) => {
   const groups = new Map();
   mappings.forEach((mapping) => {
@@ -156,6 +179,7 @@ const toNormalizedCaseModel = (id, raw = {}) => {
     ...raw,
     invoiceMappings: normalizeInvoiceMappings(raw?.invoiceMappings),
     disbursements: normalizeDisbursements(raw?.disbursements, raw?.invoiceMappings),
+    referenceDocuments: normalizeReferenceDocuments(raw?.referenceDocuments),
   };
   return toCaseModel(id, normalized);
 };
@@ -185,6 +209,7 @@ const sanitizeCaseWriteData = (rawData = {}, { isCreate = false } = {}) => {
 
   sanitized.invoiceMappings = normalizeInvoiceMappings(sanitized.invoiceMappings);
   sanitized.disbursements = normalizeDisbursements(sanitized.disbursements, sanitized.invoiceMappings);
+  sanitized.referenceDocuments = normalizeReferenceDocuments(sanitized.referenceDocuments);
 
   if (typeof sanitized.publicVisible !== 'boolean') {
     sanitized.publicVisible = true;
@@ -251,6 +276,29 @@ const buildCaseRepairPatch = (data = {}) => {
     patch.createdAt = serverTimestamp();
   } else if (!(data.createdAt instanceof Timestamp)) {
     patch.createdAt = toTimestampOrNull(data.createdAt) || serverTimestamp();
+  }
+
+  if (!Array.isArray(data.referenceDocuments)) {
+    if (data.referenceDocuments !== undefined) {
+      patch.referenceDocuments = normalizeReferenceDocuments(data.referenceDocuments);
+    } else {
+      patch.referenceDocuments = [];
+    }
+  } else {
+    const normalizedDocs = normalizeReferenceDocuments(data.referenceDocuments);
+    const hasMismatch =
+      normalizedDocs.length !== data.referenceDocuments.length ||
+      normalizedDocs.some((doc, idx) => {
+        const original = data.referenceDocuments[idx] || {};
+        return (
+          doc.fileName !== toOptionalString(original.fileName) ||
+          doc.storagePath !== (toOptionalString(original.storagePath) ?? null) ||
+          doc.downloadURL !== (toOptionalString(original.downloadURL) ?? null)
+        );
+      });
+    if (hasMismatch) {
+      patch.referenceDocuments = normalizedDocs;
+    }
   }
 
   return patch;

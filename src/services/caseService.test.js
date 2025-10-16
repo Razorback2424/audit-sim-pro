@@ -42,6 +42,7 @@ describe('caseService', () => {
       caseName: '',
       publicVisible: true,
       visibleToUserIds: [],
+      referenceDocuments: [],
     });
   });
 

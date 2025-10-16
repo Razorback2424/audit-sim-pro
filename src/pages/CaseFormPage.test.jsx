@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import CaseFormPage, { mergeDisbursementDocuments } from './CaseFormPage';
 import { fetchCase } from '../services/caseService';
 
@@ -12,6 +12,7 @@ jest.mock('../AppCore', () => ({
   Button: ({ children }) => <button>{children}</button>,
   Input: (props) => <input {...props} />,
   Textarea: (props) => <textarea {...props} />,
+  Select: (props) => <select {...props} />,
   useRoute: () => ({ navigate: jest.fn() }),
   useModal: () => ({ showModal: jest.fn() }),
   useAuth: () => ({ userId: 'u1' }),
@@ -111,5 +112,34 @@ describe('mergeDisbursementDocuments', () => {
       'new.pdf',
       'extra.pdf'
     ]);
+  });
+});
+
+describe('reference documents', () => {
+  beforeEach(() => {
+    fetchCase.mockReset();
+  });
+
+  it('renders reference documents section for new case', () => {
+    render(<CaseFormPage params={{}} />);
+    expect(screen.getByText(/Reference Documents/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Add Reference Document/i })).toBeInTheDocument();
+  });
+
+  it('preloads existing reference documents when editing', async () => {
+    fetchCase.mockResolvedValue({
+      caseName: 'Sample Case',
+      disbursements: [],
+      invoiceMappings: [],
+      referenceDocuments: [
+        { fileName: 'AP Aging Summary.pdf', storagePath: '', downloadURL: 'https://example.com/aging.pdf' }
+      ]
+    });
+
+    render(<CaseFormPage params={{ caseId: 'case-1' }} />);
+
+    await waitFor(() => expect(fetchCase).toHaveBeenCalledWith('case-1'));
+    expect(await screen.findByDisplayValue('AP Aging Summary.pdf')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('https://example.com/aging.pdf')).toBeInTheDocument();
   });
 });

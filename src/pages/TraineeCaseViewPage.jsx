@@ -129,8 +129,13 @@ export default function TraineeCaseViewPage({ params }) {
   const [activeEvidenceUrl, setActiveEvidenceUrl] = useState(null);
   const [activeEvidenceError, setActiveEvidenceError] = useState('');
   const [activeEvidenceLoading, setActiveEvidenceLoading] = useState(false);
+  const [activeReferenceId, setActiveReferenceId] = useState(null);
+  const [referenceViewerUrl, setReferenceViewerUrl] = useState(null);
+  const [referenceViewerError, setReferenceViewerError] = useState('');
+  const [referenceViewerLoading, setReferenceViewerLoading] = useState(false);
 
   const lastResolvedEvidenceRef = useRef({ evidenceId: null, storagePath: null, url: null });
+  const lastResolvedReferenceDocRef = useRef({ referenceId: null, storagePath: null, url: null });
   const progressSaveTimeoutRef = useRef(null);
   const activeStepRef = useRef(FLOW_STEPS.SELECTION);
   const selectionRef = useRef(selectedDisbursements);
@@ -286,6 +291,36 @@ export default function TraineeCaseViewPage({ params }) {
     [caseData]
   );
 
+  const referenceDocuments = useMemo(() => {
+    const docs = Array.isArray(caseData?.referenceDocuments) ? caseData.referenceDocuments : [];
+    const usedIds = new Set();
+    const normalized = [];
+
+    docs.forEach((doc, index) => {
+      if (!doc) return;
+      const fileName = (doc.fileName || '').trim() || `Reference document ${index + 1}`;
+      const storagePath = (doc.storagePath || '').trim();
+      const downloadURL = (doc.downloadURL || '').trim();
+      if (!storagePath && !downloadURL) return;
+      const baseId = storagePath || downloadURL || `${fileName}-${index}`;
+      let id = baseId;
+      let suffix = 1;
+      while (usedIds.has(id)) {
+        suffix += 1;
+        id = `${baseId}-${suffix}`;
+      }
+      usedIds.add(id);
+      normalized.push({
+        id,
+        fileName,
+        storagePath,
+        downloadURL,
+      });
+    });
+
+    return normalized;
+  }, [caseData]);
+
   useEffect(() => {
     if (!caseData) return;
     const validIds = new Set(disbursementList.map((item) => item.paymentId));
@@ -419,6 +454,141 @@ export default function TraineeCaseViewPage({ params }) {
       setActiveEvidenceId(evidenceSource[0].evidenceId);
     }
   }, [viewerEnabled, evidenceSource, activeEvidenceId]);
+
+  useEffect(() => {
+    if (!viewerEnabled) {
+      setActiveReferenceId(null);
+      setReferenceViewerUrl(null);
+      setReferenceViewerError('');
+      setReferenceViewerLoading(false);
+      lastResolvedReferenceDocRef.current = { referenceId: null, storagePath: null, url: null };
+      return;
+    }
+
+    if (referenceDocuments.length === 0) {
+      setActiveReferenceId(null);
+      setReferenceViewerUrl(null);
+      setReferenceViewerError('');
+      setReferenceViewerLoading(false);
+      lastResolvedReferenceDocRef.current = { referenceId: null, storagePath: null, url: null };
+      return;
+    }
+
+    if (!activeReferenceId || !referenceDocuments.some((doc) => doc.id === activeReferenceId)) {
+      setActiveReferenceId(referenceDocuments[0].id);
+    }
+  }, [viewerEnabled, referenceDocuments, activeReferenceId]);
+
+  useEffect(() => {
+    if (!viewerEnabled || referenceDocuments.length === 0 || !activeReferenceId) {
+      setReferenceViewerUrl(null);
+      setReferenceViewerError('');
+      setReferenceViewerLoading(false);
+      lastResolvedReferenceDocRef.current = { referenceId: null, storagePath: null, url: null };
+      return;
+    }
+
+    const target = referenceDocuments.find((doc) => doc.id === activeReferenceId);
+    if (!target) {
+      setReferenceViewerUrl(null);
+      setReferenceViewerError('');
+      setReferenceViewerLoading(false);
+      return;
+    }
+
+    if (target.downloadURL) {
+      setReferenceViewerUrl(target.downloadURL);
+      setReferenceViewerError('');
+      setReferenceViewerLoading(false);
+      lastResolvedReferenceDocRef.current = {
+        referenceId: target.id,
+        storagePath: target.storagePath || null,
+        url: target.downloadURL,
+      };
+      return;
+    }
+
+    if (!target.storagePath) {
+      setReferenceViewerUrl(null);
+      setReferenceViewerError('Reference document link is not available.');
+      setReferenceViewerLoading(false);
+      lastResolvedReferenceDocRef.current = {
+        referenceId: target.id,
+        storagePath: null,
+        url: null,
+      };
+      return;
+    }
+
+    if (!storage?.app) {
+      setReferenceViewerUrl(null);
+      setReferenceViewerError('Reference document preview unavailable in this environment.');
+      setReferenceViewerLoading(false);
+      lastResolvedReferenceDocRef.current = {
+        referenceId: target.id,
+        storagePath: target.storagePath,
+        url: null,
+      };
+      return;
+    }
+
+    const lastResolved = lastResolvedReferenceDocRef.current;
+    if (
+      lastResolved.referenceId === target.id &&
+      lastResolved.storagePath === target.storagePath &&
+      lastResolved.url
+    ) {
+      setReferenceViewerUrl(lastResolved.url);
+      setReferenceViewerError('');
+      setReferenceViewerLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    setReferenceViewerLoading(true);
+    setReferenceViewerError('');
+    setReferenceViewerUrl(null);
+    lastResolvedReferenceDocRef.current = {
+      referenceId: target.id,
+      storagePath: target.storagePath,
+      url: null,
+    };
+
+    getDownloadURL(storageRef(storage, target.storagePath))
+      .then((url) => {
+        if (cancelled) return;
+        setReferenceViewerUrl(url);
+        setReferenceViewerError('');
+        lastResolvedReferenceDocRef.current = {
+          referenceId: target.id,
+          storagePath: target.storagePath,
+          url,
+        };
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        console.error('Error loading reference document:', error);
+        const message =
+          error?.code === 'storage/object-not-found'
+            ? 'Reference document is missing from storage.'
+            : 'Unable to load reference document.';
+        setReferenceViewerUrl(null);
+        setReferenceViewerError(message);
+        lastResolvedReferenceDocRef.current = {
+          referenceId: target.id,
+          storagePath: target.storagePath,
+          url: null,
+        };
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setReferenceViewerLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [viewerEnabled, referenceDocuments, activeReferenceId]);
 
   useEffect(() => {
     if (!viewerEnabled || evidenceSource.length === 0 || !activeEvidenceId) {
@@ -924,6 +1094,95 @@ export default function TraineeCaseViewPage({ params }) {
     </div>
   );
 
+  const renderReferenceDocumentsPanel = () => {
+    const activeDoc = referenceDocuments.find((doc) => doc.id === activeReferenceId) || null;
+
+    return (
+      <div className="bg-white border border-gray-200 rounded-lg shadow-sm flex flex-col min-h-[480px]">
+        <div className="border-b border-gray-200 px-4 py-3 flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-800">Reference Documents</h2>
+            <p className="text-xs text-gray-500">
+              {referenceDocuments.length === 0
+                ? 'Admin has not linked reference materials for this case yet.'
+                : 'Use these schedules and reports to support your classification decisions.'}
+            </p>
+          </div>
+          {viewerEnabled && activeDoc ? (
+            <Button
+              variant="secondary"
+              className="text-xs px-3 py-1"
+              onClick={() =>
+                handleViewDocument({
+                  fileName: activeDoc.fileName,
+                  storagePath: activeDoc.storagePath,
+                  downloadURL: activeDoc.downloadURL,
+                })
+              }
+            >
+              <ExternalLink size={14} className="inline mr-1" /> Open in new tab
+            </Button>
+          ) : null}
+        </div>
+        <div className="flex-1 grid grid-rows-[auto,1fr]">
+          <div className="max-h-48 overflow-y-auto divide-y divide-gray-100">
+            {referenceDocuments.length === 0 ? (
+              <p className="px-4 py-6 text-sm text-gray-500">No reference documents have been shared for this case.</p>
+            ) : (
+              referenceDocuments.map((doc) => {
+                const isActive = doc.id === activeReferenceId;
+                return (
+                  <button
+                    key={doc.id}
+                    type="button"
+                    onClick={() => setActiveReferenceId(doc.id)}
+                    className={`w-full text-left px-4 py-3 focus:outline-none transition-colors ${
+                      isActive ? 'bg-blue-50 border-l-4 border-blue-500' : 'hover:bg-gray-50'
+                    }`}
+                  >
+                    <p className={`text-sm font-semibold ${isActive ? 'text-blue-700' : 'text-gray-800'}`}>{doc.fileName}</p>
+                    {doc.storagePath ? (
+                      <p className="text-[11px] text-gray-500 truncate mt-1">Storage: {doc.storagePath}</p>
+                    ) : doc.downloadURL ? (
+                      <p className="text-[11px] text-gray-500 truncate mt-1">Direct download link provided</p>
+                    ) : null}
+                  </button>
+                );
+              })
+            )}
+          </div>
+          <div className="border-t border-gray-200 bg-gray-100 flex items-center justify-center px-4 py-4">
+            {!viewerEnabled || referenceDocuments.length === 0 || !activeDoc ? (
+              <p className="text-sm text-gray-500 text-center">
+                {referenceDocuments.length === 0
+                  ? 'Reference materials will appear here when provided.'
+                  : 'Select a reference document to preview it.'}
+              </p>
+            ) : referenceViewerLoading ? (
+              <div className="flex flex-col items-center text-gray-500">
+                <Loader2 size={32} className="animate-spin mb-2" />
+                <p className="text-sm">Loading reference…</p>
+              </div>
+            ) : referenceViewerError ? (
+              <div className="max-w-sm text-center px-6 py-4 text-sm text-amber-700 bg-amber-100 border border-amber-200 rounded-md">
+                {referenceViewerError}
+              </div>
+            ) : referenceViewerUrl ? (
+              <iframe
+                title="Reference document"
+                src={referenceViewerUrl}
+                className="w-full h-64 rounded-md"
+                style={{ minHeight: '320px' }}
+              />
+            ) : (
+              <p className="text-sm text-gray-500 text-center">Select a reference document to preview it.</p>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderSelectionStep = () => (
     <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-4">
       <div>
@@ -1023,9 +1282,10 @@ export default function TraineeCaseViewPage({ params }) {
           </div>
         ) : (
           <>
-            <div className="grid gap-6 lg:grid-cols-2">
+            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
               {renderEvidenceList(selectedEvidenceItems)}
               {renderEvidenceViewer(selectedEvidenceItems)}
+              {renderReferenceDocumentsPanel()}
             </div>
 
             <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">

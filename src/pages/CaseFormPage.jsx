@@ -98,7 +98,25 @@ export default function CaseFormPage({ params }) {
   const { showModal } = useModal();
 
   const initialDisbursement = () => ({ _tempId: getUUID(), paymentId: '', payee: '', amount: '', paymentDate: '' });
-  const initialMapping = () => ({ _tempId: getUUID(), paymentId: '', fileName: '', storagePath: '', clientSideFile: null, uploadProgress: undefined, uploadError: null, downloadURL: '' });
+  const initialMapping = () => ({
+    _tempId: getUUID(),
+    paymentId: '',
+    fileName: '',
+    storagePath: '',
+    clientSideFile: null,
+    uploadProgress: undefined,
+    uploadError: null,
+    downloadURL: '',
+  });
+  const initialReferenceDocument = () => ({
+    _tempId: getUUID(),
+    fileName: '',
+    storagePath: '',
+    downloadURL: '',
+    clientSideFile: null,
+    uploadProgress: undefined,
+    uploadError: null,
+  });
 
   const [caseName, setCaseName] = useState('');
   const [visibleToUserIdsStr, setVisibleToUserIdsStr] = useState('');
@@ -108,6 +126,7 @@ export default function CaseFormPage({ params }) {
   const [dueAtStr, setDueAtStr] = useState('');
   const [disbursements, setDisbursements] = useState([initialDisbursement()]);
   const [invoiceMappings, setInvoiceMappings] = useState([initialMapping()]);
+  const [referenceDocuments, setReferenceDocuments] = useState([initialReferenceDocument()]);
   const [loading, setLoading] = useState(false);
   const [originalCaseData, setOriginalCaseData] = useState(null);
   const disbursementCsvInputRef = React.useRef(null);
@@ -167,6 +186,19 @@ export default function CaseFormPage({ params }) {
             setInvoiceMappings(
               data.invoiceMappings?.map((m) => ({ ...m, _tempId: m._tempId || getUUID(), clientSideFile: null, uploadProgress: m.storagePath ? 100 : undefined, uploadError: null })) || [initialMapping()]
             );
+            setReferenceDocuments(
+              data.referenceDocuments && data.referenceDocuments.length > 0
+                ? data.referenceDocuments.map((doc) => ({
+                    _tempId: doc._tempId || getUUID(),
+                    fileName: doc.fileName || '',
+                    storagePath: doc.storagePath || '',
+                    downloadURL: doc.downloadURL || '',
+                    clientSideFile: null,
+                    uploadProgress: doc.storagePath ? 100 : undefined,
+                    uploadError: null,
+                  }))
+                : [initialReferenceDocument()]
+            );
           } else {
             showModal('Case not found.', 'Error');
             navigate('/admin');
@@ -188,6 +220,7 @@ export default function CaseFormPage({ params }) {
       setDueAtStr('');
       setDisbursements([initialDisbursement()]);
       setInvoiceMappings([initialMapping()]);
+      setReferenceDocuments([initialReferenceDocument()]);
       setOriginalCaseData(null);
     }
   }, [isEditing, editingCaseId, navigate, showModal]);
@@ -237,6 +270,57 @@ export default function CaseFormPage({ params }) {
     setInvoiceMappings([...invoiceMappings, initialMapping()]);
   };
   const removeMapping = (index) => setInvoiceMappings(invoiceMappings.filter((_, i) => i !== index));
+
+  const handleReferenceDocChange = (index, updatedItem) => {
+    const next = [...referenceDocuments];
+    next[index] = updatedItem;
+    setReferenceDocuments(next);
+  };
+
+  const handleReferenceDocFileSelect = (index, file) => {
+    if (!file) return;
+    const normalizedType = (file.type || '').toLowerCase();
+    const isPdfMime =
+      normalizedType === 'application/pdf' ||
+      normalizedType === 'application/x-pdf' ||
+      normalizedType.startsWith('application/pdf');
+    const isPdfExt = /\.pdf$/i.test(file.name || '');
+
+    if (!isPdfMime && !isPdfExt) {
+      ulog('reference:reject:not-pdf', { index, name: file.name, type: file.type });
+      showModal('Please upload a PDF file for reference documents.', 'Invalid File Type');
+      return;
+    }
+    if (file.size > MAX_PDF_BYTES) {
+      ulog('reference:reject:too-large', { index, name: file.name, size: file.size });
+      showModal(`Reference PDF must be under ${Math.round(MAX_PDF_BYTES / (1024 * 1024))} MB.`, 'File Too Large');
+      return;
+    }
+
+    setReferenceDocuments((prevDocs) =>
+      prevDocs.map((doc, i) =>
+        i === index
+          ? {
+              ...doc,
+              clientSideFile: file,
+              fileName: doc.fileName ? doc.fileName : file.name,
+              storagePath: '',
+              downloadURL: '',
+              uploadProgress: 0,
+              uploadError: null,
+            }
+          : doc
+      )
+    );
+  };
+
+  const addReferenceDocument = () => {
+    setReferenceDocuments([...referenceDocuments, initialReferenceDocument()]);
+  };
+
+  const removeReferenceDocument = (index) => {
+    setReferenceDocuments(referenceDocuments.filter((_, i) => i !== index));
+  };
 
   const parseDateTimeInputValue = (value, label) => {
     if (!value) {
@@ -458,6 +542,216 @@ export default function CaseFormPage({ params }) {
     return first;
   };
 
+  const uploadReferenceDocument = async (docItem, caseIdForUpload) => {
+    const fallbackName = (docItem.fileName || '').trim() || (docItem.clientSideFile?.name || '').trim();
+    if (!docItem.clientSideFile) {
+      if (!fallbackName) {
+        return null;
+      }
+      const storagePath = (docItem.storagePath || '').trim();
+      const downloadURL = (docItem.downloadURL || '').trim();
+      const payload = {
+        _tempId: docItem._tempId,
+        fileName: fallbackName,
+      };
+      if (storagePath) payload.storagePath = storagePath;
+      if (downloadURL) payload.downloadURL = downloadURL;
+      return payload;
+    }
+
+    const file = docItem.clientSideFile;
+    const uploadId = `ref_${Math.random().toString(36).slice(2, 8)}`;
+    ulog(uploadId, 'reference:start', {
+      caseIdForUpload,
+      name: file?.name,
+      type: file?.type,
+      size: file?.size,
+      online: navigator.onLine,
+    });
+
+    if (!navigator.onLine) {
+      ulog(uploadId, 'reference:offline');
+      return {
+        _tempId: docItem._tempId,
+        fileName: fallbackName || file?.name || 'reference.pdf',
+        uploadError: 'Browser is offline',
+        storagePath: '',
+        downloadURL: '',
+      };
+    }
+    if (!caseIdForUpload) {
+      const errorMsg = 'Cannot upload reference document: Case ID not finalized.';
+      console.error(errorMsg, docItem);
+      ulog(uploadId, 'reference:abort:no-case-id');
+      setReferenceDocuments((prev) =>
+        prev.map((doc) => (doc._tempId === docItem._tempId ? { ...doc, uploadError: errorMsg, uploadProgress: undefined } : doc))
+      );
+      throw new Error(errorMsg);
+    }
+
+    const rawName = file?.name || fallbackName || 'reference.pdf';
+    let safeStorageName = rawName.replace(/[/\\#?[\]*<>:"|]+/g, '_').replace(/\s+/g, ' ').trim();
+    if (!/\.pdf$/i.test(safeStorageName)) {
+      safeStorageName = `${safeStorageName}.pdf`;
+    }
+    const displayName = ((docItem.fileName || '').trim() || safeStorageName).trim();
+    const finalStoragePath = `artifacts/${appId}/case_reference/${caseIdForUpload}/${safeStorageName}`;
+    ulog(uploadId, 'reference:path', { rawName, safeStorageName, displayName, finalStoragePath });
+
+    setReferenceDocuments((prev) =>
+      prev.map((doc) =>
+        doc._tempId === docItem._tempId
+          ? {
+              ...doc,
+              fileName: displayName,
+              storagePath: finalStoragePath,
+              downloadURL: '',
+              uploadProgress: 0,
+              uploadError: null,
+            }
+          : doc
+      )
+    );
+
+    const timeoutMs = UPLOAD_TIMEOUT_MS;
+    const fileRef = storageRef(storage, finalStoragePath);
+
+    const awaitResumable = (task) => {
+      return new Promise((resolve, reject) => {
+        let lastLogged = -10;
+        const timer = setTimeout(() => {
+          try {
+            task.cancel();
+          } catch {}
+          ulog(uploadId, 'reference:timeout', `${timeoutMs}ms`);
+          unsubscribe();
+          reject(new Error(`Upload timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+
+        const unsubscribe = task.on(
+          'state_changed',
+          (snapshot) => {
+            const pct = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
+            if (pct - lastLogged >= 10) {
+              ulog(uploadId, 'reference:progress', {
+                pct,
+                state: snapshot.state,
+                bytesTransferred: snapshot.bytesTransferred,
+                totalBytes: snapshot.totalBytes,
+              });
+              lastLogged = pct;
+            }
+            setReferenceDocuments((prev) =>
+              prev.map((doc) => (doc._tempId === docItem._tempId ? { ...doc, uploadProgress: pct } : doc))
+            );
+          },
+          (err) => {
+            clearTimeout(timer);
+            unsubscribe();
+            reject(err);
+          },
+          () => {
+            clearTimeout(timer);
+            unsubscribe();
+            resolve(task.snapshot);
+          }
+        );
+      });
+    };
+
+    const runResumable = async () => {
+      ulog(uploadId, 'reference:mode', 'resumable');
+      try {
+        const metadata = {
+          contentType: 'application/pdf',
+          customMetadata: {
+            appId: String(appId || ''),
+            caseId: String(caseIdForUpload || ''),
+            uploadedBy: String(userId || ''),
+            documentType: 'reference',
+          },
+        };
+        const task = uploadBytesResumable(fileRef, file, metadata);
+        const snapshot = await awaitResumable(task);
+        const downloadURL = await getDownloadURL(snapshot.ref);
+        ulog(uploadId, 'reference:success', { downloadURL });
+        setReferenceDocuments((prev) =>
+          prev.map((doc) =>
+            doc._tempId === docItem._tempId
+              ? { ...doc, uploadProgress: 100, downloadURL, uploadError: null }
+              : doc
+          )
+        );
+        return {
+          _tempId: docItem._tempId,
+          fileName: displayName,
+          storagePath: finalStoragePath,
+          downloadURL,
+        };
+      } catch (error) {
+        const code = error?.code || '';
+        let msg = error?.message || 'Upload failed';
+        if (code === 'storage/retry-limit-exceeded') {
+          msg = 'Network was unstable for too long and the upload was aborted. Please check your connection and try again.';
+        }
+        const response =
+          error?.serverResponse ??
+          error?.customData?.serverResponse ??
+          error?.customData?._rawError ??
+          error?.message ??
+          '';
+        try {
+          console.error('[case-reference-upload] raw error', error);
+        } catch {}
+        let parsedResponse = null;
+        if (typeof response === 'string') {
+          try {
+            parsedResponse = JSON.parse(response);
+          } catch {}
+        }
+        ulog(uploadId, 'reference:error', {
+          code,
+          msg,
+          error: error
+            ? {
+                message: error.message,
+                code: error.code,
+                name: error.name,
+                customData: error.customData,
+                serverResponse: response,
+                parsedResponse,
+              }
+            : null,
+        });
+        setReferenceDocuments((prev) =>
+          prev.map((doc) =>
+            doc._tempId === docItem._tempId ? { ...doc, uploadError: msg, uploadProgress: undefined } : doc
+          )
+        );
+        return {
+          _tempId: docItem._tempId,
+          fileName: displayName || file?.name || 'reference.pdf',
+          uploadError: msg,
+          storagePath: finalStoragePath,
+          downloadURL: '',
+        };
+      }
+    };
+
+    const firstAttempt = await runResumable();
+    const lowerMessage = String(firstAttempt?.uploadError || '').toLowerCase();
+    const shouldRetry =
+      firstAttempt && firstAttempt.uploadError && (lowerMessage.includes('network') || lowerMessage.includes('timeout') || lowerMessage.includes('retry-limit-exceeded') || lowerMessage.includes('500') || lowerMessage.includes('503') || lowerMessage.includes('quota'));
+
+    if (shouldRetry) {
+      ulog(uploadId, 'reference:retry', firstAttempt.uploadError);
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      return await runResumable();
+    }
+
+    return firstAttempt;
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!userId) {
@@ -486,6 +780,31 @@ export default function CaseFormPage({ params }) {
     }
     if (activeMappings.some((m) => m.paymentId && !currentDisbursementIds.has(m.paymentId))) {
       showModal('One or more invoice mappings reference a Payment ID that no longer exists in the disbursements list. Please correct the mappings or remove them.', 'Invalid Payment ID in Mapping');
+      return;
+    }
+
+    const activeReferenceDocs = referenceDocuments.filter((doc) => {
+      const name = (doc.fileName || '').trim() || (doc.clientSideFile?.name || '').trim();
+      const storagePath = (doc.storagePath || '').trim();
+      const downloadURL = (doc.downloadURL || '').trim();
+      return Boolean(name || storagePath || downloadURL || doc.clientSideFile);
+    });
+
+    const referenceValidationFailed = activeReferenceDocs.some((doc) => {
+      const name = (doc.fileName || '').trim() || (doc.clientSideFile?.name || '').trim();
+      if (!name) return true;
+      const hasLink =
+        (doc.storagePath && doc.storagePath.trim()) ||
+        (doc.downloadURL && doc.downloadURL.trim()) ||
+        doc.clientSideFile;
+      return !hasLink;
+    });
+
+    if (referenceValidationFailed) {
+      showModal(
+        'Each reference document must include a display name and either an uploaded file, a storage path, or a download URL.',
+        'Validation Error'
+      );
       return;
     }
 
@@ -526,6 +845,7 @@ export default function CaseFormPage({ params }) {
           title: caseName,
           disbursements: disbursements.map(({ _tempId, ...rest }) => rest),
           invoiceMappings: [],
+          referenceDocuments: [],
           visibleToUserIds: visibleToUserIdsArray,
           publicVisible,
           status,
@@ -568,6 +888,42 @@ export default function CaseFormPage({ params }) {
         .filter((r) => r && !r.uploadError)
         .map(({ clientSideFile, uploadProgress, _tempId, ...rest }) => rest);
 
+      let finalReferenceDocuments = [];
+      if (activeReferenceDocs.length > 0) {
+        const referenceSettled = await Promise.allSettled(
+          activeReferenceDocs.map((doc) => uploadReferenceDocument(doc, currentCaseId))
+        );
+        const referenceResults = referenceSettled.map((r, idx) =>
+          r.status === 'fulfilled'
+            ? r.value
+            : {
+                uploadError: r.reason?.message || 'Upload failed',
+                _tempId: activeReferenceDocs[idx]?._tempId,
+                fileName:
+                  activeReferenceDocs[idx]?.fileName ||
+                  activeReferenceDocs[idx]?.clientSideFile?.name ||
+                  `Reference document ${idx + 1}`,
+              }
+        );
+
+        const referenceFailedUploads = referenceResults.filter((item) => item && item.uploadError);
+        if (referenceFailedUploads.length > 0) {
+          const errorMessages = referenceFailedUploads
+            .map((f) => `- ${f.fileName || 'A reference document'}: ${f.uploadError}`)
+            .join('\n');
+          showModal(
+            `Some reference document uploads failed:\n${errorMessages}\n\nPlease address these issues and try saving again.`,
+            'Upload Errors'
+          );
+          setLoading(false);
+          return;
+        }
+
+        finalReferenceDocuments = referenceResults
+          .filter((item) => item && !item.uploadError && item.fileName)
+          .map(({ _tempId, clientSideFile, uploadProgress, uploadError, ...rest }) => rest);
+      }
+
       const disbursementPayload = mergeDisbursementDocuments(disbursements, finalInvoiceMappings);
 
       const caseDataPayload = {
@@ -575,6 +931,7 @@ export default function CaseFormPage({ params }) {
         title: caseName,
         disbursements: disbursementPayload,
         invoiceMappings: finalInvoiceMappings,
+        referenceDocuments: finalReferenceDocuments,
         visibleToUserIds: visibleToUserIdsArray,
         publicVisible,
         status,
@@ -729,6 +1086,28 @@ export default function CaseFormPage({ params }) {
             </Button>
           </section>
 
+          <section>
+            <h2 className="text-xl font-semibold text-gray-700 mb-4">Reference Documents</h2>
+            <p className="text-sm text-gray-500 mb-3">
+              Upload or link supplemental files (e.g., AP aging, accrual schedules) for trainees to reference while working the case.
+            </p>
+            <div className="space-y-4">
+              {referenceDocuments.map((item, index) => (
+                <ReferenceDocumentItem
+                  key={item._tempId}
+                  item={item}
+                  index={index}
+                  onChange={handleReferenceDocChange}
+                  onRemove={removeReferenceDocument}
+                  onFileSelect={handleReferenceDocFileSelect}
+                />
+              ))}
+            </div>
+            <Button onClick={addReferenceDocument} variant="secondary" className="mt-4 text-sm" type="button">
+              <PlusCircle size={16} className="inline mr-1" /> Add Reference Document
+            </Button>
+          </section>
+
           <div className="flex justify-end space-x-3 pt-6 border-t border-gray-200">
             <Button onClick={() => navigate('/admin')} variant="secondary" type="button" disabled={loading} isLoading={loading && !isEditing}>
               Cancel
@@ -819,6 +1198,113 @@ const InvoiceMappingItem = ({ item, index, onChange, onRemove, availablePaymentI
       <Button onClick={() => onRemove(index)} variant="danger" className="h-10 self-end">
         <Trash2 size={18} />
       </Button>
+    </div>
+  );
+};
+
+const ReferenceDocumentItem = ({ item, index, onChange, onRemove, onFileSelect }) => {
+  const fileInputId = `referenceFile-${item._tempId}`;
+
+  const handleChange = (event) => {
+    const { name, value } = event.target;
+    onChange(index, { ...item, [name]: value });
+  };
+
+  const handleFileChange = (event) => {
+    const file = event.target.files[0];
+    if (file) {
+      onFileSelect(index, file);
+    }
+  };
+
+  const storagePathLabel = (item.storagePath || '').trim();
+  const downloadUrlLabel = (item.downloadURL || '').trim();
+
+  return (
+    <div className="p-3 border border-gray-200 rounded-md space-y-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1" htmlFor={`referenceName-${item._tempId}`}>
+            Display Name
+          </label>
+          <Input
+            id={`referenceName-${item._tempId}`}
+            name="fileName"
+            value={item.fileName}
+            onChange={handleChange}
+            placeholder="e.g., AP Aging Summary"
+          />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1" htmlFor={`referenceUrl-${item._tempId}`}>
+            Download URL (optional)
+          </label>
+          <Input
+            id={`referenceUrl-${item._tempId}`}
+            name="downloadURL"
+            value={item.downloadURL}
+            onChange={handleChange}
+            placeholder="https://storage.googleapis.com/..."
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1" htmlFor={fileInputId}>
+            Upload PDF (optional)
+          </label>
+          <Input id={fileInputId} type="file" accept=".pdf,application/pdf" onChange={handleFileChange} className="mt-1" />
+          {(item.clientSideFile || storagePathLabel) && (
+            <div className="mt-1 text-xs text-gray-600 flex items-center">
+              <Paperclip size={12} className="mr-1 flex-shrink-0" />
+              <span className="truncate" title={item.clientSideFile?.name || storagePathLabel || item.fileName}>
+                {item.clientSideFile?.name || storagePathLabel || item.fileName}
+              </span>
+            </div>
+          )}
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-gray-700 mb-1" htmlFor={`referencePath-${item._tempId}`}>
+            Storage Path (optional)
+          </label>
+          <Input
+            id={`referencePath-${item._tempId}`}
+            name="storagePath"
+            value={item.storagePath}
+            onChange={handleChange}
+            placeholder="Set automatically when uploading"
+          />
+          <p className="text-[11px] text-gray-500 mt-1">Provide only if referencing an existing Firebase Storage file.</p>
+        </div>
+        <div className="flex justify-end md:justify-start">
+          <Button onClick={() => onRemove(index)} variant="danger" className="md:self-end">
+            <Trash2 size={18} />
+          </Button>
+        </div>
+      </div>
+
+      {typeof item.uploadProgress === 'number' && item.uploadProgress < 100 && (
+        <p className="text-xs text-blue-600">Upload in progress: {item.uploadProgress}%</p>
+      )}
+      {item.uploadProgress === 100 && !item.uploadError && (
+        <p className="text-xs text-green-600 flex items-center">
+          <CheckCircle2 size={14} className="mr-1" /> Upload complete
+        </p>
+      )}
+      {item.uploadError && (
+        <p className="text-xs text-red-500 flex items-center">
+          <AlertTriangle size={14} className="mr-1" />
+          {item.uploadError}
+        </p>
+      )}
+
+      {(storagePathLabel || downloadUrlLabel) && (
+        <div className="text-[11px] text-gray-500 space-y-0.5">
+          {storagePathLabel && <div>Storage path: {storagePathLabel}</div>}
+          {downloadUrlLabel && <div>Download URL: {downloadUrlLabel}</div>}
+        </div>
+      )}
     </div>
   );
 };

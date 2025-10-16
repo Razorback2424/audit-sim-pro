@@ -19,6 +19,13 @@
  */
 
 /**
+ * @typedef {Object} CaseReferenceDocument
+ * @property {string} fileName
+ * @property {string|null} [storagePath]
+ * @property {string|null} [downloadURL]
+ */
+
+/**
  * @typedef {Object} CaseModel
  * @property {string} id
  * @property {string} title
@@ -32,6 +39,7 @@
  * @property {FirestoreTimestamp} [updatedAt]
  * @property {CaseDisbursement[]} [disbursements]
  * @property {Array<{ paymentId: string, storagePath: string|null, downloadURL: string|null, fileName: string|null }>} [invoiceMappings]
+ * @property {CaseReferenceDocument[]} [referenceDocuments]
  */
 
 export {}; // eslint-disable-line
@@ -57,5 +65,6 @@ export const toCaseModel = (id, data) => {
     updatedAt: data?.updatedAt,
     disbursements: Array.isArray(data?.disbursements) ? data.disbursements : [],
     invoiceMappings: Array.isArray(data?.invoiceMappings) ? data.invoiceMappings : [],
+    referenceDocuments: Array.isArray(data?.referenceDocuments) ? data.referenceDocuments : [],
   };
 };

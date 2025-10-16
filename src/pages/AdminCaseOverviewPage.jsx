@@ -117,6 +117,23 @@ export default function AdminCaseOverviewPage({ params }) {
           ) : (
             <p className="text-gray-500">No invoices uploaded.</p>
           )}
+
+          <h2 className="text-xl font-semibold text-gray-700 mt-6 mb-2">Reference Documents</h2>
+          {caseData.referenceDocuments && caseData.referenceDocuments.length > 0 ? (
+            <ul className="space-y-2">
+              {caseData.referenceDocuments.map((doc, idx) => (
+                <li key={idx} className="p-3 border rounded-md flex items-center justify-between text-sm">
+                  <span className="mr-2 flex-1 truncate">
+                    {doc.fileName}
+                    {doc.storagePath ? <span className="ml-2 text-xs text-gray-500">({doc.storagePath})</span> : null}
+                  </span>
+                  <Button onClick={() => handleView(doc)} variant="secondary" className="text-xs px-2 py-1">Open</Button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-gray-500">No reference documents linked.</p>
+          )}
         </div>
       </div>
     </div>
