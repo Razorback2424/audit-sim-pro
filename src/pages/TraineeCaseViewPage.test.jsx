@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import TraineeCaseViewPage from './TraineeCaseViewPage';
 import { subscribeToCase } from '../services/caseService';
 import { saveSubmission } from '../services/submissionService';
-import { subscribeProgressForCases } from '../services/progressService';
+import { saveProgress, subscribeProgressForCases } from '../services/progressService';
 import { getDownloadURL } from 'firebase/storage';
 
 jest.mock('../services/caseService', () => ({
@@ -66,6 +66,8 @@ describe('TraineeCaseViewPage', () => {
     subscribeToCase.mockReset();
     subscribeProgressForCases.mockReset();
     saveSubmission.mockReset();
+    saveProgress.mockReset();
+    saveProgress.mockResolvedValue();
     getDownloadURL.mockReset();
     subscribeProgressForCases.mockImplementation((_params, onNext) => {
       if (typeof onNext === 'function') {
@@ -208,6 +210,9 @@ describe('TraineeCaseViewPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /Submit Responses/i }));
 
     await waitFor(() => expect(saveSubmission).toHaveBeenCalled());
+    await waitFor(() => {
+      expect(screen.getAllByRole('button', { name: /View Document/i })).toHaveLength(2);
+    });
     const [, , payload] = saveSubmission.mock.calls[0];
     expect(payload.retrievedDocuments).toHaveLength(2);
     expect(payload.disbursementClassifications.p1).toEqual({
@@ -234,7 +239,7 @@ describe('TraineeCaseViewPage', () => {
         ],
         referenceDocuments: [
           {
-            fileName: 'AP Aging Summary',
+            fileName: 'AP Aging Summary.pdf',
             downloadURL: 'https://example.com/aging.pdf',
           },
         ],
