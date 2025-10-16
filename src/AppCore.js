@@ -14,12 +14,13 @@ import {
   serverTimestamp,
   doc,
   getDoc,
-  setDoc
+  setDoc,
+  onSnapshot
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage'; // << MOVED IMPORT TO TOP
 import { XCircle, Loader2 } from 'lucide-react'; // << MOVED IMPORT TO TOP
 import { cacheRole } from './services/roleService';
-import { fetchUserProfile, setUserRole, upsertUserProfile } from './services/userService';
+import { fetchUserProfile, upsertUserProfile } from './services/userService';
 
 /* global __firebase_config, __app_id, __initial_auth_token */
 
@@ -117,13 +118,31 @@ const FirestorePaths = {
   USERS_COLLECTION: () => `artifacts/${appId}/users`,
   USER_CASE_SUBMISSION: (userId, caseId) => `artifacts/${appId}/users/${userId}/caseSubmissions/${caseId}`,
   ROLE_DOCUMENT: (userId) => `roles/${userId}`,
+  STUDENT_PROGRESS_COLLECTION: (appId, uid) => `artifacts/${appId}/student_progress/${uid}/cases`,
   // Add any other paths here as needed for your project
+};
+
+const ROLE_PRIORITY = {
+  trainee: 1,
+  admin: 2,
+};
+
+const shouldUpdateRoleDoc = (existingRole, incomingRole) => {
+  if (!incomingRole) return false;
+  if (!existingRole) return true;
+  if (existingRole === incomingRole) return false;
+  const existingRank = ROLE_PRIORITY[existingRole] ?? 0;
+  const incomingRank = ROLE_PRIORITY[incomingRole] ?? 0;
+  return incomingRank >= existingRank;
 };
 
 // ---------- Constants ----------
 const CLASSIFICATION_OPTIONS = [
   { value: '', label: 'Select Classification…', disabled: true },
-  { value: "Properly Included", label: "Properly Included" },
+  { value: 'Properly Included', label: 'Properly Included' },
+  { value: 'Properly Excluded', label: 'Properly Excluded' },
+  { value: 'Improperly Included', label: 'Improperly Included' },
+  { value: 'Improperly Excluded', label: 'Improperly Excluded' },
 ];
 
 
@@ -360,24 +379,62 @@ const UserProvider = ({ children }) => {
 
   useEffect(() => {
     let active = true;
+    let unsubscribeRole = null;
+
     const load = async () => {
-      if (!currentUser) {
-        if (active) { setRoleState(null); setUserProfile(null); setLoadingRole(false); }
+      if (!currentUser || !currentUser.uid) {
+        if (active) {
+          setRoleState(null);
+          setUserProfile(null);
+          setLoadingRole(false);
+        }
         return;
       }
+
       setLoadingRole(true);
+      let claimRole = null;
+
       try {
-        // Get the latest ID token result to ensure custom claims are up-to-date
         const idTokenResult = await currentUser.getIdTokenResult(true);
-        const r = idTokenResult.claims.role;
-        // Cache the role locally for immediate use, though custom claims are primary source for rules
-        cacheRole(currentUser.uid, r);
-        if (active) setRoleState(r);
+        claimRole = idTokenResult.claims.role ?? null;
+        if (claimRole) {
+          cacheRole(currentUser.uid, claimRole);
+        }
       } catch (e) {
-        if (active) setRoleState(null);
-      } finally {
-        if (active) setLoadingRole(false);
+        console.warn('Failed to refresh ID token role claim:', e);
       }
+
+      try {
+        const roleRef = doc(db, FirestorePaths.ROLE_DOCUMENT(currentUser.uid));
+        unsubscribeRole = onSnapshot(
+          roleRef,
+          (snapshot) => {
+            if (!active) return;
+            const docRole = snapshot.exists() ? snapshot.data()?.role ?? null : null;
+            const nextRole = docRole ?? claimRole ?? null;
+            setRoleState(nextRole);
+            if (nextRole) cacheRole(currentUser.uid, nextRole);
+            setLoadingRole(false);
+          },
+          (error) => {
+            if (!active) return;
+            console.error('Role snapshot error:', error);
+            const fallbackRole = claimRole ?? null;
+            setRoleState(fallbackRole);
+            if (fallbackRole) cacheRole(currentUser.uid, fallbackRole);
+            setLoadingRole(false);
+          }
+        );
+      } catch (err) {
+        if (active) {
+          console.error('Failed to subscribe to role document:', err);
+          const fallbackRole = claimRole ?? null;
+          setRoleState(fallbackRole);
+          if (fallbackRole) cacheRole(currentUser.uid, fallbackRole);
+          setLoadingRole(false);
+        }
+      }
+
       try {
         const profile = await fetchUserProfile(currentUser.uid);
         if (active) {
@@ -388,37 +445,76 @@ const UserProvider = ({ children }) => {
         if (active) setUserProfile(null);
       }
     };
+
     load();
-    return () => { active = false; };
+
+    return () => {
+      active = false;
+      if (unsubscribeRole) {
+        unsubscribeRole();
+      }
+    };
   }, [currentUser]);
 
   const profileRole = userProfile?.role;
   // --- Ensure Storage rules can see the role in roles/{uid} (self-healing) ---
   useEffect(() => {
-    try {
-      if (!currentUser || !currentUser.uid) return;
-      if (!profileRole) return;
-      setDoc(doc(db, 'roles', currentUser.uid), { role: profileRole }, { merge: true })
-        .catch((e) => {
-          console.warn('Failed to mirror role to roles/{uid}:', e);
-        });
-    } catch (e) {
-      console.warn('Mirror role effect error:', e);
-    }
+    let cancelled = false;
+
+    const mirrorProfileRole = async () => {
+      if (!currentUser || !currentUser.uid || !profileRole) return;
+
+      try {
+        const roleRef = doc(db, 'roles', currentUser.uid);
+        const roleSnap = await getDoc(roleRef);
+        if (cancelled) return;
+
+        const existingRole = roleSnap.exists() ? roleSnap.data()?.role ?? null : null;
+        if (shouldUpdateRoleDoc(existingRole, profileRole)) {
+          await setDoc(roleRef, { role: profileRole }, { merge: true });
+        }
+      } catch (e) {
+        if (!cancelled) {
+          console.warn('Mirror role to roles/{uid} skipped:', e);
+        }
+      }
+    };
+
+    mirrorProfileRole();
+
+    return () => {
+      cancelled = true;
+    };
   }, [currentUser, profileRole]);
 
   // --- Also mirror from in-memory role (custom claim) in case profile hasn't loaded ---
   useEffect(() => {
-    try {
-      if (!currentUser || !currentUser.uid) return;
-      if (!role) return;
-      setDoc(doc(db, 'roles', currentUser.uid), { role }, { merge: true })
-        .catch((e) => {
-          console.warn('Failed to mirror role from claim to roles/{uid}:', e);
-        });
-    } catch (e) {
-      console.warn('Mirror role (from claim) effect error:', e);
-    }
+    let cancelled = false;
+
+    const mirrorRoleState = async () => {
+      if (!currentUser || !currentUser.uid || !role) return;
+
+      try {
+        const roleRef = doc(db, 'roles', currentUser.uid);
+        const roleSnap = await getDoc(roleRef);
+        if (cancelled) return;
+
+        const existingRole = roleSnap.exists() ? roleSnap.data()?.role ?? null : null;
+        if (shouldUpdateRoleDoc(existingRole, role)) {
+          await setDoc(roleRef, { role }, { merge: true });
+        }
+      } catch (e) {
+        if (!cancelled) {
+          console.warn('Mirror role (from state) effect error:', e);
+        }
+      }
+    };
+
+    mirrorRoleState();
+
+    return () => {
+      cancelled = true;
+    };
   }, [currentUser, role]);
 
   const setRole = async (newRole, userOverride = null) => {
@@ -433,20 +529,12 @@ const UserProvider = ({ children }) => {
       const roleRef = doc(db, FirestorePaths.ROLE_DOCUMENT(user.uid));
       const roleSnap = await getDoc(roleRef);
 
-      // Only attempt to write to the role document if it doesn't exist,
-      // or if the role is actually changing. The security rule will handle
-      // the admin check for updates.
-      if (!roleSnap.exists() || roleSnap.data().role !== newRole) {
-        await setUserRole(user.uid, newRole); // This will be a create or an update.
-        // Mirror role into roles/{uid} so Firebase Storage rules can authorize admin uploads
-        try {
-          const rolesDocRef = doc(db, FirestorePaths.ROLE_DOCUMENT(user.uid));
-          await setDoc(rolesDocRef, { role: newRole }, { merge: true });
-        } catch (e) {
-          console.warn('Failed to mirror role to roles/{uid}:', e);
-        }
+      const existingRole = roleSnap.exists() ? roleSnap.data()?.role ?? null : null;
+
+      if (shouldUpdateRoleDoc(existingRole, newRole)) {
+        await setDoc(roleRef, { role: newRole }, { merge: true });
       } else {
-        console.log("Role document already exists with the correct role. Skipping write.");
+        console.log('Role document already exists with equal or higher privilege. Skipping write.');
       }
 
       // The rest of the logic for profile update can proceed.

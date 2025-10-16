@@ -38,7 +38,7 @@ import RegistrationPage from './pages/RegistrationPage';
 // --- Pages ---
 const RoleSelectionPage = () => {
   const { currentUser, loadingAuth } = useAuth();
-  const { setRole, userProfile } = useUser();
+  const { setRole, role } = useUser();
   const { navigate } = useRoute();
   const [isSettingRole, setIsSettingRole] = useState(false);
 
@@ -48,8 +48,8 @@ const RoleSelectionPage = () => {
       navigate('/register?next=/select-role');
       return;
     }
-    if (userProfile?.role) navigate('/');
-  }, [currentUser, userProfile, navigate, loadingAuth]);
+    if (role) navigate('/');
+  }, [currentUser, role, navigate, loadingAuth]);
 
   const handleSelectRole = async (role) => {
     setIsSettingRole(true);
@@ -120,6 +120,7 @@ const traineeRoutes = {
   '/trainee/dashboard': <TraineeDashboardPage />,
   '/trainee': <TraineeDashboardPage />,
   '': <TraineeDashboardPage />,
+  '/cases/:caseId': (params) => <TraineeCaseViewPage params={params} />,
   '/trainee/case/:caseId': (params) => <TraineeCaseViewPage params={params} />,
 };
 

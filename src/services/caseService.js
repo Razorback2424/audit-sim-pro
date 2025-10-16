@@ -1,10 +1,265 @@
-import { collection, doc, getDoc, addDoc, setDoc, query, onSnapshot, where, Timestamp } from 'firebase/firestore';
+import {
+  collection,
+  doc,
+  getDoc,
+  addDoc,
+  setDoc,
+  query,
+  onSnapshot,
+  where,
+  getDocs,
+  orderBy,
+  limit,
+  startAfter,
+  or,
+  and,
+  serverTimestamp,
+  writeBatch,
+  Timestamp,
+} from 'firebase/firestore';
 import { db, FirestorePaths } from '../AppCore';
+import { getNow } from '../utils/dates';
+import { toCaseModel } from '../models/case';
+
+const VALID_CASE_STATUSES = ['assigned', 'in_progress', 'submitted', 'archived', 'draft'];
+
+const isRecord = (value) => typeof value === 'object' && value !== null;
+
+const toTrimmedString = (value) => {
+  if (typeof value === 'string') return value.trim();
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return '';
+};
+
+const toOptionalString = (value) => {
+  const trimmed = toTrimmedString(value);
+  return trimmed === '' ? null : trimmed;
+};
+
+const normalizeInvoiceMappings = (mappings = []) => {
+  if (!Array.isArray(mappings)) return [];
+  const cleaned = [];
+  mappings.forEach((item) => {
+    if (!isRecord(item)) return;
+    const paymentId = toOptionalString(item.paymentId);
+    if (!paymentId) return;
+    cleaned.push({
+      paymentId,
+      storagePath: toOptionalString(item.storagePath),
+      fileName: toOptionalString(item.fileName),
+      downloadURL: toOptionalString(item.downloadURL),
+    });
+  });
+  return cleaned;
+};
+
+const groupInvoiceMappings = (mappings = []) => {
+  const groups = new Map();
+  mappings.forEach((mapping) => {
+    const existing = groups.get(mapping.paymentId) || [];
+    existing.push(mapping);
+    groups.set(mapping.paymentId, existing);
+  });
+  return groups;
+};
+
+const normalizeDisbursement = (item, index, invoiceGroups) => {
+  if (!isRecord(item)) return null;
+  const fallbackId = `disbursement-${index + 1}`;
+  const paymentId = toOptionalString(item.paymentId) || fallbackId;
+  const invoices = paymentId ? invoiceGroups.get(paymentId) || [] : [];
+  const [primaryInvoice, ...restInvoices] = invoices;
+
+  const normalized = {
+    paymentId,
+    payee: toTrimmedString(item.payee),
+    amount: typeof item.amount === 'number' ? item.amount : toTrimmedString(item.amount),
+    paymentDate: toTrimmedString(item.paymentDate),
+    expectedClassification: toOptionalString(item.expectedClassification),
+  };
+
+  const description = toOptionalString(item.description);
+  if (description) normalized.description = description;
+
+  const notes = toOptionalString(item.notes);
+  if (notes) normalized.notes = notes;
+
+  if (isRecord(item.meta)) {
+    normalized.meta = { ...item.meta };
+  }
+
+  const storagePath = toOptionalString(primaryInvoice?.storagePath ?? item.storagePath);
+  if (storagePath) normalized.storagePath = storagePath;
+
+  const downloadURL = toOptionalString(primaryInvoice?.downloadURL ?? item.downloadURL);
+  if (downloadURL) normalized.downloadURL = downloadURL;
+
+  const fileName = toOptionalString(primaryInvoice?.fileName ?? item.fileName);
+  if (fileName) normalized.fileName = fileName;
+
+  const supportingDocsSource = Array.isArray(item.supportingDocuments) ? item.supportingDocuments : [];
+  const normalizedDocs = [
+    primaryInvoice,
+    ...restInvoices,
+  ]
+    .filter(Boolean)
+    .map((doc) => ({
+      storagePath: toOptionalString(doc.storagePath),
+      fileName: toOptionalString(doc.fileName),
+      downloadURL: toOptionalString(doc.downloadURL),
+    }));
+
+  supportingDocsSource
+    .filter((doc) => isRecord(doc))
+    .forEach((doc) => {
+      normalizedDocs.push({
+        storagePath: toOptionalString(doc.storagePath),
+        fileName: toOptionalString(doc.fileName),
+        downloadURL: toOptionalString(doc.downloadURL),
+      });
+    });
+
+  const dedupedDocs = [];
+  const seen = new Set();
+  normalizedDocs.forEach((doc) => {
+    const key = `${doc.storagePath ?? ''}|${doc.downloadURL ?? ''}|${doc.fileName ?? ''}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    if (doc.storagePath || doc.downloadURL || doc.fileName) {
+      dedupedDocs.push(doc);
+    }
+  });
+
+  if (dedupedDocs.length > 0) {
+    normalized.supportingDocuments = dedupedDocs;
+  }
+
+  return normalized;
+};
+
+const normalizeDisbursements = (disbursements = [], invoiceMappings = []) => {
+  const list = Array.isArray(disbursements) ? disbursements : [];
+  const invoiceGroups = groupInvoiceMappings(normalizeInvoiceMappings(invoiceMappings));
+  const normalizedList = [];
+  list.forEach((item, index) => {
+    const normalized = normalizeDisbursement(item, index, invoiceGroups);
+    if (normalized) {
+      normalizedList.push(normalized);
+    }
+  });
+  return normalizedList;
+};
+
+const toNormalizedCaseModel = (id, raw = {}) => {
+  const normalized = {
+    ...raw,
+    invoiceMappings: normalizeInvoiceMappings(raw?.invoiceMappings),
+    disbursements: normalizeDisbursements(raw?.disbursements, raw?.invoiceMappings),
+  };
+  return toCaseModel(id, normalized);
+};
+
+const toTimestampOrNull = (value) => {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Timestamp) return value;
+  if (typeof value?.seconds === 'number' && typeof value?.nanoseconds === 'number') {
+    try {
+      return new Timestamp(value.seconds, value.nanoseconds);
+    } catch (err) {
+      /* ignore malformed timestamp */
+    }
+  }
+  if (typeof value === 'string' || typeof value === 'number') {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return Timestamp.fromDate(parsed);
+    }
+  }
+  return null;
+};
+
+const sanitizeCaseWriteData = (rawData = {}, { isCreate = false } = {}) => {
+  const { createdAt: _ignoredCreatedAt, updatedAt: _ignoredUpdatedAt, ...data } = rawData;
+  const sanitized = { ...data };
+
+  sanitized.invoiceMappings = normalizeInvoiceMappings(sanitized.invoiceMappings);
+  sanitized.disbursements = normalizeDisbursements(sanitized.disbursements, sanitized.invoiceMappings);
+
+  if (typeof sanitized.publicVisible !== 'boolean') {
+    sanitized.publicVisible = true;
+  }
+
+  if (typeof sanitized._deleted !== 'boolean') {
+    sanitized._deleted = false;
+  }
+
+  if (typeof sanitized.status !== 'string' || !VALID_CASE_STATUSES.includes(sanitized.status)) {
+    sanitized.status = 'assigned';
+  }
+
+  if ('opensAt' in sanitized) {
+    sanitized.opensAt = sanitized.opensAt ?? null;
+  } else if (isCreate) {
+    sanitized.opensAt = null;
+  }
+
+  if ('dueAt' in sanitized) {
+    sanitized.dueAt = sanitized.dueAt ?? null;
+  } else if (isCreate) {
+    sanitized.dueAt = null;
+  }
+
+  sanitized.updatedAt = serverTimestamp();
+  if (isCreate) {
+    sanitized.createdAt = serverTimestamp();
+  } else if ('createdAt' in sanitized) {
+    sanitized.createdAt = sanitized.createdAt ?? serverTimestamp();
+  }
+
+  return sanitized;
+};
+
+const buildCaseRepairPatch = (data = {}) => {
+  const patch = {};
+
+  if (typeof data.publicVisible !== 'boolean') {
+    patch.publicVisible = true;
+  }
+
+  if (typeof data._deleted !== 'boolean') {
+    patch._deleted = false;
+  }
+
+  if (typeof data.status !== 'string' || !VALID_CASE_STATUSES.includes(data.status)) {
+    patch.status = 'assigned';
+  }
+
+  if (!('opensAt' in data)) {
+    patch.opensAt = null;
+  } else if (data.opensAt !== null && !(data.opensAt instanceof Timestamp)) {
+    patch.opensAt = toTimestampOrNull(data.opensAt);
+  }
+
+  if (!('dueAt' in data)) {
+    patch.dueAt = null;
+  } else if (data.dueAt !== null && !(data.dueAt instanceof Timestamp)) {
+    patch.dueAt = toTimestampOrNull(data.dueAt);
+  }
+
+  if (!data.createdAt) {
+    patch.createdAt = serverTimestamp();
+  } else if (!(data.createdAt instanceof Timestamp)) {
+    patch.createdAt = toTimestampOrNull(data.createdAt) || serverTimestamp();
+  }
+
+  return patch;
+};
 
 export const subscribeToCases = (onData, onError) => {
   const q = query(collection(db, FirestorePaths.CASES_COLLECTION()));
   return onSnapshot(q, (snap) => {
-    const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const data = snap.docs.map((d) => toNormalizedCaseModel(d.id, d.data()));
     onData(data);
   }, onError);
 };
@@ -12,7 +267,7 @@ export const subscribeToCases = (onData, onError) => {
 export const subscribeToActiveCases = (onData, onError) => {
   const q = query(collection(db, FirestorePaths.CASES_COLLECTION()), where('_deleted', '!=', true));
   return onSnapshot(q, (snap) => {
-    const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    const data = snap.docs.map((d) => toNormalizedCaseModel(d.id, d.data()));
     onData(data);
   }, onError);
 };
@@ -23,7 +278,7 @@ export const subscribeToCase = (caseId, onData, onError) => {
     if (!snap.exists()) {
       onData(null);
     } else {
-      onData({ id: snap.id, ...snap.data() });
+      onData(toNormalizedCaseModel(snap.id, snap.data()));
     }
   }, onError);
 };
@@ -32,21 +287,147 @@ export const fetchCase = async (caseId) => {
   const ref = doc(db, FirestorePaths.CASE_DOCUMENT(caseId));
   const snap = await getDoc(ref);
   if (!snap.exists()) return null;
-  return { id: snap.id, ...snap.data() };
+  return toNormalizedCaseModel(snap.id, snap.data());
 };
 
 export const createCase = async (data) => {
   const collectionRef = collection(db, FirestorePaths.CASES_COLLECTION());
-  const docRef = await addDoc(collectionRef, { ...data, createdAt: Timestamp.now(), updatedAt: Timestamp.now() });
+  const docRef = await addDoc(collectionRef, sanitizeCaseWriteData(data, { isCreate: true }));
   return docRef.id;
 };
 
 export const updateCase = async (caseId, data) => {
   const ref = doc(db, FirestorePaths.CASE_DOCUMENT(caseId));
-  await setDoc(ref, { ...data, updatedAt: Timestamp.now() }, { merge: true });
+  await setDoc(ref, sanitizeCaseWriteData(data, { isCreate: false }), { merge: true });
 };
 
 export const markCaseDeleted = async (caseId) => {
   const ref = doc(db, FirestorePaths.CASE_DOCUMENT(caseId));
-  await setDoc(ref, { _deleted: true, updatedAt: Timestamp.now() }, { merge: true });
+  await setDoc(ref, { _deleted: true, updatedAt: serverTimestamp() }, { merge: true });
+};
+
+const DEFAULT_STUDENT_STATUSES = ['assigned', 'in_progress'];
+
+/**
+ * Build a Firestore query for trainee-visible cases with pagination support.
+ * @param {{ appId: string, uid: string, pageSize?: number, cursor?: { opensAt?: any, dueAt?: any, title?: string }, includeOpensAtGate?: boolean, statusFilter?: string[], sortBy?: 'due' | 'title' }} params
+ */
+export const buildStudentCasesQuery = ({
+  appId,
+  uid,
+  pageSize = 20,
+  cursor,
+  includeOpensAtGate = false,
+  statusFilter = DEFAULT_STUDENT_STATUSES,
+  sortBy = 'due',
+} = {}) => {
+  if (!appId) throw new Error('buildStudentCasesQuery requires appId');
+  if (!uid) throw new Error('buildStudentCasesQuery requires uid');
+
+  const casesCollection = collection(db, FirestorePaths.CASES_COLLECTION());
+  const now = getNow();
+  let filterConstraint = and(
+    where('_deleted', '!=', true),
+    or(where('publicVisible', '==', true), where('visibleToUserIds', 'array-contains', uid))
+  );
+
+  if (statusFilter && statusFilter.length > 0) {
+    filterConstraint = and(filterConstraint, where('status', 'in', statusFilter));
+  }
+
+  if (includeOpensAtGate) {
+    filterConstraint = and(filterConstraint, where('opensAt', '<=', now.timestamp));
+  }
+
+  const constraints = [filterConstraint];
+
+  if (sortBy === 'title') {
+    constraints.push(orderBy('title', 'asc'));
+    constraints.push(orderBy('dueAt', 'asc'));
+  } else {
+    constraints.push(orderBy('dueAt', 'asc'));
+    constraints.push(orderBy('title', 'asc'));
+  }
+
+  if (cursor) {
+    const cursorValues = [];
+    if (sortBy === 'title') {
+      cursorValues.push(cursor.title ?? '', cursor.dueAt ?? null);
+    } else {
+      cursorValues.push(cursor.dueAt ?? null, cursor.title ?? '');
+    }
+    constraints.push(startAfter(...cursorValues));
+  }
+
+  if (pageSize) {
+    constraints.push(limit(pageSize));
+  }
+
+  return query(casesCollection, ...constraints);
+};
+
+/**
+ * Execute the student cases query and return paginated results.
+ * @param {{ appId: string, uid: string, pageSize?: number, cursor?: { opensAt?: any, dueAt?: any, title?: string }, includeOpensAtGate?: boolean, statusFilter?: string[], sortBy?: 'due' | 'title' }} params
+ */
+export const listStudentCases = async ({
+  pageSize = 20,
+  cursor,
+  includeOpensAtGate = false,
+  statusFilter,
+  sortBy = 'due',
+  appId,
+  uid,
+}) => {
+  const q = buildStudentCasesQuery({ appId, uid, pageSize, cursor, includeOpensAtGate, statusFilter, sortBy });
+  const snap = await getDocs(q);
+  const items = snap.docs.map((docSnap) => toNormalizedCaseModel(docSnap.id, docSnap.data()));
+  const lastDoc = snap.docs[snap.docs.length - 1];
+
+  let nextCursor = null;
+  if (lastDoc) {
+    const data = lastDoc.data();
+    nextCursor = {
+      dueAt: data.dueAt ?? null,
+      title: data.title ?? data.caseName ?? '',
+    };
+  }
+
+  return { items, nextCursor };
+};
+
+const BATCH_WRITE_LIMIT = 450;
+
+const commitUpdatesInChunks = async (updates) => {
+  for (let i = 0; i < updates.length; i += BATCH_WRITE_LIMIT) {
+    const batch = writeBatch(db);
+    updates.slice(i, i + BATCH_WRITE_LIMIT).forEach(({ ref, data }) => {
+      batch.set(ref, data, { merge: true });
+    });
+    await batch.commit();
+  }
+};
+
+export const repairLegacyCases = async () => {
+  const casesCollection = collection(db, FirestorePaths.CASES_COLLECTION());
+  const snap = await getDocs(casesCollection);
+  const updates = [];
+
+  snap.forEach((docSnap) => {
+    const data = docSnap.data() || {};
+    const patch = buildCaseRepairPatch(data);
+
+    if (Object.keys(patch).length > 0) {
+      patch.updatedAt = serverTimestamp();
+      updates.push({ ref: docSnap.ref, data: patch });
+    }
+  });
+
+  if (updates.length === 0) {
+    return { repaired: 0 };
+  }
+
+  await commitUpdatesInChunks(updates);
+
+  return { repaired: updates.length };
 };

@@ -3,14 +3,6 @@ service firebase.storage {
   match /b/{bucket}/o {
 
     // ---------- Role helpers ----------
-    // Custom claim on the ID token
-    function hasCustomAdminClaim() {
-      return request.auth != null && (
-        request.auth.token.admin == true ||
-        request.auth.token.role == 'admin'
-      );
-    }
-
     // Global roles/{uid} doc
     function hasGlobalAdminRole() {
       return request.auth != null &&
@@ -22,42 +14,28 @@ service firebase.storage {
              ).data.role == 'admin';
     }
 
-    // Per-app profile: artifacts/{appId}/users/{uid}/userProfileData/profile
-    function hasProfileAdminRole(appId) {
-      return request.auth != null &&
-             firestore.exists(
-               /databases/(default)/documents/artifacts/$(appId)/users/$(request.auth.uid)/userProfileData/profile
-             ) &&
-             firestore.get(
-               /databases/(default)/documents/artifacts/$(appId)/users/$(request.auth.uid)/userProfileData/profile
-             ).data.role == 'admin';
-    }
-
     function isAdmin(appId) {
-      return hasCustomAdminClaim() || hasGlobalAdminRole() || hasProfileAdminRole(appId);
+      return hasGlobalAdminRole();
     }
 
     // ---------- Trainee visibility helper ----------
     // artifacts/{appId}/public/data/cases/{caseId} with visibleToUserIds (list)
     function traineeHasAccessToCase(appId, caseId) {
-      return request.auth != null &&
-             firestore.exists(
-               /databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)
-             ) &&
-             (
-               // If field is missing or not a list -> treat as visible to signed-in users
-               !(firestore.get(
-                  /databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)
-                ).data.visibleToUserIds is list) ||
-               // Empty list means public-to-signed-in users
-               firestore.get(
-                 /databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)
-               ).data.visibleToUserIds.size() == 0 ||
-               // Explicit membership
-               firestore.get(
-                 /databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)
-               ).data.visibleToUserIds.hasAny([request.auth.uid])
-             );
+      if (request.auth == null) return false;
+      let docPath = /databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId);
+      if (!firestore.exists(docPath)) return false;
+      let caseData = firestore.get(docPath).data;
+
+      if (caseData.publicVisible == true) {
+        return true;
+      }
+
+      if (!(caseData.visibleToUserIds is list) || caseData.visibleToUserIds.size() == 0) {
+        // Backward compatibility: treat missing publicVisible/Members as public
+        return caseData.publicVisible != false;
+      }
+
+      return caseData.visibleToUserIds.hasAny([request.auth.uid]);
     }
 
     // ---------- Case document rules ----------

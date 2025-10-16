@@ -2,11 +2,50 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2, ListChecks, BookOpen } from 'lucide-react';
 import { Button, useRoute, useModal, useAuth, appId } from '../AppCore';
 import { listStudentCases } from '../services/caseService';
+import { subscribeProgressForCases } from '../services/progressService';
 import { nullSafeDate, getNow } from '../utils/dates';
+import { toProgressModel } from '../models/progress';
 
 /** @typedef {import('../models/case').CaseModel} CaseModel */
+/** @typedef {import('../models/progress').ProgressModel} ProgressModel */
 
 const PAGE_SIZE = 9;
+
+const ProgressRing = ({ percent, size = 40 }) => {
+  const stroke = 4;
+  const radius = (size - stroke) / 2;
+  const circumference = radius * 2 * Math.PI;
+  const offset = circumference - (percent / 100) * circumference;
+
+  return (
+    <svg width={size} height={size} className="transform -rotate-90">
+      <circle
+        className="text-gray-200"
+        strokeWidth={stroke}
+        stroke="currentColor"
+        fill="transparent"
+        r={radius}
+        cx={size / 2}
+        cy={size / 2}
+      />
+      <circle
+        className="text-blue-600"
+        strokeWidth={stroke}
+        strokeDasharray={circumference}
+        strokeDashoffset={offset}
+        stroke="currentColor"
+        fill="transparent"
+        r={radius}
+        cx={size / 2}
+        cy={size / 2}
+      />
+    </svg>
+  );
+};
+
+const SkeletonRing = ({ size = 40 }) => (
+  <div style={{ width: size, height: size }} className="bg-gray-200 rounded-full animate-pulse" />
+);
 
 export default function TraineeDashboardPage() {
   const { navigate } = useRoute();
@@ -15,6 +54,8 @@ export default function TraineeDashboardPage() {
 
   /** @type {[CaseModel[], React.Dispatch<React.SetStateAction<CaseModel[]>>]} */
   const [cases, setCases] = useState([]);
+  /** @type {[Map<string, ProgressModel>, React.Dispatch<React.SetStateAction<Map<string, ProgressModel>>>]} */
+  const [progress, setProgress] = useState(new Map());
   const [nextCursor, setNextCursor] = useState(null);
   const [loading, setLoading] = useState(false);
   const [initialLoad, setInitialLoad] = useState(true);
@@ -86,11 +127,38 @@ export default function TraineeDashboardPage() {
     fetchCases({ append: false });
   }, [userId, sortBy, fetchCases]);
 
+  const caseIds = useMemo(() => cases.map((c) => c.id), [cases]);
+
+  useEffect(() => {
+    if (!userId || caseIds.length === 0) {
+      setProgress(new Map());
+      return;
+    }
+
+    const unsubscribe = subscribeProgressForCases(
+      { appId, uid: userId, caseIds },
+      (progressMap) => {
+        setProgress(progressMap);
+      },
+      (err) => {
+        console.error('Error subscribing to progress:', err);
+      }
+    );
+
+    return () => unsubscribe();
+  }, [userId, caseIds]);
+
+  const casesWithProgress = useMemo(() => {
+    return cases.map((caseData) => ({
+      ...caseData,
+      progress: progress.get(caseData.id) || toProgressModel(null, caseData.id),
+    }));
+  }, [cases, progress]);
+
+  const now = useMemo(() => getNow().date, []);
   if (!userId && initialLoad) {
     return <div className="p-4 text-center">Authenticating user, please wait...</div>;
   }
-
-  const now = useMemo(() => getNow().date, []);
 
   const formatDueDate = (caseData) => {
     const dueDate = nullSafeDate(caseData.dueAt);
@@ -154,15 +222,25 @@ export default function TraineeDashboardPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {cases.map((caseData) => {
+            {casesWithProgress.map((caseData) => {
               const { isOpen, message } = getOpenState(caseData);
               return (
                 <div key={caseData.id} className="bg-white p-6 rounded-lg shadow-md hover:shadow-lg transition-shadow flex flex-col justify-between">
                   <div className="space-y-2">
-                    <h2 className="text-xl font-semibold text-blue-700">{caseData.title || caseData.caseName}</h2>
-                    {caseData.status ? (
+                    <div className="flex justify-between items-start">
+                      <h2 className="text-xl font-semibold text-blue-700 flex-1 pr-2">{caseData.title || caseData.caseName}</h2>
+                      {caseData.progress ? (
+                        <div className="text-center">
+                          <ProgressRing percent={caseData.progress.percentComplete} />
+                          <span className="text-xs text-gray-500">{caseData.progress.percentComplete}%</span>
+                        </div>
+                      ) : (
+                        <SkeletonRing />
+                      )}
+                    </div>
+                    {caseData.progress ? (
                       <span className="inline-block text-xs font-semibold uppercase tracking-wide text-gray-600 bg-gray-100 px-2 py-1 rounded">
-                        {caseData.status.replace('_', ' ')}
+                        {caseData.progress.state.replace('_', ' ')}
                       </span>
                     ) : null}
                     <p className="text-sm text-gray-600">{formatDueDate(caseData)}</p>
@@ -171,7 +249,7 @@ export default function TraineeDashboardPage() {
                     ) : null}
                   </div>
                   <Button
-                    onClick={() => navigate(`/trainee/case/${caseData.id}`)}
+                    onClick={() => navigate(`/cases/${caseData.id}`)}
                     className="w-full mt-auto"
                     disabled={!isOpen}
                     variant={isOpen ? 'primary' : 'secondary'}

@@ -2,7 +2,7 @@ rules_version = '2';
 
 // Firestore security rules for AuditSim Pro
 // Admins can manage all data. Trainees may only
-// access cases they are authorized for and their own submissions. Roles are now managed via custom claims.
+// access cases they are authorized for and their own submissions. Roles are enforced via roles/{uid} documents.
 service cloud.firestore {
   match /databases/{database}/documents {
     // Check user role from custom claims
@@ -11,13 +11,11 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return request.auth != null &&
-             (request.auth.token.role == 'admin' || getRole() == 'admin');
+      return request.auth != null && getRole() == 'admin';
     }
 
     function isTrainee() {
-      return request.auth != null &&
-             (request.auth.token.role == 'trainee' || getRole() == 'trainee');
+      return request.auth != null && getRole() == 'trainee';
     }
 
     // Checks if the trainee can view the case currently being read
@@ -27,6 +25,85 @@ service cloud.firestore {
         resource.data.visibleToUserIds.size() == 0 ||
         request.auth.uid in resource.data.visibleToUserIds
       );
+    }
+
+    function isValidSupportingDocument(doc) {
+      return doc is map &&
+             (!('storagePath' in doc) || doc.storagePath == null || doc.storagePath is string) &&
+             (!('downloadURL' in doc) || doc.downloadURL == null || doc.downloadURL is string) &&
+             (!('fileName' in doc) || doc.fileName == null || doc.fileName is string);
+    }
+
+    function isValidDisbursementRecord(d) {
+      return d is map &&
+             d.keys().hasAll(['paymentId', 'payee', 'amount', 'paymentDate']) &&
+             d.paymentId is string &&
+             d.payee is string &&
+             (d.amount is string || d.amount is number) &&
+             d.paymentDate is string &&
+             (!('expectedClassification' in d) || d.expectedClassification == null || d.expectedClassification is string) &&
+             (!('storagePath' in d) || d.storagePath == null || d.storagePath is string) &&
+             (!('downloadURL' in d) || d.downloadURL == null || d.downloadURL is string) &&
+             (!('fileName' in d) || d.fileName == null || d.fileName is string) &&
+             (!('supportingDocuments' in d) || (
+               d.supportingDocuments is list &&
+               d.supportingDocuments.all(doc => isValidSupportingDocument(doc))
+             )) &&
+             (!('description' in d) || d.description == null || d.description is string) &&
+             (!('notes' in d) || d.notes == null || d.notes is string) &&
+             (!('meta' in d) || d.meta == null || d.meta is map);
+    }
+
+    function isValidInvoiceMapping(m) {
+      return m is map &&
+             m.keys().hasAll(['paymentId']) &&
+             m.paymentId is string &&
+             (!('storagePath' in m) || m.storagePath == null || m.storagePath is string) &&
+             (!('downloadURL' in m) || m.downloadURL == null || m.downloadURL is string) &&
+             (!('fileName' in m) || m.fileName == null || m.fileName is string);
+    }
+
+    function isValidClassificationDraftEntry(entry) {
+      return entry is map &&
+             entry.keys().all(field => entry[field] == null || entry[field] is string);
+    }
+
+    function isValidProgressDraft(draft) {
+      return draft is map &&
+             (!('selectedPaymentIds' in draft) || (
+               draft.selectedPaymentIds is list &&
+               draft.selectedPaymentIds.all(id => id is string)
+             )) &&
+             (!('classificationDraft' in draft) || (
+               draft.classificationDraft is map &&
+               draft.classificationDraft.keys().all(key => isValidClassificationDraftEntry(draft.classificationDraft[key]))
+             ));
+    }
+
+    function isValidProgressDocument(data) {
+      return data.state in ['not_started', 'in_progress', 'submitted'] &&
+             data.percentComplete >= 0 && data.percentComplete <= 100 &&
+             (!('step' in data) || data.step in ['selection', 'support', 'testing', 'results']) &&
+             (!('draft' in data) || isValidProgressDraft(data.draft));
+    }
+
+    function isValidCaseDocument() {
+      return request.resource.data.keys().hasAll(['publicVisible', 'status', '_deleted', 'updatedAt', 'createdAt']) &&
+             request.resource.data.publicVisible is bool &&
+             request.resource.data._deleted is bool &&
+             request.resource.data.status in ['assigned', 'in_progress', 'submitted', 'archived', 'draft'] &&
+             request.resource.data.updatedAt is timestamp &&
+             request.resource.data.createdAt is timestamp &&
+             (!('dueAt' in request.resource.data) || request.resource.data.dueAt == null || request.resource.data.dueAt is timestamp) &&
+             (!('opensAt' in request.resource.data) || request.resource.data.opensAt == null || request.resource.data.opensAt is timestamp) &&
+             (!('disbursements' in request.resource.data) || (
+               request.resource.data.disbursements is list &&
+               request.resource.data.disbursements.all(d => isValidDisbursementRecord(d))
+             )) &&
+             (!('invoiceMappings' in request.resource.data) || (
+               request.resource.data.invoiceMappings is list &&
+               request.resource.data.invoiceMappings.all(m => isValidInvoiceMapping(m))
+             ));
     }
 
     // Role documents store whether a user is an admin or trainee
@@ -48,7 +125,8 @@ service cloud.firestore {
       );
       // For queries, client must filter by visibleToUserIds to get results.
       allow list: if request.auth != null && (isAdmin() || isTrainee());
-      allow write: if request.auth != null && isAdmin();
+      allow create, update: if request.auth != null && isAdmin() && isValidCaseDocument();
+      allow delete: if request.auth != null && isAdmin();
     }
 
     // Profile information is private to each user
@@ -61,6 +139,15 @@ service cloud.firestore {
     match /artifacts/{appId}/users/{userId}/caseSubmissions/{caseId} {
       allow read: if request.auth != null && (isAdmin() || request.auth.uid == userId);
       allow write: if request.auth != null && request.auth.uid == userId && isTrainee();
+    }
+
+
+    // Student progress is private to each user
+    match /artifacts/{appId}/student_progress/{uid}/cases/{caseId} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+      // validation
+      allow create, update: if isValidProgressDocument(request.resource.data) &&
+                               request.resource.data.updatedAt == request.time;
     }
 
 

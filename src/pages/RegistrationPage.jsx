@@ -3,7 +3,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useAuth, useUser, useModal, Input, Button, useRoute } from '../AppCore';
 import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
-import { getFirestore, doc, setDoc } from 'firebase/firestore';
 
 const RegistrationPage = () => {
   const { currentUser } = useAuth();
@@ -51,9 +50,6 @@ const RegistrationPage = () => {
       const user = cred.user;
       // Create the role document via existing helper (writes to Firestore: roles/{uid})
       await setRole(role, user);
-      // Ensure Storage rules lookup has a roles/{uid} doc as well
-      const db = getFirestore();
-      await setDoc(doc(db, 'roles', user.uid), { role }, { merge: true });
       showModal?.('Account created successfully. You are now signed in.', 'Success');
       // Respect any ?next=... redirect in the current hash route
       const [, queryString] = (route || '').split('?');

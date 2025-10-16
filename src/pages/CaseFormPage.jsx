@@ -2,10 +2,93 @@ import React, { useEffect, useState } from 'react';
 import { Timestamp } from 'firebase/firestore';
 import { storage, appId } from '../AppCore';
 import { ref as storageRef, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { useAuth, Input, Textarea, Button, useRoute, useModal } from '../AppCore';
+import { useAuth, Input, Textarea, Button, Select, useRoute, useModal } from '../AppCore';
 import { fetchCase, createCase, updateCase } from '../services/caseService';
 import getUUID from '../utils/getUUID';
 import { PlusCircle, Trash2, Paperclip, CheckCircle2, AlertTriangle, UploadCloud } from 'lucide-react';
+
+const STATUS_OPTIONS = [
+  { value: 'assigned', label: 'Assigned' },
+  { value: 'in_progress', label: 'In Progress' },
+  { value: 'submitted', label: 'Submitted' },
+  { value: 'archived', label: 'Archived' },
+];
+
+export const mergeDisbursementDocuments = (disbursementList, invoiceMappings) => {
+  const baseDisbursements = (disbursementList || []).map(({ _tempId, ...rest }) => rest);
+  const mappingGroups = new Map();
+
+  (invoiceMappings || [])
+    .filter((m) => m && m.paymentId)
+    .forEach((m) => {
+      const key = m.paymentId;
+      if (!mappingGroups.has(key)) {
+        mappingGroups.set(key, []);
+      }
+      mappingGroups.get(key).push({
+        paymentId: m.paymentId,
+        storagePath: m.storagePath || '',
+        fileName: m.fileName || '',
+        downloadURL: m.downloadURL || '',
+      });
+    });
+
+  return baseDisbursements.map((item) => {
+    const next = { ...item };
+    const linkedDocs = item.paymentId ? mappingGroups.get(item.paymentId) || [] : [];
+    const existingDocs = Array.isArray(item.supportingDocuments) ? item.supportingDocuments : [];
+
+    const combinedDocs = [...existingDocs, ...linkedDocs].map((doc) => ({
+      storagePath: doc.storagePath || '',
+      fileName: doc.fileName || '',
+      downloadURL: doc.downloadURL || '',
+    }));
+
+    const dedupedDocs = [];
+    const seen = new Set();
+    combinedDocs.forEach((doc) => {
+      const key = `${doc.storagePath}|${doc.downloadURL}|${doc.fileName}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      if (doc.storagePath || doc.downloadURL || doc.fileName) {
+        dedupedDocs.push(doc);
+      }
+    });
+
+    if (dedupedDocs.length > 0) {
+      const [primaryDoc, ...additionalDocs] = dedupedDocs;
+
+      if (primaryDoc.storagePath) next.storagePath = primaryDoc.storagePath;
+      else delete next.storagePath;
+
+      if (primaryDoc.fileName) next.fileName = primaryDoc.fileName;
+      else delete next.fileName;
+
+      if (primaryDoc.downloadURL) next.downloadURL = primaryDoc.downloadURL;
+      else delete next.downloadURL;
+
+      next.supportingDocuments = [
+        {
+          storagePath: primaryDoc.storagePath || '',
+          fileName: primaryDoc.fileName || '',
+          downloadURL: primaryDoc.downloadURL || '',
+        },
+        ...additionalDocs.map((doc) => ({
+          storagePath: doc.storagePath || '',
+          fileName: doc.fileName || '',
+          downloadURL: doc.downloadURL || '',
+        })),
+      ];
+    } else {
+      delete next.storagePath;
+      delete next.fileName;
+      delete next.downloadURL;
+      delete next.supportingDocuments;
+    }
+
+    return next;
+  });
+};
 
 export default function CaseFormPage({ params }) {
   const { caseId: editingCaseId } = params || {};
@@ -19,6 +102,10 @@ export default function CaseFormPage({ params }) {
 
   const [caseName, setCaseName] = useState('');
   const [visibleToUserIdsStr, setVisibleToUserIdsStr] = useState('');
+  const [publicVisible, setPublicVisible] = useState(true);
+  const [status, setStatus] = useState('assigned');
+  const [opensAtStr, setOpensAtStr] = useState('');
+  const [dueAtStr, setDueAtStr] = useState('');
   const [disbursements, setDisbursements] = useState([initialDisbursement()]);
   const [invoiceMappings, setInvoiceMappings] = useState([initialMapping()]);
   const [loading, setLoading] = useState(false);
@@ -40,6 +127,24 @@ export default function CaseFormPage({ params }) {
     }
   }; // surface errors during investigation
 
+  const toDateTimeLocalInput = (value) => {
+    if (!value) return '';
+    let date;
+    if (typeof value?.toDate === 'function') {
+      date = value.toDate();
+    } else if (value instanceof Date) {
+      date = value;
+    } else if (value?.seconds) {
+      date = new Date(value.seconds * 1000);
+    } else {
+      date = new Date(value);
+    }
+    if (!date || Number.isNaN(date.getTime())) return '';
+    const tzOffset = date.getTimezoneOffset();
+    const local = new Date(date.getTime() - tzOffset * 60000);
+    return local.toISOString().slice(0, 16);
+  };
+
   useEffect(() => {
     if (isEditing && editingCaseId) {
       setLoading(true);
@@ -47,8 +152,17 @@ export default function CaseFormPage({ params }) {
         .then((data) => {
           if (data) {
             setOriginalCaseData(data);
-            setCaseName(data.caseName || '');
-            setVisibleToUserIdsStr((data.visibleToUserIds || []).join(', '));
+            setCaseName(data.caseName || data.title || '');
+            const inferredPublic =
+              typeof data.publicVisible === 'boolean'
+                ? data.publicVisible
+                : !(Array.isArray(data.visibleToUserIds) && data.visibleToUserIds.length > 0);
+            setPublicVisible(inferredPublic);
+            const rosterList = Array.isArray(data.visibleToUserIds) ? data.visibleToUserIds : [];
+            setVisibleToUserIdsStr(inferredPublic ? '' : rosterList.join(', '));
+            setStatus(data.status || 'assigned');
+            setOpensAtStr(toDateTimeLocalInput(data.opensAt));
+            setDueAtStr(toDateTimeLocalInput(data.dueAt));
             setDisbursements(data.disbursements?.map((d) => ({ ...d, _tempId: d._tempId || getUUID() })) || [initialDisbursement()]);
             setInvoiceMappings(
               data.invoiceMappings?.map((m) => ({ ...m, _tempId: m._tempId || getUUID(), clientSideFile: null, uploadProgress: m.storagePath ? 100 : undefined, uploadError: null })) || [initialMapping()]
@@ -68,6 +182,10 @@ export default function CaseFormPage({ params }) {
     } else {
       setCaseName('');
       setVisibleToUserIdsStr('');
+      setPublicVisible(true);
+      setStatus('assigned');
+      setOpensAtStr('');
+      setDueAtStr('');
       setDisbursements([initialDisbursement()]);
       setInvoiceMappings([initialMapping()]);
       setOriginalCaseData(null);
@@ -119,6 +237,17 @@ export default function CaseFormPage({ params }) {
     setInvoiceMappings([...invoiceMappings, initialMapping()]);
   };
   const removeMapping = (index) => setInvoiceMappings(invoiceMappings.filter((_, i) => i !== index));
+
+  const parseDateTimeInputValue = (value, label) => {
+    if (!value) {
+      return { timestamp: null };
+    }
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return { error: `${label} must be a valid date/time.` };
+    }
+    return { timestamp: Timestamp.fromDate(parsed) };
+  };
 
   const availablePaymentIdsForMapping = disbursements.map((d) => d.paymentId).filter((id) => id);
 
@@ -360,8 +489,33 @@ export default function CaseFormPage({ params }) {
       return;
     }
 
+    const visibleToUserIdsArray = publicVisible
+      ? []
+      : visibleToUserIdsStr.split(',').map((id) => id.trim()).filter((id) => id);
+
+    if (!publicVisible && visibleToUserIdsArray.length === 0) {
+      showModal('Private cases must list at least one User ID.', 'Validation Error');
+      return;
+    }
+
+    const { timestamp: opensAtTs, error: opensError } = parseDateTimeInputValue(opensAtStr, 'Opens At');
+    if (opensError) {
+      showModal(opensError, 'Validation Error');
+      return;
+    }
+
+    const { timestamp: dueAtTs, error: dueError } = parseDateTimeInputValue(dueAtStr, 'Due At');
+    if (dueError) {
+      showModal(dueError, 'Validation Error');
+      return;
+    }
+
+    if (opensAtTs && dueAtTs && dueAtTs.toMillis() < opensAtTs.toMillis()) {
+      showModal('Due At must be after Opens At.', 'Validation Error');
+      return;
+    }
+
     setLoading(true);
-    const visibleToUserIdsArray = visibleToUserIdsStr.split(',').map((id) => id.trim()).filter((id) => id);
     let currentCaseId = editingCaseId;
     let isNewCaseCreation = !isEditing;
 
@@ -369,12 +523,15 @@ export default function CaseFormPage({ params }) {
       if (isNewCaseCreation) {
         const tempCaseData = {
           caseName,
+          title: caseName,
           disbursements: disbursements.map(({ _tempId, ...rest }) => rest),
           invoiceMappings: [],
           visibleToUserIds: visibleToUserIdsArray,
+          publicVisible,
+          status,
+          opensAt: opensAtTs,
+          dueAt: dueAtTs,
           createdBy: userId,
-          createdAt: Timestamp.now(),
-          updatedAt: Timestamp.now(),
           _deleted: false,
         };
         currentCaseId = await createCase(tempCaseData);
@@ -411,16 +568,25 @@ export default function CaseFormPage({ params }) {
         .filter((r) => r && !r.uploadError)
         .map(({ clientSideFile, uploadProgress, _tempId, ...rest }) => rest);
 
+      const disbursementPayload = mergeDisbursementDocuments(disbursements, finalInvoiceMappings);
+
       const caseDataPayload = {
         caseName,
-        disbursements: disbursements.map(({ _tempId, ...rest }) => rest),
+        title: caseName,
+        disbursements: disbursementPayload,
         invoiceMappings: finalInvoiceMappings,
         visibleToUserIds: visibleToUserIdsArray,
-        updatedAt: Timestamp.now(),
+        publicVisible,
+        status,
+        opensAt: opensAtTs,
+        dueAt: dueAtTs,
         createdBy: isNewCaseCreation || !originalCaseData?.createdBy ? userId : originalCaseData.createdBy,
-        createdAt: isNewCaseCreation || !originalCaseData?.createdAt ? Timestamp.now() : originalCaseData.createdAt,
         _deleted: originalCaseData?._deleted ?? false,
       };
+
+      if (!isNewCaseCreation) {
+        caseDataPayload.createdAt = originalCaseData?.createdAt ?? null;
+      }
 
       await updateCase(currentCaseId, caseDataPayload);
 
@@ -449,13 +615,83 @@ export default function CaseFormPage({ params }) {
             </label>
             <Input id="caseName" value={caseName} onChange={(e) => setCaseName(e.target.value)} placeholder="e.g., Q1 Unrecorded Liabilities Review" required />
           </div>
-          <div>
-            <label htmlFor="visibleToUserIds" className="block text-sm font-medium text-gray-700 mb-1">
-              Visible to User IDs (Optional)
-            </label>
-            <Textarea id="visibleToUserIds" value={visibleToUserIdsStr} onChange={(e) => setVisibleToUserIdsStr(e.target.value)} placeholder="Enter comma-separated User IDs. Leave blank for all users." />
-            <p className="text-xs text-gray-500 mt-1">If blank, the case will be visible to all trainees.</p>
-          </div>
+          <section className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Audience</label>
+              <div className="flex items-center space-x-3">
+                <input
+                  id="publicVisible"
+                  type="checkbox"
+                  className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                  checked={publicVisible}
+                  onChange={(e) => setPublicVisible(e.target.checked)}
+                />
+                <label htmlFor="publicVisible" className="text-sm text-gray-700">
+                  Visible to all signed-in trainees
+                </label>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">
+                Disable this to restrict the case to specific user IDs.
+              </p>
+            </div>
+
+            <div>
+              <label htmlFor="visibleToUserIds" className="block text-sm font-medium text-gray-700 mb-1">
+                Visible to User IDs (comma-separated)
+              </label>
+              <Textarea
+                id="visibleToUserIds"
+                value={visibleToUserIdsStr}
+                onChange={(e) => setVisibleToUserIdsStr(e.target.value)}
+                placeholder="Enter comma-separated User IDs when the case is private."
+                disabled={publicVisible}
+                className={publicVisible ? 'bg-gray-100 cursor-not-allowed' : ''}
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                Provide at least one ID when the case is restricted. Leave blank when public.
+              </p>
+            </div>
+
+            <div>
+              <label htmlFor="caseStatus" className="block text-sm font-medium text-gray-700 mb-1">
+                Case Status
+              </label>
+              <Select
+                id="caseStatus"
+                value={status}
+                onChange={(e) => setStatus(e.target.value)}
+                options={STATUS_OPTIONS}
+                className="mt-1"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="opensAt" className="block text-sm font-medium text-gray-700 mb-1">
+                  Opens At (UTC)
+                </label>
+                <Input
+                  id="opensAt"
+                  type="datetime-local"
+                  value={opensAtStr}
+                  onChange={(e) => setOpensAtStr(e.target.value)}
+                />
+                <p className="text-xs text-gray-500 mt-1">Optional. Trainees will see the case after this time.</p>
+              </div>
+              <div>
+                <label htmlFor="dueAt" className="block text-sm font-medium text-gray-700 mb-1">
+                  Due At (UTC)
+                </label>
+                <Input
+                  id="dueAt"
+                  type="datetime-local"
+                  value={dueAtStr}
+                  onChange={(e) => setDueAtStr(e.target.value)}
+                />
+                <p className="text-xs text-gray-500 mt-1">Optional deadline for trainees.</p>
+              </div>
+            </div>
+          </section>
 
           <section>
             <div className="flex justify-between items-center mb-4">
