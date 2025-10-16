@@ -102,7 +102,7 @@ export default function AdminCaseOverviewPage({ params }) {
             <p className="text-gray-500">No disbursements recorded.</p>
           )}
 
-          <h2 className="text-xl font-semibold text-gray-700 mt-6 mb-2">Invoice PDFs</h2>
+          <h2 className="text-xl font-semibold text-gray-700 mt-6 mb-2">Invoice Documents</h2>
           {caseData.invoiceMappings && caseData.invoiceMappings.length > 0 ? (
             <ul className="space-y-2">
               {caseData.invoiceMappings.map((m, idx) => (
@@ -115,7 +115,7 @@ export default function AdminCaseOverviewPage({ params }) {
               ))}
             </ul>
           ) : (
-            <p className="text-gray-500">No invoices uploaded.</p>
+            <p className="text-gray-500">No invoice documents uploaded.</p>
           )}
 
           <h2 className="text-xl font-semibold text-gray-700 mt-6 mb-2">Reference Documents</h2>
