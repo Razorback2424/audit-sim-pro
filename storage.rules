@@ -5,13 +5,16 @@ service firebase.storage {
     // ---------- Role helpers ----------
     // Global roles/{uid} doc
     function hasGlobalAdminRole() {
-      return request.auth != null &&
-             firestore.exists(
-               /databases/(default)/documents/roles/$(request.auth.uid)
-             ) &&
-             firestore.get(
-               /databases/(default)/documents/roles/$(request.auth.uid)
-             ).data.role == 'admin';
+      if (request.auth == null) return false;
+
+      // Prefer custom claim when present to avoid relying solely on Firestore reads.
+      if (request.auth.token.role == 'admin') {
+        return true;
+      }
+
+      let roleDocPath = /databases/(default)/documents/roles/$(request.auth.uid);
+      return firestore.exists(roleDocPath) &&
+             firestore.get(roleDocPath).data.role == 'admin';
     }
 
     function isAdmin(appId) {
@@ -38,22 +41,27 @@ service firebase.storage {
       return caseData.visibleToUserIds.hasAny([request.auth.uid]);
     }
 
+    function hasAllowedExtension() {
+      return request.resource != null &&
+             request.resource.name.matches('(?i).*(\\.(pdf|csv|xls|xlsx|xlsm))$');
+    }
+
+    function hasAllowedContentType() {
+      return request.resource != null && (
+        request.resource.contentType == 'application/pdf' ||
+        request.resource.contentType == 'application/x-pdf' ||
+        request.resource.contentType == 'text/csv' ||
+        request.resource.contentType == 'application/csv' ||
+        request.resource.contentType == 'application/vnd.ms-excel' ||
+        request.resource.contentType == 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+        request.resource.contentType == 'application/vnd.ms-excel.sheet.macroenabled.12'
+      );
+    }
+
     function isAllowedArtifactUpload() {
       return request.resource != null
         && request.resource.size <= 25 * 1024 * 1024
-        && (
-          request.resource.contentType == 'application/pdf' ||
-          request.resource.contentType == 'application/x-pdf' ||
-          request.resource.contentType == 'text/csv' ||
-          request.resource.contentType == 'application/csv' ||
-          request.resource.contentType == 'application/vnd.ms-excel' ||
-          request.resource.contentType == 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
-          request.resource.contentType == 'application/vnd.ms-excel.sheet.macroenabled.12' ||
-          (
-            request.resource.contentType == 'application/octet-stream' &&
-            request.resource.name.matches('(?i).*(\\.(pdf|csv|xls|xlsx|xlsm))$')
-          )
-        );
+        && (hasAllowedContentType() || hasAllowedExtension());
     }
 
     // ---------- Case document rules ----------

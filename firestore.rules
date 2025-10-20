@@ -47,7 +47,7 @@ service cloud.firestore {
              (!('fileName' in d) || d.fileName == null || d.fileName is string) &&
              (!('supportingDocuments' in d) || (
                d.supportingDocuments is list &&
-               d.supportingDocuments.all(doc => isValidSupportingDocument(doc))
+               d.supportingDocuments.all(doc, isValidSupportingDocument(doc))
              )) &&
              (!('description' in d) || d.description == null || d.description is string) &&
              (!('notes' in d) || d.notes == null || d.notes is string) &&
@@ -65,18 +65,18 @@ service cloud.firestore {
 
     function isValidClassificationDraftEntry(entry) {
       return entry is map &&
-             entry.keys().all(field => entry[field] == null || entry[field] is string);
+             entry.keys().all(field, entry[field] == null || entry[field] is string);
     }
 
     function isValidProgressDraft(draft) {
       return draft is map &&
              (!('selectedPaymentIds' in draft) || (
                draft.selectedPaymentIds is list &&
-               draft.selectedPaymentIds.all(id => id is string)
+               draft.selectedPaymentIds.all(id, id is string)
              )) &&
              (!('classificationDraft' in draft) || (
                draft.classificationDraft is map &&
-               draft.classificationDraft.keys().all(key => isValidClassificationDraftEntry(draft.classificationDraft[key]))
+               draft.classificationDraft.keys().all(key, isValidClassificationDraftEntry(draft.classificationDraft[key]))
              ));
     }
 
@@ -98,11 +98,11 @@ service cloud.firestore {
              (!('opensAt' in request.resource.data) || request.resource.data.opensAt == null || request.resource.data.opensAt is timestamp) &&
              (!('disbursements' in request.resource.data) || (
                request.resource.data.disbursements is list &&
-               request.resource.data.disbursements.all(d => isValidDisbursementRecord(d))
+               request.resource.data.disbursements.all(d, isValidDisbursementRecord(d))
              )) &&
              (!('invoiceMappings' in request.resource.data) || (
                request.resource.data.invoiceMappings is list &&
-               request.resource.data.invoiceMappings.all(m => isValidInvoiceMapping(m))
+               request.resource.data.invoiceMappings.all(m, isValidInvoiceMapping(m))
              ));
     }
 

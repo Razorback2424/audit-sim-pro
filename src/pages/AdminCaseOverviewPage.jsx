@@ -102,20 +102,21 @@ export default function AdminCaseOverviewPage({ params }) {
             <p className="text-gray-500">No disbursements recorded.</p>
           )}
 
-          <h2 className="text-xl font-semibold text-gray-700 mt-6 mb-2">Invoice PDFs</h2>
+          <h2 className="text-xl font-semibold text-gray-700 mt-6 mb-2">Invoice Documents</h2>
           {caseData.invoiceMappings && caseData.invoiceMappings.length > 0 ? (
             <ul className="space-y-2">
               {caseData.invoiceMappings.map((m, idx) => (
                 <li key={idx} className="p-3 border rounded-md flex items-center justify-between text-sm">
                   <span className="mr-2 flex-1 truncate">
                     <strong>{m.paymentId}:</strong> {m.fileName}
+                    {m.contentType ? <span className="ml-2 text-xs text-gray-500">({m.contentType})</span> : null}
                   </span>
                   <Button onClick={() => handleView(m)} variant="secondary" className="text-xs px-2 py-1">Open</Button>
                 </li>
               ))}
             </ul>
           ) : (
-            <p className="text-gray-500">No invoices uploaded.</p>
+            <p className="text-gray-500">No invoice documents uploaded.</p>
           )}
 
           <h2 className="text-xl font-semibold text-gray-700 mt-6 mb-2">Reference Documents</h2>
