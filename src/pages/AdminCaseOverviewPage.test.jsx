@@ -17,4 +17,6 @@ test('renders admin case overview heading', async () => {
   fetchCase.mockResolvedValue({ caseName: 'Case 1', disbursements: [], invoiceMappings: [] });
   render(<AdminCaseOverviewPage params={{ caseId: 'c1' }} />);
   expect(await screen.findByText('Case 1')).toBeInTheDocument();
+  expect(await screen.findByText('Invoice Documents')).toBeInTheDocument();
+  expect(await screen.findByText('No invoice documents uploaded.')).toBeInTheDocument();
 });
