@@ -129,6 +129,7 @@ function App() {
   const { currentUser, loadingAuth, logout } = useAuth();
   const { role, loadingRole } = useUser();
   const { route, navigate } = useRoute();
+  const [loadingSince, setLoadingSince] = useState(() => Date.now());
 
   useEffect(() => {
     console.info('[App] state changed', {
@@ -139,6 +140,24 @@ function App() {
       role,
     });
   }, [loadingAuth, loadingRole, route, currentUser, role]);
+
+  useEffect(() => {
+    if (loadingAuth || loadingRole) {
+      setLoadingSince((prev) => prev ?? Date.now());
+    } else {
+      setLoadingSince(null);
+    }
+  }, [loadingAuth, loadingRole]);
+
+  useEffect(() => {
+    if (!loadingSince) return;
+    const timeoutMs = 5000;
+    const timer = setTimeout(() => {
+      console.warn('[App] Loading taking too long, redirecting to login.');
+      navigate('/login?refresh=true');
+    }, timeoutMs);
+    return () => clearTimeout(timer);
+  }, [loadingSince, navigate]);
 
   useEffect(() => {
     if (loadingAuth || loadingRole) return;
@@ -160,10 +179,22 @@ function App() {
   if (loadingAuth || loadingRole) {
     console.info('[App] rendering loading screen', { loadingAuth, loadingRole });
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-100 p-4 text-center">
-        <Loader2 size={48} className="animate-spin text-blue-600 mb-4" />
-        <h1 className="text-xl font-semibold text-gray-700">Loading AuditSim Pro...</h1>
-        <p className="text-sm text-gray-500">Initializing...</p>
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gray-100 p-4 text-center space-y-4">
+        <Loader2 size={48} className="animate-spin text-blue-600" />
+        <div>
+          <h1 className="text-xl font-semibold text-gray-700">Loading AuditSim Pro...</h1>
+          <p className="text-sm text-gray-500">Initializing...</p>
+        </div>
+        <div className="text-xs text-gray-400">
+          <p>Stuck here?</p>
+          <button
+            type="button"
+            className="mt-1 text-sm text-blue-600 hover:underline"
+            onClick={() => navigate('/login?refresh=true')}
+          >
+            Go to sign in
+          </button>
+        </div>
       </div>
     );
   }
