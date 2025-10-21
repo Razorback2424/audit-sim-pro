@@ -147,7 +147,7 @@ export default function TraineeCaseViewPage({ params }) {
   const [activeEvidenceUrl, setActiveEvidenceUrl] = useState(null);
   const [activeEvidenceError, setActiveEvidenceError] = useState('');
   const [activeEvidenceLoading, setActiveEvidenceLoading] = useState(false);
-  const [downloadingReferences, setDownloadingReferences] = useState(false);
+  const [downloadingReferenceId, setDownloadingReferenceId] = useState(null);
 
   const lastResolvedEvidenceRef = useRef({ evidenceId: null, storagePath: null, url: null, inlineNotSupported: false });
   const progressSaveTimeoutRef = useRef(null);
@@ -1033,44 +1033,26 @@ export default function TraineeCaseViewPage({ params }) {
     setTimeout(() => window.URL.revokeObjectURL(blobUrl), 2000);
   };
 
-  const downloadReferenceDocument = async (doc) => {
-    if (!doc) {
-      throw new Error('Reference document metadata is missing.');
-    }
-
+  const handleDownloadReferenceDoc = async (doc) => {
+    if (!doc) return;
     const displayName = (doc.fileName || 'reference-document').trim() || 'reference-document';
-    let url = (doc.downloadURL || '').trim();
-
-    if (!url) {
-      if (!doc.storagePath) {
-        throw new Error('Reference document is missing a download link.');
+    try {
+      setDownloadingReferenceId(doc.id);
+      let url = (doc.downloadURL || '').trim();
+      if (!url) {
+        if (!doc.storagePath) {
+          throw new Error('Reference document is missing a download link.');
+        }
+        url = await getDownloadURL(storageRef(storage, doc.storagePath));
       }
-      url = await getDownloadURL(storageRef(storage, doc.storagePath));
+      await triggerFileDownload(url, displayName);
+    } catch (error) {
+      console.error('Error downloading reference document:', error);
+      const message = error?.message || 'Unable to download reference document at this time.';
+      showModal(message, 'Download Error');
+    } finally {
+      setDownloadingReferenceId(null);
     }
-
-    await triggerFileDownload(url, displayName);
-  };
-
-  const handleDownloadAllReferences = async () => {
-    if (referenceDocuments.length === 0) return;
-
-    setDownloadingReferences(true);
-    const errors = [];
-
-    for (const doc of referenceDocuments) {
-      try {
-        await downloadReferenceDocument(doc);
-      } catch (error) {
-        console.error('Error downloading reference document:', error);
-        errors.push(`- ${(doc?.fileName || 'Reference document').trim() || 'Reference document'}: ${error?.message || error}`);
-      }
-    }
-
-    if (errors.length > 0) {
-      showModal(`Some reference documents could not be downloaded:\n${errors.join('\n')}`, 'Download Errors');
-    }
-
-    setDownloadingReferences(false);
   };
 
   const renderReferenceDownloadsBanner = () => {
@@ -1091,17 +1073,21 @@ export default function TraineeCaseViewPage({ params }) {
               Download the necessary reference documents before you begin classifying results.
             </p>
           </div>
-          <div>
-            <Button
-              variant="secondary"
-              className="text-xs px-3 py-1 bg-white text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
-              onClick={handleDownloadAllReferences}
-              isLoading={downloadingReferences}
-              disabled={downloadingReferences}
-            >
-              <Download size={14} className="inline mr-1" />
-              Download All Reference Documents
-            </Button>
+          <div className="flex flex-wrap gap-2">
+            {referenceDocuments.map((doc) => (
+              <Button
+                key={doc.id}
+                variant="secondary"
+                className="text-xs px-3 py-1 bg-white text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+                onClick={() => handleDownloadReferenceDoc(doc)}
+                isLoading={downloadingReferenceId === doc.id}
+                disabled={downloadingReferenceId && downloadingReferenceId !== doc.id}
+                title={doc.fileName}
+              >
+                <Download size={14} className="inline mr-1" />
+                <span className="max-w-[160px] truncate inline-block align-middle">{doc.fileName || 'Reference'}</span>
+              </Button>
+            ))}
           </div>
         </div>
       </div>
