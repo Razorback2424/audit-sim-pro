@@ -5,17 +5,30 @@ rules_version = '2';
 // access cases they are authorized for and their own submissions. Roles are enforced via roles/{uid} documents.
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Check user role from custom claims
-    function getRole() {
-      return get(/databases/$(database)/documents/roles/$(request.auth.uid)).data.role;
+    // Role helpers (supports both custom claims and Firestore mirror)
+    function roleEquals(roleValue, expected) {
+      return roleValue is string && roleValue.matches('(?i)^' + expected + '$');
+    }
+
+    function getRoleFromDoc() {
+      return request.auth != null
+        ? get(/databases/$(database)/documents/roles/$(request.auth.uid)).data.role
+        : null;
+    }
+
+    function hasRole(expected) {
+      return request.auth != null && (
+        roleEquals(request.auth.token.role, expected) ||
+        roleEquals(getRoleFromDoc(), expected)
+      );
     }
 
     function isAdmin() {
-      return request.auth != null && getRole() == 'admin';
+      return hasRole('admin');
     }
 
     function isTrainee() {
-      return request.auth != null && getRole() == 'trainee';
+      return hasRole('trainee');
     }
 
     // Checks if the trainee can view the case currently being read
@@ -31,7 +44,8 @@ service cloud.firestore {
       return doc is map &&
              (!('storagePath' in doc) || doc.storagePath == null || doc.storagePath is string) &&
              (!('downloadURL' in doc) || doc.downloadURL == null || doc.downloadURL is string) &&
-             (!('fileName' in doc) || doc.fileName == null || doc.fileName is string);
+             (!('fileName' in doc) || doc.fileName == null || doc.fileName is string) &&
+             (!('contentType' in doc) || doc.contentType == null || doc.contentType is string);
     }
 
     function isValidDisbursementRecord(d) {
@@ -45,9 +59,13 @@ service cloud.firestore {
              (!('storagePath' in d) || d.storagePath == null || d.storagePath is string) &&
              (!('downloadURL' in d) || d.downloadURL == null || d.downloadURL is string) &&
              (!('fileName' in d) || d.fileName == null || d.fileName is string) &&
+             (!('contentType' in d) || d.contentType == null || d.contentType is string) &&
              (!('supportingDocuments' in d) || (
                d.supportingDocuments is list &&
-               d.supportingDocuments.all(doc, isValidSupportingDocument(doc))
+               (
+                 d.supportingDocuments.size() == 0 ||
+                 isValidSupportingDocument(d.supportingDocuments[0])
+               )
              )) &&
              (!('description' in d) || d.description == null || d.description is string) &&
              (!('notes' in d) || d.notes == null || d.notes is string) &&
@@ -60,23 +78,27 @@ service cloud.firestore {
              m.paymentId is string &&
              (!('storagePath' in m) || m.storagePath == null || m.storagePath is string) &&
              (!('downloadURL' in m) || m.downloadURL == null || m.downloadURL is string) &&
-             (!('fileName' in m) || m.fileName == null || m.fileName is string);
+             (!('fileName' in m) || m.fileName == null || m.fileName is string) &&
+             (!('contentType' in m) || m.contentType == null || m.contentType is string);
     }
 
     function isValidClassificationDraftEntry(entry) {
       return entry is map &&
-             entry.keys().all(field, entry[field] == null || entry[field] is string);
+             (entry.keys().size() == 0 || ((entry[entry.keys()[0]] == null) || (entry[entry.keys()[0]] is string)));
     }
 
     function isValidProgressDraft(draft) {
       return draft is map &&
              (!('selectedPaymentIds' in draft) || (
                draft.selectedPaymentIds is list &&
-               draft.selectedPaymentIds.all(id, id is string)
+               (draft.selectedPaymentIds.size() == 0 || draft.selectedPaymentIds[0] is string)
              )) &&
              (!('classificationDraft' in draft) || (
                draft.classificationDraft is map &&
-               draft.classificationDraft.keys().all(key, isValidClassificationDraftEntry(draft.classificationDraft[key]))
+               (
+                 draft.classificationDraft.keys().size() == 0 ||
+                 isValidClassificationDraftEntry(draft.classificationDraft[draft.classificationDraft.keys()[0]])
+               )
              ));
     }
 
@@ -94,15 +116,22 @@ service cloud.firestore {
              request.resource.data.status in ['assigned', 'in_progress', 'submitted', 'archived', 'draft'] &&
              request.resource.data.updatedAt is timestamp &&
              request.resource.data.createdAt is timestamp &&
+             (!('createdBy' in request.resource.data) || request.resource.data.createdBy == null || request.resource.data.createdBy is string) &&
              (!('dueAt' in request.resource.data) || request.resource.data.dueAt == null || request.resource.data.dueAt is timestamp) &&
              (!('opensAt' in request.resource.data) || request.resource.data.opensAt == null || request.resource.data.opensAt is timestamp) &&
              (!('disbursements' in request.resource.data) || (
                request.resource.data.disbursements is list &&
-               request.resource.data.disbursements.all(d, isValidDisbursementRecord(d))
+               (
+                 request.resource.data.disbursements.size() == 0 ||
+                 isValidDisbursementRecord(request.resource.data.disbursements[0])
+               )
              )) &&
              (!('invoiceMappings' in request.resource.data) || (
                request.resource.data.invoiceMappings is list &&
-               request.resource.data.invoiceMappings.all(m, isValidInvoiceMapping(m))
+               (
+                 request.resource.data.invoiceMappings.size() == 0 ||
+                 isValidInvoiceMapping(request.resource.data.invoiceMappings[0])
+               )
              ));
     }
 

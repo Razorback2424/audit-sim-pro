@@ -19,7 +19,7 @@ import {
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage'; // << MOVED IMPORT TO TOP
 import { XCircle, Loader2 } from 'lucide-react'; // << MOVED IMPORT TO TOP
-import { cacheRole } from './services/roleService';
+import { cacheRole, getCachedRole, clearRoleCache } from './services/roleService';
 import { fetchUserProfile, upsertUserProfile } from './services/userService';
 
 /* global __firebase_config, __app_id, __initial_auth_token */
@@ -127,12 +127,16 @@ const ROLE_PRIORITY = {
   admin: 2,
 };
 
+const normalizeRoleValue = (value) => (typeof value === 'string' ? value.toLowerCase() : value);
+
 const shouldUpdateRoleDoc = (existingRole, incomingRole) => {
-  if (!incomingRole) return false;
-  if (!existingRole) return true;
-  if (existingRole === incomingRole) return false;
-  const existingRank = ROLE_PRIORITY[existingRole] ?? 0;
-  const incomingRank = ROLE_PRIORITY[incomingRole] ?? 0;
+  const normalizedExisting = normalizeRoleValue(existingRole);
+  const normalizedIncoming = normalizeRoleValue(incomingRole);
+  if (!normalizedIncoming) return false;
+  if (!normalizedExisting) return true;
+  if (normalizedExisting === normalizedIncoming) return false;
+  const existingRank = ROLE_PRIORITY[normalizedExisting] ?? 0;
+  const incomingRank = ROLE_PRIORITY[normalizedIncoming] ?? 0;
   return incomingRank >= existingRank;
 };
 
@@ -289,7 +293,7 @@ const AuthProvider = ({ children }) => {
       try {
         await setPersistence(auth, browserLocalPersistence);
       } catch (e) {
-        console.warn('Failed to set auth persistence (will fall back to default):', e);
+        console.warn('[AuthProvider] Failed to set auth persistence (will fall back to default):', e);
       }
       const tokenToUse = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : window.__initial_auth_token;
 
@@ -297,7 +301,7 @@ const AuthProvider = ({ children }) => {
         try {
           await signInWithCustomToken(auth, tokenToUse);
         } catch (customTokenError) {
-          console.error('Custom token sign-in error:', customTokenError);
+          console.error('[AuthProvider] Custom token sign-in error:', customTokenError);
           // If custom token fails we'll fall back to Firebase session restoration
         }
       }
@@ -307,6 +311,10 @@ const AuthProvider = ({ children }) => {
     attemptInitialAuth(); // Call the initial auth attempt
 
     const unsubscribe = onAuthStateChanged(auth, (user) => {
+      console.info('[AuthProvider] onAuthStateChanged', {
+        uid: user?.uid ?? null,
+        isAnonymous: user?.isAnonymous ?? null,
+      });
       // If a legacy anonymous session is restored, clear it so we require real login
       if (user && user.isAnonymous) {
         try { signOut(auth); } catch {}
@@ -316,6 +324,8 @@ const AuthProvider = ({ children }) => {
       }
       setCurrentUser(user);
       setLoadingAuth(false);
+      console.info('[AuthProvider] auth state resolved', { loadingAuth: false, uid: user?.uid ?? null });
+      clearRoleCache(user?.uid);
     });
 
     return () => unsubscribe();
@@ -387,21 +397,29 @@ const UserProvider = ({ children }) => {
           setRoleState(null);
           setUserProfile(null);
           setLoadingRole(false);
+          console.info('[UserProvider] No authenticated user; role reset.');
         }
         return;
       }
 
       setLoadingRole(true);
-      let claimRole = null;
+      const cachedRole = getCachedRole(currentUser.uid);
+      if (cachedRole) {
+        setRoleState(cachedRole);
+        console.info('[UserProvider] Using cached role for initial render', { cachedRole });
+      }
+
+      let claimRole = cachedRole;
 
       try {
         const idTokenResult = await currentUser.getIdTokenResult(true);
         claimRole = idTokenResult.claims.role ?? null;
+        console.info('[UserProvider] Retrieved token role', { claimRole });
         if (claimRole) {
           cacheRole(currentUser.uid, claimRole);
         }
       } catch (e) {
-        console.warn('Failed to refresh ID token role claim:', e);
+        console.warn('[UserProvider] Failed to refresh ID token role claim:', e);
       }
 
       try {
@@ -412,26 +430,32 @@ const UserProvider = ({ children }) => {
             if (!active) return;
             const docRole = snapshot.exists() ? snapshot.data()?.role ?? null : null;
             const nextRole = docRole ?? claimRole ?? null;
-            setRoleState(nextRole);
-            if (nextRole) cacheRole(currentUser.uid, nextRole);
+            const normalizedRole = typeof nextRole === 'string' ? nextRole.toLowerCase() : nextRole;
+            console.info('[UserProvider] Role snapshot update', { docRole, claimRole, normalizedRole });
+            setRoleState(normalizedRole);
+            if (normalizedRole) cacheRole(currentUser.uid, normalizedRole);
             setLoadingRole(false);
           },
           (error) => {
             if (!active) return;
-            console.error('Role snapshot error:', error);
+            console.error('[UserProvider] Role snapshot error:', error);
             const fallbackRole = claimRole ?? null;
-            setRoleState(fallbackRole);
-            if (fallbackRole) cacheRole(currentUser.uid, fallbackRole);
+            const normalizedRole = typeof fallbackRole === 'string' ? fallbackRole.toLowerCase() : fallbackRole;
+            setRoleState(normalizedRole);
+            if (normalizedRole) cacheRole(currentUser.uid, normalizedRole);
             setLoadingRole(false);
+            console.info('[UserProvider] Role snapshot error fallback', { claimRole, normalizedRole });
           }
         );
       } catch (err) {
         if (active) {
-          console.error('Failed to subscribe to role document:', err);
+          console.error('[UserProvider] Failed to subscribe to role document:', err);
           const fallbackRole = claimRole ?? null;
-          setRoleState(fallbackRole);
-          if (fallbackRole) cacheRole(currentUser.uid, fallbackRole);
+          const normalizedRole = typeof fallbackRole === 'string' ? fallbackRole.toLowerCase() : fallbackRole;
+          setRoleState(normalizedRole);
+          if (normalizedRole) cacheRole(currentUser.uid, normalizedRole);
           setLoadingRole(false);
+          console.info('[UserProvider] Subscribe failure fallback', { claimRole, normalizedRole });
         }
       }
 
@@ -439,9 +463,10 @@ const UserProvider = ({ children }) => {
         const profile = await fetchUserProfile(currentUser.uid);
         if (active) {
           setUserProfile(profile ? { uid: currentUser.uid, ...profile } : null);
+          console.info('[UserProvider] Loaded profile', { hasProfile: !!profile, profileRole: profile?.role ?? null });
         }
       } catch (err) {
-        console.error('Profile fetch error:', err);
+        console.error('[UserProvider] Profile fetch error:', err);
         if (active) setUserProfile(null);
       }
     };
@@ -518,6 +543,7 @@ const UserProvider = ({ children }) => {
   }, [currentUser, role]);
 
   const setRole = async (newRole, userOverride = null) => {
+    const normalizedRole = typeof newRole === 'string' ? newRole.toLowerCase() : newRole;
     const user = userOverride || currentUser;
     if (!user) {
       if (showModal) showModal('Cannot set role: not signed in.', 'Authentication Error');
@@ -529,12 +555,13 @@ const UserProvider = ({ children }) => {
       const roleRef = doc(db, FirestorePaths.ROLE_DOCUMENT(user.uid));
       const roleSnap = await getDoc(roleRef);
 
-      const existingRole = roleSnap.exists() ? roleSnap.data()?.role ?? null : null;
+        const existingRole = roleSnap.exists() ? roleSnap.data()?.role ?? null : null;
 
-      if (shouldUpdateRoleDoc(existingRole, newRole)) {
-        await setDoc(roleRef, { role: newRole }, { merge: true });
+      if (shouldUpdateRoleDoc(existingRole, normalizedRole)) {
+        await setDoc(roleRef, { role: normalizedRole }, { merge: true });
+        console.info('[UserProvider] Role document updated', { uid: user.uid, normalizedRole });
       } else {
-        console.log('Role document already exists with equal or higher privilege. Skipping write.');
+        console.info('[UserProvider] Role document already up-to-date', { uid: user.uid, existingRole, normalizedRole });
       }
 
       // The rest of the logic for profile update can proceed.
@@ -543,21 +570,21 @@ const UserProvider = ({ children }) => {
         const newProfile = {
           uid: user.uid,
           email: user.email ?? `anon-${user.uid}@example.com`,
-          role: newRole,
+          role: normalizedRole,
           createdAt: serverTimestamp(),
           lastUpdatedAt: serverTimestamp(),
         };
         await upsertUserProfile(user.uid, newProfile); // This is allowed by rules
         setUserProfile(newProfile);
       } else {
-        const update = { role: newRole, lastUpdatedAt: serverTimestamp() };
+        const update = { role: normalizedRole, lastUpdatedAt: serverTimestamp() };
         await upsertUserProfile(user.uid, update); // This is allowed by rules
         setUserProfile((prev) => ({ ...prev, ...update }));
       }
 
       // Update local state and refresh token
-      setRoleState(newRole);
-      cacheRole(user.uid, newRole);
+      setRoleState(normalizedRole);
+      cacheRole(user.uid, normalizedRole);
       await user.getIdToken(true); // Force refresh to get latest custom claims
       console.log("ID token refreshed after role set.");
     } catch (err) {

@@ -131,6 +131,16 @@ function App() {
   const { route, navigate } = useRoute();
 
   useEffect(() => {
+    console.info('[App] state changed', {
+      loadingAuth,
+      loadingRole,
+      route,
+      uid: currentUser?.uid ?? null,
+      role,
+    });
+  }, [loadingAuth, loadingRole, route, currentUser, role]);
+
+  useEffect(() => {
     if (loadingAuth || loadingRole) return;
     const isOnLogin = typeof route === 'string' && route.startsWith('/login');
     const isOnRegister = typeof route === 'string' && route.startsWith('/register');
@@ -148,6 +158,7 @@ function App() {
   }, [loadingAuth, loadingRole, currentUser, role, route, navigate]);
 
   if (loadingAuth || loadingRole) {
+    console.info('[App] rendering loading screen', { loadingAuth, loadingRole });
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-gray-100 p-4 text-center">
         <Loader2 size={48} className="animate-spin text-blue-600 mb-4" />

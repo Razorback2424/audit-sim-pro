@@ -4,17 +4,18 @@ service firebase.storage {
 
     // ---------- Role helpers ----------
     // Global roles/{uid} doc
+    function isAdminRole(roleValue) {
+      return roleValue is string && roleValue.matches('(?i)^admin$');
+    }
+
     function hasGlobalAdminRole() {
-      if (request.auth == null) return false;
-
-      // Prefer custom claim when present to avoid relying solely on Firestore reads.
-      if (request.auth.token.role == 'admin') {
-        return true;
-      }
-
-      let roleDocPath = /databases/(default)/documents/roles/$(request.auth.uid);
-      return firestore.exists(roleDocPath) &&
-             firestore.get(roleDocPath).data.role == 'admin';
+      return request.auth != null && (
+        isAdminRole(request.auth.token.role) ||
+        (
+          firestore.exists(/databases/(default)/documents/roles/$(request.auth.uid)) &&
+          isAdminRole(firestore.get(/databases/(default)/documents/roles/$(request.auth.uid)).data.role)
+        )
+      );
     }
 
     function isAdmin(appId) {
@@ -24,21 +25,25 @@ service firebase.storage {
     // ---------- Trainee visibility helper ----------
     // artifacts/{appId}/public/data/cases/{caseId} with visibleToUserIds (list)
     function traineeHasAccessToCase(appId, caseId) {
-      if (request.auth == null) return false;
-      let docPath = /databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId);
-      if (!firestore.exists(docPath)) return false;
-      let caseData = firestore.get(docPath).data;
-
-      if (caseData.publicVisible == true) {
-        return true;
-      }
-
-      if (!(caseData.visibleToUserIds is list) || caseData.visibleToUserIds.size() == 0) {
-        // Backward compatibility: treat missing publicVisible/Members as public
-        return caseData.publicVisible != false;
-      }
-
-      return caseData.visibleToUserIds.hasAny([request.auth.uid]);
+      return request.auth != null &&
+             firestore.exists(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)) &&
+             (
+               // Public case
+               firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.publicVisible == true ||
+               // Backward compatibility: if no roster, treat non-false publicVisible as accessible
+               (
+                 (
+                   !(firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds is list) ||
+                   firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds.size() == 0
+                 ) &&
+                 firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.publicVisible != false
+               ) ||
+               // Rostered access
+               (
+                 (firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds is list) &&
+                 firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds.hasAny([request.auth.uid])
+               )
+             );
     }
 
     function hasAllowedExtension() {
