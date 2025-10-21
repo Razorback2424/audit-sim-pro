@@ -5,7 +5,7 @@ import { storage, Button, Input, useRoute, useAuth, useModal, appId } from '../A
 import { subscribeToCase } from '../services/caseService';
 import { saveSubmission } from '../services/submissionService';
 import { saveProgress, subscribeProgressForCases } from '../services/progressService';
-import { Send, FileText, Eye, Loader2, ExternalLink } from 'lucide-react';
+import { Send, FileText, Eye, Loader2, ExternalLink, Download } from 'lucide-react';
 
 const FLOW_STEPS = Object.freeze({
   SELECTION: 'selection',
@@ -147,13 +147,9 @@ export default function TraineeCaseViewPage({ params }) {
   const [activeEvidenceUrl, setActiveEvidenceUrl] = useState(null);
   const [activeEvidenceError, setActiveEvidenceError] = useState('');
   const [activeEvidenceLoading, setActiveEvidenceLoading] = useState(false);
-  const [activeReferenceId, setActiveReferenceId] = useState(null);
-  const [referenceViewerUrl, setReferenceViewerUrl] = useState(null);
-  const [referenceViewerError, setReferenceViewerError] = useState('');
-  const [referenceViewerLoading, setReferenceViewerLoading] = useState(false);
+  const [downloadingReferenceId, setDownloadingReferenceId] = useState(null);
 
   const lastResolvedEvidenceRef = useRef({ evidenceId: null, storagePath: null, url: null, inlineNotSupported: false });
-  const lastResolvedReferenceDocRef = useRef({ referenceId: null, storagePath: null, url: null, inlineNotSupported: false });
   const progressSaveTimeoutRef = useRef(null);
   const activeStepRef = useRef(FLOW_STEPS.SELECTION);
   const selectionRef = useRef(selectedDisbursements);
@@ -476,182 +472,6 @@ export default function TraineeCaseViewPage({ params }) {
       setActiveEvidenceId(evidenceSource[0].evidenceId);
     }
   }, [viewerEnabled, evidenceSource, activeEvidenceId]);
-
-  useEffect(() => {
-    if (!viewerEnabled) {
-      setActiveReferenceId(null);
-      setReferenceViewerUrl(null);
-      setReferenceViewerError('');
-      setReferenceViewerLoading(false);
-      lastResolvedReferenceDocRef.current = { referenceId: null, storagePath: null, url: null, inlineNotSupported: false };
-      return;
-    }
-
-    if (referenceDocuments.length === 0) {
-      setActiveReferenceId(null);
-      setReferenceViewerUrl(null);
-      setReferenceViewerError('');
-      setReferenceViewerLoading(false);
-      lastResolvedReferenceDocRef.current = { referenceId: null, storagePath: null, url: null, inlineNotSupported: false };
-      return;
-    }
-
-    if (!activeReferenceId || !referenceDocuments.some((doc) => doc.id === activeReferenceId)) {
-      setActiveReferenceId(referenceDocuments[0].id);
-    }
-  }, [viewerEnabled, referenceDocuments, activeReferenceId]);
-
-  useEffect(() => {
-    if (!viewerEnabled || referenceDocuments.length === 0 || !activeReferenceId) {
-      setReferenceViewerUrl(null);
-      setReferenceViewerError('');
-      setReferenceViewerLoading(false);
-      lastResolvedReferenceDocRef.current = { referenceId: null, storagePath: null, url: null, inlineNotSupported: false };
-      return;
-    }
-
-    const target = referenceDocuments.find((doc) => doc.id === activeReferenceId);
-    if (!target) {
-      setReferenceViewerUrl(null);
-      setReferenceViewerError('');
-      setReferenceViewerLoading(false);
-      return;
-    }
-
-    const inlinePreviewAllowed = isInlinePreviewable(
-      target.contentType,
-      target.fileName || target.storagePath || target.downloadURL
-    );
-
-    if (target.downloadURL) {
-      if (inlinePreviewAllowed) {
-        setReferenceViewerUrl(target.downloadURL);
-        setReferenceViewerError('');
-        setReferenceViewerLoading(false);
-        lastResolvedReferenceDocRef.current = {
-          referenceId: target.id,
-          storagePath: target.storagePath || null,
-          url: target.downloadURL,
-          inlineNotSupported: false,
-        };
-      } else {
-        setReferenceViewerUrl(null);
-        setReferenceViewerError('Preview not available for this file type. Use "Open in new tab" to download.');
-        setReferenceViewerLoading(false);
-        lastResolvedReferenceDocRef.current = {
-          referenceId: target.id,
-          storagePath: target.storagePath || null,
-          url: null,
-          inlineNotSupported: true,
-        };
-      }
-      return;
-    }
-
-    if (!target.storagePath) {
-      setReferenceViewerUrl(null);
-      setReferenceViewerError('Reference document link is not available.');
-      setReferenceViewerLoading(false);
-      lastResolvedReferenceDocRef.current = {
-        referenceId: target.id,
-        storagePath: null,
-        url: null,
-      };
-      return;
-    }
-
-    if (!storage?.app) {
-      setReferenceViewerUrl(null);
-      setReferenceViewerError('Reference document preview unavailable in this environment.');
-      setReferenceViewerLoading(false);
-      lastResolvedReferenceDocRef.current = {
-        referenceId: target.id,
-        storagePath: target.storagePath,
-        url: null,
-      };
-      return;
-    }
-
-    const lastResolved = lastResolvedReferenceDocRef.current;
-    if (
-      lastResolved.referenceId === target.id &&
-      lastResolved.storagePath === target.storagePath &&
-      (lastResolved.url || lastResolved.inlineNotSupported)
-    ) {
-      if (lastResolved.inlineNotSupported) {
-        setReferenceViewerUrl(null);
-        setReferenceViewerError('Preview not available for this file type. Use "Open in new tab" to download.');
-      } else {
-        setReferenceViewerUrl(lastResolved.url);
-        setReferenceViewerError('');
-      }
-      setReferenceViewerLoading(false);
-      return;
-    }
-
-    let cancelled = false;
-    setReferenceViewerLoading(true);
-    setReferenceViewerError('');
-    setReferenceViewerUrl(null);
-    lastResolvedReferenceDocRef.current = {
-      referenceId: target.id,
-      storagePath: target.storagePath,
-      url: null,
-      inlineNotSupported: false,
-    };
-
-    if (!inlinePreviewAllowed) {
-      setReferenceViewerLoading(false);
-      setReferenceViewerUrl(null);
-      setReferenceViewerError('Preview not available for this file type. Use "Open in new tab" to download.');
-      lastResolvedReferenceDocRef.current = {
-        referenceId: target.id,
-        storagePath: target.storagePath,
-        url: null,
-        inlineNotSupported: true,
-      };
-      return () => {
-        cancelled = true;
-      };
-    }
-
-    getDownloadURL(storageRef(storage, target.storagePath))
-      .then((url) => {
-        if (cancelled) return;
-        setReferenceViewerUrl(url);
-        setReferenceViewerError('');
-        lastResolvedReferenceDocRef.current = {
-          referenceId: target.id,
-          storagePath: target.storagePath,
-          url,
-          inlineNotSupported: false,
-        };
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        console.error('Error loading reference document:', error);
-        const message =
-          error?.code === 'storage/object-not-found'
-            ? 'Reference document is missing from storage.'
-            : 'Unable to load reference document.';
-        setReferenceViewerUrl(null);
-        setReferenceViewerError(message);
-        lastResolvedReferenceDocRef.current = {
-          referenceId: target.id,
-          storagePath: target.storagePath,
-          url: null,
-          inlineNotSupported: false,
-        };
-      })
-      .finally(() => {
-        if (cancelled) return;
-        setReferenceViewerLoading(false);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [viewerEnabled, referenceDocuments, activeReferenceId]);
 
   useEffect(() => {
     if (!viewerEnabled || evidenceSource.length === 0 || !activeEvidenceId) {
@@ -1199,89 +1019,86 @@ export default function TraineeCaseViewPage({ params }) {
     </div>
   );
 
-  const renderReferenceDocumentsPanel = () => {
-    const activeDoc = referenceDocuments.find((doc) => doc.id === activeReferenceId) || null;
+  const triggerFileDownload = async (url, filename) => {
+    const safeName = filename || 'reference-document';
+    const hasFetch = typeof fetch === 'function';
+    const canStream = typeof window !== 'undefined' && window.URL && typeof window.URL.createObjectURL === 'function';
+
+    if (!hasFetch || !canStream) {
+      window.open(url, '_blank', 'noopener');
+      return;
+    }
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error('Unable to retrieve file contents.');
+    }
+    const blob = await response.blob();
+    const blobUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = safeName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => window.URL.revokeObjectURL(blobUrl), 2000);
+  };
+
+  const handleDownloadReferenceDoc = async (doc) => {
+    if (!doc) return;
+    const displayName = (doc.fileName || 'reference-document').trim() || 'reference-document';
+    try {
+      setDownloadingReferenceId(doc.id);
+      let url = (doc.downloadURL || '').trim();
+      if (!url) {
+        if (!doc.storagePath) {
+          throw new Error('Reference document is missing a download link.');
+        }
+        url = await getDownloadURL(storageRef(storage, doc.storagePath));
+      }
+      await triggerFileDownload(url, displayName);
+    } catch (error) {
+      console.error('Error downloading reference document:', error);
+      const message = error?.message || 'Unable to download reference document at this time.';
+      showModal(message, 'Download Error');
+    } finally {
+      setDownloadingReferenceId(null);
+    }
+  };
+
+  const renderReferenceDownloadsBanner = () => {
+    if (referenceDocuments.length === 0) {
+      return (
+        <div className="bg-gray-50 border border-gray-200 text-gray-700 rounded-lg px-4 py-3">
+          Reference materials will appear here when provided by your instructor.
+        </div>
+      );
+    }
 
     return (
-      <div className="bg-white border border-gray-200 rounded-lg shadow-sm flex flex-col min-h-[480px]">
-        <div className="border-b border-gray-200 px-4 py-3 flex items-center justify-between">
+      <div className="bg-indigo-50 border border-indigo-200 text-indigo-900 rounded-lg px-4 py-3 space-y-3">
+        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
           <div>
-            <h2 className="text-lg font-semibold text-gray-800">Reference Documents</h2>
-            <p className="text-xs text-gray-500">
-              {referenceDocuments.length === 0
-                ? 'Admin has not linked reference materials for this case yet.'
-                : 'Use these schedules and reports to support your classification decisions.'}
+            <h3 className="text-sm font-semibold uppercase tracking-wide">Reference Materials</h3>
+            <p className="text-xs sm:text-sm text-indigo-800">
+              Download the necessary reference documents before you begin classifying results.
             </p>
           </div>
-          {viewerEnabled && activeDoc ? (
-            <Button
-              variant="secondary"
-              className="text-xs px-3 py-1"
-              onClick={() =>
-                handleViewDocument({
-                  fileName: activeDoc.fileName,
-                  storagePath: activeDoc.storagePath,
-                  downloadURL: activeDoc.downloadURL,
-                })
-              }
-            >
-              <ExternalLink size={14} className="inline mr-1" /> Open in new tab
-            </Button>
-          ) : null}
-        </div>
-        <div className="flex-1 grid grid-rows-[auto,1fr]">
-          <div className="max-h-48 overflow-y-auto divide-y divide-gray-100">
-            {referenceDocuments.length === 0 ? (
-              <p className="px-4 py-6 text-sm text-gray-500">No reference documents have been shared for this case.</p>
-            ) : (
-              referenceDocuments.map((doc) => {
-                const isActive = doc.id === activeReferenceId;
-                return (
-                  <button
-                    key={doc.id}
-                    type="button"
-                    onClick={() => setActiveReferenceId(doc.id)}
-                    className={`w-full text-left px-4 py-3 focus:outline-none transition-colors ${
-                      isActive ? 'bg-blue-50 border-l-4 border-blue-500' : 'hover:bg-gray-50'
-                    }`}
-                  >
-                    <p className={`text-sm font-semibold ${isActive ? 'text-blue-700' : 'text-gray-800'}`}>{doc.fileName}</p>
-                    {doc.storagePath ? (
-                      <p className="text-[11px] text-gray-500 truncate mt-1">Storage: {doc.storagePath}</p>
-                    ) : doc.downloadURL ? (
-                      <p className="text-[11px] text-gray-500 truncate mt-1">Direct download link provided</p>
-                    ) : null}
-                  </button>
-                );
-              })
-            )}
-          </div>
-          <div className="border-t border-gray-200 bg-gray-100 flex items-center justify-center px-4 py-4">
-            {!viewerEnabled || referenceDocuments.length === 0 || !activeDoc ? (
-              <p className="text-sm text-gray-500 text-center">
-                {referenceDocuments.length === 0
-                  ? 'Reference materials will appear here when provided.'
-                  : 'Select a reference document to preview it.'}
-              </p>
-            ) : referenceViewerLoading ? (
-              <div className="flex flex-col items-center text-gray-500">
-                <Loader2 size={32} className="animate-spin mb-2" />
-                <p className="text-sm">Loading reference…</p>
-              </div>
-            ) : referenceViewerError ? (
-              <div className="max-w-sm text-center px-6 py-4 text-sm text-amber-700 bg-amber-100 border border-amber-200 rounded-md">
-                {referenceViewerError}
-              </div>
-            ) : referenceViewerUrl ? (
-              <iframe
-                title="Reference document"
-                src={referenceViewerUrl}
-                className="w-full h-64 rounded-md"
-                style={{ minHeight: '320px' }}
-              />
-            ) : (
-              <p className="text-sm text-gray-500 text-center">Select a reference document to preview it.</p>
-            )}
+          <div className="flex flex-wrap gap-2">
+            {referenceDocuments.map((doc) => (
+              <Button
+                key={doc.id}
+                variant="secondary"
+                className="text-xs px-3 py-1 bg-white text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
+                onClick={() => handleDownloadReferenceDoc(doc)}
+                isLoading={downloadingReferenceId === doc.id}
+                disabled={downloadingReferenceId && downloadingReferenceId !== doc.id}
+                title={doc.fileName}
+              >
+                <Download size={14} className="inline mr-1" />
+                <span className="max-w-[160px] truncate inline-block align-middle">{doc.fileName || 'Reference'}</span>
+              </Button>
+            ))}
           </div>
         </div>
       </div>
@@ -1387,10 +1204,10 @@ export default function TraineeCaseViewPage({ params }) {
           </div>
         ) : (
           <>
-            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+            {renderReferenceDownloadsBanner()}
+            <div className="grid gap-6 md:grid-cols-2">
               {renderEvidenceList(selectedEvidenceItems)}
               {renderEvidenceViewer(selectedEvidenceItems)}
-              {renderReferenceDocumentsPanel()}
             </div>
 
             <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
