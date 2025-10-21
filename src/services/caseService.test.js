@@ -11,7 +11,12 @@ jest.mock('firebase/firestore', () => ({
   query: jest.fn(),
   onSnapshot: jest.fn(),
   where: jest.fn(),
-  Timestamp: { now: jest.fn(() => 'now') }
+  serverTimestamp: jest.fn(() => 'serverTimestamp'),
+  Timestamp: { now: jest.fn(() => 'now'), fromDate: jest.fn() },
+  writeBatch: jest.fn(() => ({
+    set: jest.fn(),
+    commit: jest.fn(),
+  })),
 }));
 
 jest.mock('../AppCore', () => ({
@@ -30,7 +35,15 @@ describe('caseService', () => {
     getDoc.mockResolvedValue({ exists: () => true, id: '1', data: () => ({ a: 1 }) });
     const result = await fetchCase('1');
     expect(doc).toHaveBeenCalledWith({}, 'cases/1');
-    expect(result).toEqual({ id: '1', a: 1 });
+    expect(result).toMatchObject({
+      id: '1',
+      a: 1,
+      title: '',
+      caseName: '',
+      publicVisible: true,
+      visibleToUserIds: [],
+      referenceDocuments: [],
+    });
   });
 
   test('markCaseDeleted calls setDoc', async () => {

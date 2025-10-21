@@ -22,6 +22,7 @@ jest.mock('../AppCore', () => ({
 describe('userService', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    doc.mockImplementation((...args) => ({ __key: args.join('/') }));
   });
 
   test('fetchUsersWithProfiles returns list', async () => {
@@ -43,9 +44,16 @@ describe('userService', () => {
     expect(result2).toBeNull();
   });
 
-  test('setUserRole calls setDoc', async () => {
+  test('setUserRole writes when role differs', async () => {
+    getDoc.mockResolvedValueOnce({ exists: () => true, data: () => ({ role: 'trainee' }) });
     await setUserRole('u1', 'admin');
-    expect(setDoc).toHaveBeenCalled();
+    expect(setDoc).toHaveBeenCalledWith(expect.anything(), { role: 'admin' }, { merge: true });
+  });
+
+  test('setUserRole skips when role unchanged', async () => {
+    getDoc.mockResolvedValueOnce({ exists: () => true, data: () => ({ role: 'admin' }) });
+    await setUserRole('u2', 'admin');
+    expect(setDoc).not.toHaveBeenCalled();
   });
 
   test('upsertUserProfile calls setDoc', async () => {

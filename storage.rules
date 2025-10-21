@@ -1,45 +1,93 @@
 rules_version = '2';
-
-// Cloud Storage rules for AuditSim Pro
-// Uses Firestore role documents to enforce RBAC
 service firebase.storage {
   match /b/{bucket}/o {
 
-    // Check user role from custom claims or fallback role document
-    function getRole() {
-      return get(/databases/$(database)/documents/roles/$(request.auth.uid)).data.role;
-    }
-    function isAdmin() {
-      return request.auth != null &&
-             (request.auth.token.role == 'admin' || getRole() == 'admin');
-    }
-    function isTrainee() {
-      return request.auth != null &&
-             (request.auth.token.role == 'trainee' || getRole() == 'trainee');
+    // ---------- Role helpers ----------
+    // Global roles/{uid} doc
+    function isAdminRole(roleValue) {
+      return roleValue is string && roleValue.matches('(?i)^admin$');
     }
 
-    // Verifies the trainee has access to the specified case by checking the Firestore case document
-    // This requires a read from Firestore, which is allowed for 'get' operations in Storage rules.
-    function traineeHasAccessToCase(appId, caseId) {
-      let caseDoc = get(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId));
-      return caseDoc.exists() && (
-        !(caseDoc.data.visibleToUserIds is list) ||
-        caseDoc.data.visibleToUserIds.size() == 0 ||
-        request.auth.uid in caseDoc.data.visibleToUserIds
+    function hasGlobalAdminRole() {
+      return request.auth != null && (
+        isAdminRole(request.auth.token.role) ||
+        (
+          firestore.exists(/databases/(default)/documents/roles/$(request.auth.uid)) &&
+          isAdminRole(firestore.get(/databases/(default)/documents/roles/$(request.auth.uid)).data.role)
+        )
       );
     }
 
-    // PDF documents attached to a case
-    match /artifacts/{appId}/case_documents/{caseId}/{fileName} {
-      allow read: if request.auth != null &&
-                   (
-                     isAdmin() || // Admins can read all case documents
-                     (isTrainee() && traineeHasAccessToCase(appId, caseId)) // Trainees can read if authorized
-                   );
+    function isAdmin(appId) {
+      return hasGlobalAdminRole();
+    }
 
-      allow write: if request.auth != null && isAdmin() && // Only admins can write case documents
-                      request.resource.contentType.matches('application/pdf') &&
-                      request.resource.size < 5 * 1024 * 1024;
+    // ---------- Trainee visibility helper ----------
+    // artifacts/{appId}/public/data/cases/{caseId} with visibleToUserIds (list)
+    function traineeHasAccessToCase(appId, caseId) {
+      return request.auth != null &&
+             firestore.exists(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)) &&
+             (
+               // Public case
+               firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.publicVisible == true ||
+               // Backward compatibility: if no roster, treat non-false publicVisible as accessible
+               (
+                 (
+                   !(firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds is list) ||
+                   firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds.size() == 0
+                 ) &&
+                 firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.publicVisible != false
+               ) ||
+               // Rostered access
+               (
+                 (firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds is list) &&
+                 firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds.hasAny([request.auth.uid])
+               )
+             );
+    }
+
+    function hasAllowedExtension() {
+      return request.resource != null &&
+             request.resource.name.matches('(?i).*(\\.(pdf|csv|xls|xlsx|xlsm))$');
+    }
+
+    function hasAllowedContentType() {
+      return request.resource != null && (
+        request.resource.contentType == 'application/pdf' ||
+        request.resource.contentType == 'application/x-pdf' ||
+        request.resource.contentType == 'text/csv' ||
+        request.resource.contentType == 'application/csv' ||
+        request.resource.contentType == 'application/vnd.ms-excel' ||
+        request.resource.contentType == 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' ||
+        request.resource.contentType == 'application/vnd.ms-excel.sheet.macroenabled.12'
+      );
+    }
+
+    function isAllowedArtifactUpload() {
+      return request.resource != null
+        && request.resource.size <= 25 * 1024 * 1024
+        && (hasAllowedContentType() || hasAllowedExtension());
+    }
+
+    // ---------- Case document rules ----------
+    // Accept any nested object names under a case
+    match /artifacts/{appId}/case_documents/{caseId}/{file=**} {
+
+      // Admin-only writes; limited to supported formats; <= 25 MB
+      allow create, update: if isAdmin(appId) && isAllowedArtifactUpload();
+
+      // Reads: admins OR trainees who can see the case
+      allow get, list: if isAdmin(appId) || traineeHasAccessToCase(appId, caseId);
+
+      // Deletes: admins only
+      allow delete: if isAdmin(appId);
+    }
+
+    // ---------- Reference document rules ----------
+    match /artifacts/{appId}/case_reference/{caseId}/{file=**} {
+      allow create, update: if isAdmin(appId) && isAllowedArtifactUpload();
+      allow get, list: if isAdmin(appId) || traineeHasAccessToCase(appId, caseId);
+      allow delete: if isAdmin(appId);
     }
   }
 }

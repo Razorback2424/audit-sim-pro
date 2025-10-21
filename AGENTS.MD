@@ -56,7 +56,7 @@ npm test
 	•	Use @testing-library/react for UI/component tests.
 	•	Place all test files alongside the code as *.test.js[x].
 	•	Do not commit code with failing or skipped tests.
-	•	If linter is added in future, ensure all lint checks pass before PR.
+	•	Ensure all lint checks pass before PR.
 
 ⸻
 

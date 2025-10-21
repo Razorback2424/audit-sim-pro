@@ -1,13 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { FilePlus, Users2, Edit3, ListFilter, Trash2 } from 'lucide-react';
+import { FilePlus, Users2, Edit3, ListFilter, Trash2, Wrench } from 'lucide-react';
 import { Button, useRoute, useModal } from '../AppCore';
-import { subscribeToCases, markCaseDeleted } from '../services/caseService';
+import { subscribeToCases, markCaseDeleted, repairLegacyCases } from '../services/caseService';
 
 export default function AdminDashboardPage() {
   const { navigate } = useRoute();
   const { showModal } = useModal();
   const [cases, setCases] = useState([]);
   const [loadingCases, setLoadingCases] = useState(true);
+  const [repairingCases, setRepairingCases] = useState(false);
 
   useEffect(() => {
     const unsubscribe = subscribeToCases(
@@ -23,6 +24,21 @@ export default function AdminDashboardPage() {
     );
     return () => unsubscribe();
   }, [showModal]);
+
+  const handleRepairCases = async () => {
+    if (repairingCases) return;
+    try {
+      setRepairingCases(true);
+      const { repaired } = await repairLegacyCases();
+      const message = repaired > 0 ? `${repaired} case${repaired === 1 ? '' : 's'} repaired.` : 'All cases already meet the required defaults.';
+      showModal(message, 'Repair Complete');
+    } catch (error) {
+      console.error('Error repairing cases:', error);
+      showModal(error?.message || 'Unable to repair cases. Please try again.', 'Error');
+    } finally {
+      setRepairingCases(false);
+    }
+  };
 
   const deleteCase = async (caseId) => {
     showModal(
@@ -65,6 +81,12 @@ export default function AdminDashboardPage() {
             <Button onClick={() => navigate('/admin/user-management')}>
               <Users2 size={20} className="inline mr-2" /> User Management
             </Button>
+            <Button onClick={() => navigate('/admin/case-data-audit')}>
+              <ListFilter size={20} className="inline mr-2" /> Data Audit
+            </Button>
+            <Button onClick={handleRepairCases} disabled={repairingCases} isLoading={repairingCases}>
+              <Wrench size={20} className="inline mr-2" /> Repair Cases
+            </Button>
             <Button onClick={() => navigate('/admin/create-case')}>
               <FilePlus size={20} className="inline mr-2" /> Create New Case
             </Button>
@@ -86,7 +108,13 @@ export default function AdminDashboardPage() {
                     <p className="text-sm text-gray-500">ID: {caseData.id}</p>
                     <p className="text-sm text-gray-500">Disbursements: {caseData.disbursements?.length || 0}</p>
                     <p className="text-sm text-gray-500">Mappings: {caseData.invoiceMappings?.length || 0}</p>
-                    <p className="text-sm text-gray-500">Visible to: {caseData.visibleToUserIds && caseData.visibleToUserIds.length > 0 ? `${caseData.visibleToUserIds.length} user(s)` : 'All Users'}</p>
+                    <p className="text-sm text-gray-500">
+                      Audience:{' '}
+                      {caseData.publicVisible === false && Array.isArray(caseData.visibleToUserIds) && caseData.visibleToUserIds.length > 0
+                        ? `${caseData.visibleToUserIds.length} rostered user(s)`
+                        : 'All signed-in trainees'}
+                    </p>
+                    <p className="text-sm text-gray-500">Status: {caseData.status || 'assigned'}</p>
                   </div>
                   <div className="flex flex-col space-y-2 items-end">
                     <Button onClick={() => navigate(`/admin/case-overview/${caseData.id}`)} variant="secondary" className="px-3 py-1 text-sm w-full">

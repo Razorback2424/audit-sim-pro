@@ -1,7 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Button, useRoute, useModal } from '../AppCore';
 import { fetchCase } from '../services/caseService';
 import { fetchSubmission } from '../services/submissionService';
+
+const CLASSIFICATION_FIELDS = [
+  { key: 'properlyIncluded', label: 'Properly Included' },
+  { key: 'properlyExcluded', label: 'Properly Excluded' },
+  { key: 'improperlyIncluded', label: 'Improperly Included' },
+  { key: 'improperlyExcluded', label: 'Improperly Excluded' },
+];
 
 export default function AdminSubmissionDetailPage({ params }) {
   const { caseId, userId } = params;
@@ -10,6 +17,7 @@ export default function AdminSubmissionDetailPage({ params }) {
   const [caseName, setCaseName] = useState('');
   const [submission, setSubmission] = useState(null);
   const [loading, setLoading] = useState(true);
+  const currency = useMemo(() => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }), []);
 
   useEffect(() => {
     if (!caseId || !userId) {
@@ -79,14 +87,47 @@ export default function AdminSubmissionDetailPage({ params }) {
               <p className="text-sm font-medium text-gray-600">Selections &amp; Classifications:</p>
               {attempt.selectedPaymentIds && attempt.selectedPaymentIds.length > 0 ? (
                 <ul className="list-disc list-inside text-sm text-gray-700">
-                  {attempt.selectedPaymentIds.map((pid) => (
-                    <li key={pid} className="break-all">
-                      {pid}
-                      {attempt.disbursementClassifications && attempt.disbursementClassifications[pid]
-                        ? ` — ${attempt.disbursementClassifications[pid]}`
-                        : ''}
-                    </li>
-                  ))}
+                  {attempt.selectedPaymentIds.map((pid) => {
+                    const traineeAnswer =
+                      attempt.disbursementClassifications && attempt.disbursementClassifications[pid]
+                        ? attempt.disbursementClassifications[pid]
+                        : null;
+                    const expectedAnswer =
+                      attempt.expectedClassifications && attempt.expectedClassifications[pid]
+                        ? attempt.expectedClassifications[pid]
+                        : null;
+                    return (
+                      <li key={pid} className="break-all">
+                        {pid}
+                        {expectedAnswer ? ` (expected: ${expectedAnswer})` : ''}
+                        {traineeAnswer && typeof traineeAnswer === 'object' ? (
+                          <div className="mt-2 ml-4 border border-gray-200 rounded-md overflow-hidden">
+                            <table className="min-w-[280px] text-xs text-left text-gray-700">
+                              <thead className="bg-gray-100">
+                                <tr>
+                                  {CLASSIFICATION_FIELDS.map(({ label }) => (
+                                    <th key={label} className="px-2 py-1 font-semibold text-gray-600">
+                                      {label}
+                                    </th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                <tr>
+                                  {CLASSIFICATION_FIELDS.map(({ key, label }) => (
+                                    <td key={label} className="px-2 py-1">
+                                      {currency.format(Number(traineeAnswer[key] || 0))}
+                                    </td>
+                                  ))}
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : null}
+                        {traineeAnswer && typeof traineeAnswer !== 'object' ? ` — ${traineeAnswer}` : ''}
+                      </li>
+                    );
+                  })}
                 </ul>
               ) : (
                 <p className="text-sm text-gray-500">None</p>

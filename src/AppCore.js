@@ -2,20 +2,25 @@ import React, { useState, useEffect, createContext, useContext, useCallback } fr
 import { initializeApp } from 'firebase/app';
 import {
   getAuth,
-  signInAnonymously,
   onAuthStateChanged,
-  signInWithCustomToken
+  signInWithCustomToken,
+  setPersistence,
+  browserLocalPersistence,
+  signInWithEmailAndPassword,
+  signOut
 } from 'firebase/auth';
 import {
   getFirestore,
   serverTimestamp,
   doc,
-  getDoc
+  getDoc,
+  setDoc,
+  onSnapshot
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage'; // << MOVED IMPORT TO TOP
 import { XCircle, Loader2 } from 'lucide-react'; // << MOVED IMPORT TO TOP
-import { cacheRole } from './services/roleService';
-import { fetchUserProfile, setUserRole, upsertUserProfile } from './services/userService';
+import { cacheRole, getCachedRole, clearRoleCache } from './services/roleService';
+import { fetchUserProfile, upsertUserProfile } from './services/userService';
 
 /* global __firebase_config, __app_id, __initial_auth_token */
 
@@ -65,7 +70,45 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : window.__app_id;
 const firebaseApp = initializeApp(firebaseConfig);
 const auth = getAuth(firebaseApp);
 const db = getFirestore(firebaseApp);
-const storage = getStorage(firebaseApp); // Initialize storage
+
+const resolveStorageBucketUrl = (rawBucket) => {
+  if (!rawBucket || typeof rawBucket !== 'string') return null;
+  const trimmed = rawBucket.trim();
+  if (!trimmed) return null;
+  if (/^gs:\/\//i.test(trimmed) || /^https?:\/\//i.test(trimmed)) return trimmed;
+  if (/\.firebasestorage\.app$/i.test(trimmed)) {
+    console.info('[storage] Normalizing firebasestorage.app name');
+    return `gs://${trimmed}`;
+  }
+  return `gs://${trimmed}`;
+};
+
+const storageBucketRaw =
+  process.env.REACT_APP_STORAGE_BUCKET_URL ??
+  process.env.REACT_APP_STORAGE_BUCKET ??
+  firebaseConfig.storageBucket;
+const storageBucketUrl = resolveStorageBucketUrl(storageBucketRaw);
+
+if (!storageBucketUrl && !firebaseConfig.storageBucket) {
+  console.warn(
+    'Firebase storage bucket not defined; falling back to default bucket binding.'
+  );
+}
+
+const storage = storageBucketUrl
+  ? getStorage(firebaseApp, storageBucketUrl)
+  : getStorage(firebaseApp); // Explicitly bind storage to the configured bucket if available
+
+try {
+  const configuredBucket = firebaseApp?.options?.storageBucket;
+  if (configuredBucket) {
+    console.info('[storage] Firebase config bucket:', configuredBucket);
+  }
+  const boundBucket = storageBucketUrl || storage.bucket;
+  console.info('[storage] Bound to bucket:', boundBucket || '(default)');
+} catch (e) {
+  console.warn('[storage] Unable to determine bound bucket', e);
+}
 
 // ---------- Firestore Paths ----------
 const FirestorePaths = {
@@ -75,13 +118,35 @@ const FirestorePaths = {
   USERS_COLLECTION: () => `artifacts/${appId}/users`,
   USER_CASE_SUBMISSION: (userId, caseId) => `artifacts/${appId}/users/${userId}/caseSubmissions/${caseId}`,
   ROLE_DOCUMENT: (userId) => `roles/${userId}`,
+  STUDENT_PROGRESS_COLLECTION: (appId, uid) => `artifacts/${appId}/student_progress/${uid}/cases`,
   // Add any other paths here as needed for your project
+};
+
+const ROLE_PRIORITY = {
+  trainee: 1,
+  admin: 2,
+};
+
+const normalizeRoleValue = (value) => (typeof value === 'string' ? value.toLowerCase() : value);
+
+const shouldUpdateRoleDoc = (existingRole, incomingRole) => {
+  const normalizedExisting = normalizeRoleValue(existingRole);
+  const normalizedIncoming = normalizeRoleValue(incomingRole);
+  if (!normalizedIncoming) return false;
+  if (!normalizedExisting) return true;
+  if (normalizedExisting === normalizedIncoming) return false;
+  const existingRank = ROLE_PRIORITY[normalizedExisting] ?? 0;
+  const incomingRank = ROLE_PRIORITY[normalizedIncoming] ?? 0;
+  return incomingRank >= existingRank;
 };
 
 // ---------- Constants ----------
 const CLASSIFICATION_OPTIONS = [
   { value: '', label: 'Select Classification…', disabled: true },
-  { value: "Properly Included", label: "Properly Included" },
+  { value: 'Properly Included', label: 'Properly Included' },
+  { value: 'Properly Excluded', label: 'Properly Excluded' },
+  { value: 'Improperly Included', label: 'Improperly Included' },
+  { value: 'Improperly Excluded', label: 'Improperly Excluded' },
 ];
 
 
@@ -210,8 +275,9 @@ const useRoute = () => {
 // ---------- Authentication Context ----------
 const AuthContext = createContext(null);
 
+// Guest sign-in is disabled to ensure a stable UID across sessions.
 let signInAsGuest = async () => {
-  throw new Error('AuthProvider not mounted');
+  throw new Error('Guest sign-in is disabled. Please log in with email/password.');
 };
 
 const AuthProvider = ({ children }) => {
@@ -223,13 +289,19 @@ const AuthProvider = ({ children }) => {
     setLoadingAuth(true); // Set loading true at the start of the effect
 
     const attemptInitialAuth = async () => {
+      // Ensure session persistence is LOCAL so the same UID is reused across reloads
+      try {
+        await setPersistence(auth, browserLocalPersistence);
+      } catch (e) {
+        console.warn('[AuthProvider] Failed to set auth persistence (will fall back to default):', e);
+      }
       const tokenToUse = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : window.__initial_auth_token;
 
       if (tokenToUse) {
         try {
           await signInWithCustomToken(auth, tokenToUse);
         } catch (customTokenError) {
-          console.error('Custom token sign-in error:', customTokenError);
+          console.error('[AuthProvider] Custom token sign-in error:', customTokenError);
           // If custom token fails we'll fall back to Firebase session restoration
         }
       }
@@ -239,8 +311,21 @@ const AuthProvider = ({ children }) => {
     attemptInitialAuth(); // Call the initial auth attempt
 
     const unsubscribe = onAuthStateChanged(auth, (user) => {
+      console.info('[AuthProvider] onAuthStateChanged', {
+        uid: user?.uid ?? null,
+        isAnonymous: user?.isAnonymous ?? null,
+      });
+      // If a legacy anonymous session is restored, clear it so we require real login
+      if (user && user.isAnonymous) {
+        try { signOut(auth); } catch {}
+        setCurrentUser(null);
+        setLoadingAuth(false);
+        return;
+      }
       setCurrentUser(user);
       setLoadingAuth(false);
+      console.info('[AuthProvider] auth state resolved', { loadingAuth: false, uid: user?.uid ?? null });
+      clearRoleCache(user?.uid);
     });
 
     return () => unsubscribe();
@@ -249,7 +334,7 @@ const AuthProvider = ({ children }) => {
 
   const logout = async () => {
     try {
-      await auth.signOut();
+      await signOut(auth);
       // onAuthStateChanged will handle setting currentUser and userProfile to null
     } catch (err) {
       console.error('Logout error:', err);
@@ -257,20 +342,18 @@ const AuthProvider = ({ children }) => {
     }
   };
 
-  const signInAsGuestInternal = async () => {
+
+  const login = async (email, password) => {
     try {
-      setLoadingAuth(true);
-      const cred = await signInAnonymously(auth);
+      await setPersistence(auth, browserLocalPersistence);
+      const cred = await signInWithEmailAndPassword(auth, email, password);
       return cred.user;
     } catch (err) {
-      console.error('Anonymous sign-in error:', err);
-      if (showModal) showModal(`Failed to sign in anonymously: ${err.message} (Code: ${err.code})`, 'Authentication Error');
-      setLoadingAuth(false);
+      console.error('Email/password sign-in error:', err);
+      if (showModal) showModal(`Failed to sign in: ${err.message} (Code: ${err.code})`, 'Authentication Error');
       throw err;
     }
   };
-
-  signInAsGuest = signInAsGuestInternal;
 
   return (
     <AuthContext.Provider
@@ -278,8 +361,9 @@ const AuthProvider = ({ children }) => {
         currentUser,
         loadingAuth,
         userId: currentUser ? currentUser.uid : null,
-        signInAsGuest,
+        login,
         logout,
+        signInAsGuest,
       }}
     >
       {children}
@@ -305,39 +389,161 @@ const UserProvider = ({ children }) => {
 
   useEffect(() => {
     let active = true;
+    let unsubscribeRole = null;
+
     const load = async () => {
-      if (!currentUser) {
-        if (active) { setRoleState(null); setUserProfile(null); setLoadingRole(false); }
+      if (!currentUser || !currentUser.uid) {
+        if (active) {
+          setRoleState(null);
+          setUserProfile(null);
+          setLoadingRole(false);
+          console.info('[UserProvider] No authenticated user; role reset.');
+        }
         return;
       }
+
       setLoadingRole(true);
-      try {
-        // Get the latest ID token result to ensure custom claims are up-to-date
-        const idTokenResult = await currentUser.getIdTokenResult(true);
-        const r = idTokenResult.claims.role;
-        // Cache the role locally for immediate use, though custom claims are primary source for rules
-        cacheRole(currentUser.uid, r);
-        if (active) setRoleState(r);
-      } catch (e) {
-        if (active) setRoleState(null);
-      } finally {
-        if (active) setLoadingRole(false);
+      const cachedRole = getCachedRole(currentUser.uid);
+      if (cachedRole) {
+        setRoleState(cachedRole);
+        console.info('[UserProvider] Using cached role for initial render', { cachedRole });
       }
+
+      let claimRole = cachedRole;
+
+      try {
+        const idTokenResult = await currentUser.getIdTokenResult(true);
+        claimRole = idTokenResult.claims.role ?? null;
+        console.info('[UserProvider] Retrieved token role', { claimRole });
+        if (claimRole) {
+          cacheRole(currentUser.uid, claimRole);
+        }
+      } catch (e) {
+        console.warn('[UserProvider] Failed to refresh ID token role claim:', e);
+      }
+
+      try {
+        const roleRef = doc(db, FirestorePaths.ROLE_DOCUMENT(currentUser.uid));
+        unsubscribeRole = onSnapshot(
+          roleRef,
+          (snapshot) => {
+            if (!active) return;
+            const docRole = snapshot.exists() ? snapshot.data()?.role ?? null : null;
+            const nextRole = docRole ?? claimRole ?? null;
+            const normalizedRole = typeof nextRole === 'string' ? nextRole.toLowerCase() : nextRole;
+            console.info('[UserProvider] Role snapshot update', { docRole, claimRole, normalizedRole });
+            setRoleState(normalizedRole);
+            if (normalizedRole) cacheRole(currentUser.uid, normalizedRole);
+            setLoadingRole(false);
+          },
+          (error) => {
+            if (!active) return;
+            console.error('[UserProvider] Role snapshot error:', error);
+            const fallbackRole = claimRole ?? null;
+            const normalizedRole = typeof fallbackRole === 'string' ? fallbackRole.toLowerCase() : fallbackRole;
+            setRoleState(normalizedRole);
+            if (normalizedRole) cacheRole(currentUser.uid, normalizedRole);
+            setLoadingRole(false);
+            console.info('[UserProvider] Role snapshot error fallback', { claimRole, normalizedRole });
+          }
+        );
+      } catch (err) {
+        if (active) {
+          console.error('[UserProvider] Failed to subscribe to role document:', err);
+          const fallbackRole = claimRole ?? null;
+          const normalizedRole = typeof fallbackRole === 'string' ? fallbackRole.toLowerCase() : fallbackRole;
+          setRoleState(normalizedRole);
+          if (normalizedRole) cacheRole(currentUser.uid, normalizedRole);
+          setLoadingRole(false);
+          console.info('[UserProvider] Subscribe failure fallback', { claimRole, normalizedRole });
+        }
+      }
+
       try {
         const profile = await fetchUserProfile(currentUser.uid);
         if (active) {
           setUserProfile(profile ? { uid: currentUser.uid, ...profile } : null);
+          console.info('[UserProvider] Loaded profile', { hasProfile: !!profile, profileRole: profile?.role ?? null });
         }
       } catch (err) {
-        console.error('Profile fetch error:', err);
+        console.error('[UserProvider] Profile fetch error:', err);
         if (active) setUserProfile(null);
       }
     };
+
     load();
-    return () => { active = false; };
+
+    return () => {
+      active = false;
+      if (unsubscribeRole) {
+        unsubscribeRole();
+      }
+    };
   }, [currentUser]);
 
+  const profileRole = userProfile?.role;
+  // --- Ensure Storage rules can see the role in roles/{uid} (self-healing) ---
+  useEffect(() => {
+    let cancelled = false;
+
+    const mirrorProfileRole = async () => {
+      if (!currentUser || !currentUser.uid || !profileRole) return;
+
+      try {
+        const roleRef = doc(db, 'roles', currentUser.uid);
+        const roleSnap = await getDoc(roleRef);
+        if (cancelled) return;
+
+        const existingRole = roleSnap.exists() ? roleSnap.data()?.role ?? null : null;
+        if (shouldUpdateRoleDoc(existingRole, profileRole)) {
+          await setDoc(roleRef, { role: profileRole }, { merge: true });
+        }
+      } catch (e) {
+        if (!cancelled) {
+          console.warn('Mirror role to roles/{uid} skipped:', e);
+        }
+      }
+    };
+
+    mirrorProfileRole();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser, profileRole]);
+
+  // --- Also mirror from in-memory role (custom claim) in case profile hasn't loaded ---
+  useEffect(() => {
+    let cancelled = false;
+
+    const mirrorRoleState = async () => {
+      if (!currentUser || !currentUser.uid || !role) return;
+
+      try {
+        const roleRef = doc(db, 'roles', currentUser.uid);
+        const roleSnap = await getDoc(roleRef);
+        if (cancelled) return;
+
+        const existingRole = roleSnap.exists() ? roleSnap.data()?.role ?? null : null;
+        if (shouldUpdateRoleDoc(existingRole, role)) {
+          await setDoc(roleRef, { role }, { merge: true });
+        }
+      } catch (e) {
+        if (!cancelled) {
+          console.warn('Mirror role (from state) effect error:', e);
+        }
+      }
+    };
+
+    mirrorRoleState();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentUser, role]);
+
   const setRole = async (newRole, userOverride = null) => {
+    const normalizedRole = typeof newRole === 'string' ? newRole.toLowerCase() : newRole;
     const user = userOverride || currentUser;
     if (!user) {
       if (showModal) showModal('Cannot set role: not signed in.', 'Authentication Error');
@@ -349,13 +555,13 @@ const UserProvider = ({ children }) => {
       const roleRef = doc(db, FirestorePaths.ROLE_DOCUMENT(user.uid));
       const roleSnap = await getDoc(roleRef);
 
-      // Only attempt to write to the role document if it doesn't exist,
-      // or if the role is actually changing. The security rule will handle
-      // the admin check for updates.
-      if (!roleSnap.exists() || roleSnap.data().role !== newRole) {
-        await setUserRole(user.uid, newRole); // This will be a create or an update.
+        const existingRole = roleSnap.exists() ? roleSnap.data()?.role ?? null : null;
+
+      if (shouldUpdateRoleDoc(existingRole, normalizedRole)) {
+        await setDoc(roleRef, { role: normalizedRole }, { merge: true });
+        console.info('[UserProvider] Role document updated', { uid: user.uid, normalizedRole });
       } else {
-        console.log("Role document already exists with the correct role. Skipping write.");
+        console.info('[UserProvider] Role document already up-to-date', { uid: user.uid, existingRole, normalizedRole });
       }
 
       // The rest of the logic for profile update can proceed.
@@ -364,21 +570,21 @@ const UserProvider = ({ children }) => {
         const newProfile = {
           uid: user.uid,
           email: user.email ?? `anon-${user.uid}@example.com`,
-          role: newRole,
+          role: normalizedRole,
           createdAt: serverTimestamp(),
           lastUpdatedAt: serverTimestamp(),
         };
         await upsertUserProfile(user.uid, newProfile); // This is allowed by rules
         setUserProfile(newProfile);
       } else {
-        const update = { role: newRole, lastUpdatedAt: serverTimestamp() };
+        const update = { role: normalizedRole, lastUpdatedAt: serverTimestamp() };
         await upsertUserProfile(user.uid, update); // This is allowed by rules
         setUserProfile((prev) => ({ ...prev, ...update }));
       }
 
       // Update local state and refresh token
-      setRoleState(newRole);
-      cacheRole(user.uid, newRole);
+      setRoleState(normalizedRole);
+      cacheRole(user.uid, normalizedRole);
       await user.getIdToken(true); // Force refresh to get latest custom claims
       console.log("ID token refreshed after role set.");
     } catch (err) {
