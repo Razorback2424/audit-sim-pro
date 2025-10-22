@@ -154,15 +154,16 @@ const CLASSIFICATION_OPTIONS = [
 
 
 // ---------- Reusable UI Components ----------
-const Button = ({
+const Button = React.forwardRef(({
   onClick,
   children,
   variant = 'primary',
   className = '',
   type = 'button',
   disabled = false,
-  isLoading = false
-}) => {
+  isLoading = false,
+  ...props
+}, ref) => {
   const baseStyle =
     'px-4 py-2 rounded-md font-semibold focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-opacity-75 transition-colors duration-150 inline-flex items-center justify-center disabled:opacity-60 disabled:cursor-not-allowed';
   const variants = {
@@ -176,12 +177,15 @@ const Button = ({
       onClick={onClick}
       className={`${baseStyle} ${variants[variant] || variants.primary} ${className}`}
       disabled={disabled || isLoading}
+      ref={ref}
+      {...props}
     >
       {isLoading && <Loader2 size={18} className="animate-spin mr-2" />}
       {children}
     </button>
   );
-};
+});
+Button.displayName = 'Button';
 
 // Minimal Input component (Placeholder - replace with your styled component)
 const Input = React.forwardRef(({ className, ...props }, ref) => <input ref={ref} className={`w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 sm:text-sm ${className}`} {...props} />);

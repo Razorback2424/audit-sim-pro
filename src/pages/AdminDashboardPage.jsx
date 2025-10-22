@@ -1,14 +1,17 @@
 import React, { useEffect, useState } from 'react';
-import { FilePlus, Users2, Edit3, ListFilter, Trash2, Wrench } from 'lucide-react';
-import { Button, useRoute, useModal } from '../AppCore';
+import { FilePlus, Edit3, ListFilter, Trash2 } from 'lucide-react';
+import { Button, useRoute, useModal, useUser } from '../AppCore';
 import { subscribeToCases, markCaseDeleted, repairLegacyCases } from '../services/caseService';
+import AdvancedToolsMenu from '../components/admin/AdvancedToolsMenu';
 
 export default function AdminDashboardPage() {
   const { navigate } = useRoute();
   const { showModal } = useModal();
+  const { role, loadingRole } = useUser();
   const [cases, setCases] = useState([]);
   const [loadingCases, setLoadingCases] = useState(true);
   const [repairingCases, setRepairingCases] = useState(false);
+  const isAdmin = role === 'admin';
 
   useEffect(() => {
     const unsubscribe = subscribeToCases(
@@ -77,19 +80,23 @@ export default function AdminDashboardPage() {
       <div className="max-w-4xl mx-auto">
         <div className="flex justify-between items-center mb-8">
           <h1 className="text-3xl font-bold text-gray-800">Admin Dashboard</h1>
-          <div className="space-x-2">
-            <Button onClick={() => navigate('/admin/user-management')}>
-              <Users2 size={20} className="inline mr-2" /> User Management
+          <div className="flex items-center gap-3">
+            <Button
+              onClick={() => navigate('/admin/create-case')}
+              variant="primary"
+              className="px-6 py-3 text-base shadow-lg"
+            >
+              <FilePlus size={20} className="mr-2" />
+              Create case
             </Button>
-            <Button onClick={() => navigate('/admin/case-data-audit')}>
-              <ListFilter size={20} className="inline mr-2" /> Data Audit
-            </Button>
-            <Button onClick={handleRepairCases} disabled={repairingCases} isLoading={repairingCases}>
-              <Wrench size={20} className="inline mr-2" /> Repair Cases
-            </Button>
-            <Button onClick={() => navigate('/admin/create-case')}>
-              <FilePlus size={20} className="inline mr-2" /> Create New Case
-            </Button>
+            <AdvancedToolsMenu
+              canAccess={isAdmin}
+              loadingAccess={loadingRole}
+              onNavigateUserManagement={() => navigate('/admin/user-management')}
+              onNavigateDataAudit={() => navigate('/admin/case-data-audit')}
+              onRepairCases={handleRepairCases}
+              isRepairingCases={repairingCases}
+            />
           </div>
         </div>
         {cases.filter(c => !c._deleted).length === 0 ? (
