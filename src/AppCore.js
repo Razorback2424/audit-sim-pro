@@ -260,23 +260,139 @@ const ModalProvider = ({ children }) => {
 const useModal = () => useContext(ModalContext);
 
 // ---------- Router Context (Placeholder - replace with your full implementation) ----------
-const RouterContext = createContext({ route: '', navigate: () => {} });
+const RouterContext = createContext({ route: '/', path: '/', query: {}, navigate: () => {}, setQuery: () => {} });
+
+const ensureLeadingSlash = (path) => {
+  if (!path || typeof path !== 'string') return '/';
+  return path.startsWith('/') ? path : `/${path}`;
+};
+
+const parseQueryString = (searchString) => {
+  const params = new URLSearchParams(searchString || '');
+  const result = {};
+  params.forEach((value, key) => {
+    result[key] = value;
+  });
+  return result;
+};
+
+const sanitizeQueryObject = (query) => {
+  const sanitized = {};
+  Object.entries(query || {}).forEach(([key, value]) => {
+    if (value === undefined || value === null) return;
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (trimmed) sanitized[key] = trimmed;
+      return;
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      sanitized[key] = String(value);
+      return;
+    }
+    if (Array.isArray(value)) {
+      const joined = value
+        .map((item) => (item === undefined || item === null ? '' : String(item).trim()))
+        .filter(Boolean)
+        .join(',');
+      if (joined) sanitized[key] = joined;
+      return;
+    }
+    const stringified = String(value).trim();
+    if (stringified) sanitized[key] = stringified;
+  });
+  return sanitized;
+};
+
+const buildHashFromParts = (path, query) => {
+  const normalizedPath = ensureLeadingSlash(path);
+  const params = new URLSearchParams();
+  Object.entries(sanitizeQueryObject(query)).forEach(([key, value]) => {
+    params.set(key, value);
+  });
+  const search = params.toString();
+  return `#${normalizedPath}${search ? `?${search}` : ''}`;
+};
+
+const parseHashLocation = (hashValue) => {
+  const rawHash = typeof hashValue === 'string' ? hashValue : window.location.hash;
+  const trimmed = rawHash.startsWith('#') ? rawHash.slice(1) : rawHash;
+  const [rawPath = '', queryString = ''] = trimmed.split('?');
+  const path = ensureLeadingSlash(rawPath || '/');
+  const query = parseQueryString(queryString);
+  const route = `${path}${queryString ? `?${queryString}` : ''}`;
+  return { path, query, route };
+};
 
 const RouterProvider = ({ children }) => {
-    const [route, setRoute] = useState(window.location.hash.substring(1) || '/');
-    useEffect(() => {
-        const handleHashChange = () => setRoute(window.location.hash.substring(1) || '/');
-        window.addEventListener('hashchange', handleHashChange);
-        return () => window.removeEventListener('hashchange', handleHashChange);
-    }, []);
-    const navigate = useCallback((path) => { window.location.hash = path; }, []);
-    return <RouterContext.Provider value={{ route, navigate }}>{children}</RouterContext.Provider>;
+  const [location, setLocation] = useState(() => parseHashLocation());
+
+  useEffect(() => {
+    const handleHashChange = () => setLocation(parseHashLocation());
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  const commitLocation = useCallback(
+    ({ path, query, replace = false }) => {
+      const nextHash = buildHashFromParts(path ?? location.path, query ?? location.query);
+      if (replace) {
+        window.history.replaceState(null, '', nextHash);
+        setLocation(parseHashLocation(nextHash));
+      } else if (window.location.hash === nextHash) {
+        setLocation(parseHashLocation(nextHash));
+      } else {
+        window.location.hash = nextHash;
+      }
+    },
+    [location.path, location.query]
+  );
+
+  const navigate = useCallback(
+    (target, options = {}) => {
+      const { replace = false, query: queryOverrides, preserveQuery = false } = options;
+      let path = location.path;
+      let query = preserveQuery ? { ...location.query } : {};
+
+      if (typeof target === 'string') {
+        const [rawPath, queryString = ''] = target.split('?');
+        path = ensureLeadingSlash(rawPath || '/');
+        if (queryString) {
+          const parsed = parseQueryString(queryString);
+          query = preserveQuery ? { ...query, ...parsed } : parsed;
+        } else if (!preserveQuery) {
+          query = {};
+        }
+      }
+
+      if (queryOverrides && typeof queryOverrides === 'object') {
+        query = { ...query, ...queryOverrides };
+      }
+
+      commitLocation({ path, query, replace });
+    },
+    [commitLocation, location.path, location.query]
+  );
+
+  const setQuery = useCallback(
+    (updates, { replace = false, merge = true, path } = {}) => {
+      const baseQuery = merge ? { ...location.query } : {};
+      const nextQuery = typeof updates === 'function' ? updates(baseQuery) : { ...baseQuery, ...updates };
+      commitLocation({ path: ensureLeadingSlash(path ?? location.path), query: nextQuery, replace });
+    },
+    [commitLocation, location.path, location.query]
+  );
+
+  return (
+    <RouterContext.Provider value={{ route: location.route, path: location.path, query: location.query, navigate, setQuery }}>
+      {children}
+    </RouterContext.Provider>
+  );
 };
 
 const useRoute = () => {
-    const context = useContext(RouterContext);
-    if (context === undefined) throw new Error('useRoute must be used within a RouterProvider');
-    return context;
+  const context = useContext(RouterContext);
+  if (context === undefined) throw new Error('useRoute must be used within a RouterProvider');
+  return context;
 };
 
 

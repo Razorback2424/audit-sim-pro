@@ -16,6 +16,8 @@ import {
   serverTimestamp,
   writeBatch,
   Timestamp,
+  getCountFromServer,
+  offset,
 } from 'firebase/firestore';
 import { db, FirestorePaths } from '../AppCore';
 import { getNow } from '../utils/dates';
@@ -28,6 +30,85 @@ import {
 
 const VALID_CASE_STATUSES = ['assigned', 'in_progress', 'submitted', 'archived', 'draft'];
 
+export const CASE_SORT_OPTIONS = {
+  UPDATED_DESC: 'updated_desc',
+  UPDATED_ASC: 'updated_asc',
+  CREATED_DESC: 'created_desc',
+  CREATED_ASC: 'created_asc',
+  NAME_ASC: 'name_asc',
+  NAME_DESC: 'name_desc',
+  STATUS_ASC: 'status_asc',
+  STATUS_DESC: 'status_desc',
+};
+
+export const DEFAULT_CASE_SORT = CASE_SORT_OPTIONS.UPDATED_DESC;
+
+const CASE_SORT_CONFIG = {
+  [CASE_SORT_OPTIONS.UPDATED_DESC]: {
+    field: 'updatedAt',
+    direction: 'desc',
+    secondary: [
+      { field: 'createdAt', direction: 'desc' },
+      { field: 'caseNameLower', direction: 'asc' },
+    ],
+  },
+  [CASE_SORT_OPTIONS.UPDATED_ASC]: {
+    field: 'updatedAt',
+    direction: 'asc',
+    secondary: [
+      { field: 'createdAt', direction: 'asc' },
+      { field: 'caseNameLower', direction: 'asc' },
+    ],
+  },
+  [CASE_SORT_OPTIONS.CREATED_DESC]: {
+    field: 'createdAt',
+    direction: 'desc',
+    secondary: [{ field: 'caseNameLower', direction: 'asc' }],
+  },
+  [CASE_SORT_OPTIONS.CREATED_ASC]: {
+    field: 'createdAt',
+    direction: 'asc',
+    secondary: [{ field: 'caseNameLower', direction: 'asc' }],
+  },
+  [CASE_SORT_OPTIONS.NAME_ASC]: {
+    field: 'caseNameLower',
+    direction: 'asc',
+    secondary: [{ field: 'createdAt', direction: 'desc' }],
+  },
+  [CASE_SORT_OPTIONS.NAME_DESC]: {
+    field: 'caseNameLower',
+    direction: 'desc',
+    secondary: [{ field: 'createdAt', direction: 'desc' }],
+  },
+  [CASE_SORT_OPTIONS.STATUS_ASC]: {
+    field: 'status',
+    direction: 'asc',
+    secondary: [
+      { field: 'caseNameLower', direction: 'asc' },
+      { field: 'createdAt', direction: 'desc' },
+    ],
+  },
+  [CASE_SORT_OPTIONS.STATUS_DESC]: {
+    field: 'status',
+    direction: 'desc',
+    secondary: [
+      { field: 'caseNameLower', direction: 'asc' },
+      { field: 'createdAt', direction: 'desc' },
+    ],
+  },
+};
+
+export const CASE_SORT_CHOICES = [
+  { value: CASE_SORT_OPTIONS.UPDATED_DESC, label: 'Recently updated' },
+  { value: CASE_SORT_OPTIONS.UPDATED_ASC, label: 'Oldest updated' },
+  { value: CASE_SORT_OPTIONS.CREATED_DESC, label: 'Newest created' },
+  { value: CASE_SORT_OPTIONS.CREATED_ASC, label: 'Oldest created' },
+  { value: CASE_SORT_OPTIONS.NAME_ASC, label: 'Name A → Z' },
+  { value: CASE_SORT_OPTIONS.NAME_DESC, label: 'Name Z → A' },
+  { value: CASE_SORT_OPTIONS.STATUS_ASC, label: 'Status A → Z' },
+  { value: CASE_SORT_OPTIONS.STATUS_DESC, label: 'Status Z → A' },
+];
+
 const isRecord = (value) => typeof value === 'object' && value !== null;
 
 const toTrimmedString = (value) => {
@@ -35,6 +116,31 @@ const toTrimmedString = (value) => {
   if (value === null || value === undefined) return '';
   if (typeof value === 'number' || typeof value === 'boolean') return String(value);
   return '';
+};
+
+const normalizeStatusFilters = (input) => {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((item) => (typeof item === 'string' ? item.trim() : ''))
+    .filter((item) => VALID_CASE_STATUSES.includes(item));
+};
+
+const normalizeVisibilityFilters = (input) => {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((item) => (typeof item === 'string' ? item.trim().toLowerCase() : ''))
+    .filter((item) => item === 'public' || item === 'private' || item === 'rostered');
+};
+
+const toVisibilityBooleanFilters = (filters) => {
+  if (!Array.isArray(filters) || filters.length === 0) return [];
+  const mapped = filters.map((value) => (value === 'public' ? true : false));
+  return Array.from(new Set(mapped));
+};
+
+const normalizeSearchValue = (value) => {
+  if (typeof value !== 'string') return '';
+  return value.trim().toLowerCase();
 };
 
 const toOptionalString = (value) => {
@@ -238,6 +344,38 @@ const toNormalizedCaseModel = (id, raw = {}) => {
   return toCaseModel(id, normalized);
 };
 
+const buildAdminCasesQueryParts = ({ searchTerm, statusFilters, visibilityFilters, sortKey }) => {
+  const filters = [where('_deleted', '==', false)];
+
+  if (statusFilters.length === 1) {
+    filters.push(where('status', '==', statusFilters[0]));
+  } else if (statusFilters.length > 1) {
+    filters.push(where('status', 'in', statusFilters.slice(0, 10)));
+  }
+
+  const visibilityBooleanFilters = toVisibilityBooleanFilters(visibilityFilters);
+  if (visibilityBooleanFilters.length === 1) {
+    filters.push(where('publicVisible', '==', visibilityBooleanFilters[0]));
+  }
+
+  const order = [];
+
+  if (searchTerm) {
+    filters.push(where('caseNameLower', '>=', searchTerm));
+    filters.push(where('caseNameLower', '<=', `${searchTerm}\uf8ff`));
+    order.push(orderBy('caseNameLower', 'asc'));
+    order.push(orderBy('createdAt', 'desc'));
+  } else {
+    const config = CASE_SORT_CONFIG[sortKey] ?? CASE_SORT_CONFIG[DEFAULT_CASE_SORT];
+    order.push(orderBy(config.field, config.direction));
+    (config.secondary || []).forEach(({ field, direction }) => {
+      order.push(orderBy(field, direction));
+    });
+  }
+
+  return { filters, order };
+};
+
 const toTimestampOrNull = (value) => {
   if (value === null || value === undefined) return null;
   if (value instanceof Timestamp) return value;
@@ -280,6 +418,11 @@ const sanitizeCaseWriteData = (rawData = {}, { isCreate = false } = {}) => {
   sanitized.auditArea = normalizeAuditArea(sanitized.auditArea);
   sanitized.caseGroupId = normalizeCaseGroupId(sanitized.caseGroupId);
 
+  const normalizedCaseName = toTrimmedString(sanitized.caseName);
+  const fallbackTitle = toTrimmedString(sanitized.title);
+  const caseNameForSearch = normalizedCaseName || fallbackTitle;
+  sanitized.caseNameLower = caseNameForSearch ? caseNameForSearch.toLowerCase() : '';
+
   if ('opensAt' in sanitized) {
     sanitized.opensAt = sanitized.opensAt ?? null;
   } else if (isCreate) {
@@ -319,6 +462,13 @@ const buildCaseRepairPatch = (data = {}) => {
 
   if (!data.auditArea || !AUDIT_AREA_VALUES.includes(toOptionalString(data.auditArea))) {
     patch.auditArea = normalizeAuditArea(data.auditArea);
+  }
+
+  const normalizedCaseName = toTrimmedString(data.caseName);
+  const fallbackTitle = toTrimmedString(data.title);
+  const expectedLower = (normalizedCaseName || fallbackTitle || '').toLowerCase();
+  if ((data.caseNameLower ?? '') !== expectedLower) {
+    patch.caseNameLower = expectedLower;
   }
 
   if (!('caseGroupId' in data)) {
@@ -372,6 +522,65 @@ const buildCaseRepairPatch = (data = {}) => {
   }
 
   return patch;
+};
+
+export const fetchCasesPage = async ({
+  search = '',
+  status = [],
+  visibility = [],
+  sort = DEFAULT_CASE_SORT,
+  page = 1,
+  limit: limitInput = 12,
+} = {}) => {
+  const casesCollection = collection(db, FirestorePaths.CASES_COLLECTION());
+  const searchTerm = normalizeSearchValue(search);
+  const statusFilters = normalizeStatusFilters(status);
+  const visibilityFilters = normalizeVisibilityFilters(visibility);
+  const sortKey = CASE_SORT_CONFIG[sort] ? sort : DEFAULT_CASE_SORT;
+
+  const parsedPage = Number.parseInt(page, 10);
+  const desiredPage = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
+  const parsedLimit = Number.parseInt(limitInput, 10);
+  const pageSize = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 100) : 12;
+
+  const { filters, order } = buildAdminCasesQueryParts({
+    searchTerm,
+    statusFilters,
+    visibilityFilters,
+    sortKey,
+  });
+
+  const countSnapshot = await getCountFromServer(query(casesCollection, ...filters));
+  const total = countSnapshot.data().count ?? 0;
+  const maxPage = total === 0 ? 1 : Math.max(1, Math.ceil(total / pageSize));
+  const effectivePage = Math.min(desiredPage, maxPage);
+  const offsetValue = total === 0 ? 0 : (effectivePage - 1) * pageSize;
+
+  const constraints = [...filters, ...order];
+  if (offsetValue > 0) {
+    constraints.push(offset(offsetValue));
+  }
+  constraints.push(limit(pageSize));
+
+  let items = [];
+  if (total > 0) {
+    const snapshot = await getDocs(query(casesCollection, ...constraints));
+    items = snapshot.docs.map((docSnap) => toNormalizedCaseModel(docSnap.id, docSnap.data()));
+  }
+
+  return {
+    items,
+    total,
+    page: effectivePage,
+    requestedPage: desiredPage,
+    pageSize,
+    hasNextPage: effectivePage < maxPage,
+    hasPreviousPage: effectivePage > 1,
+    sort: sortKey,
+    search: searchTerm,
+    statusFilters,
+    visibilityFilters,
+  };
 };
 
 export const subscribeToCases = (onData, onError) => {
