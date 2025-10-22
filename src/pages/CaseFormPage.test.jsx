@@ -164,6 +164,12 @@ describe('answer key validation', () => {
     await userEvent.type(screen.getByLabelText(/Case Name/i), 'Mismatch Case');
 
     await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+
+    const opensAtInput = screen.getByLabelText(/Opens At \(UTC\)/i);
+    fireEvent.change(opensAtInput, { target: { value: '2024-03-01T00:00' } });
+    const dueAtInput = screen.getByLabelText(/Due At \(UTC\)/i);
+    fireEvent.change(dueAtInput, { target: { value: '2024-03-05T00:00' } });
+
     await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
 
     await userEvent.type(screen.getByPlaceholderText(/Payment ID/i), 'P-100');
@@ -191,12 +197,15 @@ describe('answer key validation', () => {
     await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
 
     const submitButton = screen.getByRole('button', { name: /Create Case/i });
+    expect(submitButton).toBeDisabled();
+    expect(
+      screen.getByText(/Complete the submission checklist before submitting\./i)
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Answer key incomplete for disbursement #1/i)
+    ).toBeInTheDocument();
     await userEvent.click(submitButton);
-
-    await waitFor(() => expect(mockShowModal).toHaveBeenCalled());
-    const [message, title] = mockShowModal.mock.calls[0];
-    expect(title).toBe('Answer Key Validation');
-    expect(message).toMatch(/do not match the disbursement amount/i);
+    expect(mockShowModal).not.toHaveBeenCalled();
     expect(createCase).not.toHaveBeenCalled();
     expect(updateCase).not.toHaveBeenCalled();
   });
