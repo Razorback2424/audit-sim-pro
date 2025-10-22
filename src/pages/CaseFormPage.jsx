@@ -1701,7 +1701,7 @@ const ChecklistItem = ({
   );
 };
 
-function ReviewStep({ summaryData, reviewChecklist = [] }) {
+function ReviewStep({ summaryData, reviewChecklist = [], allChecklistItemsReady = true }) {
   const formatDateTime = (value) => {
     if (!value) return 'Not set';
     const date = new Date(value);
@@ -1721,6 +1721,14 @@ function ReviewStep({ summaryData, reviewChecklist = [] }) {
     : 0;
   const totalCount = Array.isArray(reviewChecklist) ? reviewChecklist.length : 0;
 
+  const ChecklistStatusIcon = allChecklistItemsReady ? CheckCircle2 : AlertTriangle;
+  const statusText = allChecklistItemsReady ? 'All items ready' : 'Incomplete items';
+  const statusColorClass = allChecklistItemsReady ? 'text-emerald-600 border-emerald-200 bg-emerald-50' : 'text-amber-600 border-amber-200 bg-amber-50';
+  const checklistCardBaseClass = 'rounded-2xl border p-6 shadow-sm transition-colors';
+  const checklistCardStateClass = allChecklistItemsReady
+    ? 'border-emerald-200 bg-emerald-50/40'
+    : 'border-amber-200 bg-amber-50';
+
   return (
     <div className="space-y-6">
       <StepIntro
@@ -1733,13 +1741,19 @@ function ReviewStep({ summaryData, reviewChecklist = [] }) {
         helper="You can navigate back to earlier steps if something needs a quick edit before publishing."
       />
 
-      <div className="rounded-2xl border border-gray-200 bg-gray-50 p-6 shadow-sm">
-        <div className="flex items-start justify-between gap-4">
+      <div className={`${checklistCardBaseClass} ${checklistCardStateClass}`}>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
             <h2 className="text-lg font-semibold text-gray-900">Submission checklist</h2>
             <p className="mt-1 text-sm text-gray-600">
               {readyCount}/{totalCount} items ready for submission
             </p>
+          </div>
+          <div
+            className={`flex items-center gap-2 self-start rounded-full border px-3 py-1 text-sm font-medium ${statusColorClass}`}
+          >
+            <ChecklistStatusIcon size={16} />
+            <span>{statusText}</span>
           </div>
         </div>
         {Array.isArray(reviewChecklist) && reviewChecklist.length > 0 ? (
@@ -2683,6 +2697,11 @@ export default function CaseFormPage({ params }) {
     answerKey.disbursements,
   ]);
 
+  const allChecklistItemsReady = useMemo(
+    () => (Array.isArray(reviewChecklist) ? reviewChecklist.every((item) => item.isReady) : false),
+    [reviewChecklist]
+  );
+
   const isLastStep = activeStep === steps.length - 1;
 
   const handleNext = () => {
@@ -2719,7 +2738,11 @@ export default function CaseFormPage({ params }) {
               <AnswerKeyStep disbursements={answerKey.disbursements} onUpdate={answerKey.updateAnswerKeyForDisbursement} />
             ) : null}
             {activeStep === 5 ? (
-              <ReviewStep summaryData={summaryData} reviewChecklist={reviewChecklist} />
+              <ReviewStep
+                summaryData={summaryData}
+                reviewChecklist={reviewChecklist}
+                allChecklistItemsReady={allChecklistItemsReady}
+              />
             ) : null}
 
             <div className="flex flex-col gap-3 border-t border-gray-200 pt-6 sm:flex-row sm:items-center sm:justify-between">
@@ -2743,7 +2766,13 @@ export default function CaseFormPage({ params }) {
                   Cancel
                 </Button>
                 {isLastStep ? (
-                  <Button type="submit" variant="primary" disabled={loading} isLoading={loading} className="justify-center">
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    disabled={loading || !allChecklistItemsReady}
+                    isLoading={loading}
+                    className="justify-center"
+                  >
                     {isEditing ? 'Save Changes' : 'Create Case'}
                   </Button>
                 ) : (
@@ -2751,6 +2780,11 @@ export default function CaseFormPage({ params }) {
                     Next
                   </Button>
                 )}
+                {isLastStep && !allChecklistItemsReady ? (
+                  <p className="text-sm text-amber-600 sm:text-right">
+                    Complete the submission checklist before submitting.
+                  </p>
+                ) : null}
               </div>
             </div>
           </form>
