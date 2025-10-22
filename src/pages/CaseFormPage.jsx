@@ -1673,6 +1673,32 @@ function StepIntro({ title, items = [], helper }) {
   );
 }
 
+// Convert a long validation paragraph (or array) into an array of concise list items.
+const normalizeChecklistDetail = (detail) => {
+  if (Array.isArray(detail)) {
+    return detail.map((d) => String(d).trim()).filter(Boolean);
+  }
+  if (typeof detail === 'string') {
+    const text = detail.trim();
+    if (!text) return [];
+    // Try to parse strings like:
+    // "Answer key incomplete for disbursement #1 (7546). Answer key incomplete for disbursement #2 (4325203481203). ..."
+    const items = [];
+    const re = /Answer key incomplete for disbursement\s*#(\d+)[^()]*\(([^)]+)\)\.?/gi;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      items.push(`Disbursement #${m[1]} (${m[2]})`);
+    }
+    if (items.length > 0) return items;
+    // Fallback: split by sentences/newlines
+    return text
+      .split(/(?:\.\s+|\n)/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+  return [];
+};
+
 const ChecklistItem = ({
   label,
   isReady,
@@ -1683,19 +1709,70 @@ const ChecklistItem = ({
   const Icon = isReady ? CheckCircle2 : AlertTriangle;
   const colorClass = isReady ? 'text-emerald-600' : 'text-amber-600';
 
+  // Turn the long paragraph into a list of concise items when not ready
+  const items = React.useMemo(() => normalizeChecklistDetail(detail), [detail]);
+  const [expanded, setExpanded] = useState(false);
+  const MAX_PREVIEW = 6;
+  const visibleItems = expanded ? items : items.slice(0, MAX_PREVIEW);
+
+  const copyAll = async () => {
+    try {
+      const text = items.length > 0 ? items.join('\n') : String(detail || '');
+      await navigator.clipboard.writeText(text);
+    } catch {
+      // no-op
+    }
+  };
+
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
       <div className="flex items-start justify-between gap-3">
-        <div className="flex items-start gap-3">
-          <Icon size={20} className={colorClass} />
-          <div>
-            <span className="text-sm font-medium text-gray-800">{label}</span>
-            {!isReady && detail ? (
-              <p className="mt-1 text-xs text-amber-600">{detail}</p>
-            ) : null}
+        <div className="flex-1">
+          <div className="flex items-start gap-3">
+            <Icon size={20} className={colorClass} />
+            <div className="min-w-0">
+              <span className="text-sm font-medium text-gray-800">{label}</span>
+              {/* Fallback to original text if we don't have a list */}
+              {!isReady && items.length === 0 && detail ? (
+                <p className="mt-1 text-xs text-amber-600">{detail}</p>
+              ) : null}
+            </div>
           </div>
+
+          {/* Render a compact, scannable list when there are many items */}
+          {!isReady && items.length > 0 ? (
+            <div className="mt-2">
+              <ul className="max-h-48 list-disc space-y-1 overflow-auto pl-6 pr-2 text-xs text-amber-700">
+                {visibleItems.map((line, idx) => (
+                  <li key={idx} className="break-words">{line}</li>
+                ))}
+              </ul>
+              <div className="mt-2 flex flex-wrap items-center gap-3">
+                {items.length > MAX_PREVIEW ? (
+                  <button
+                    type="button"
+                    onClick={() => setExpanded((v) => !v)}
+                    className="text-xs font-medium text-blue-700 hover:underline"
+                  >
+                    {expanded ? 'Show less' : `Show all ${items.length}`}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={copyAll}
+                  className="text-xs text-gray-600 hover:underline"
+                  title="Copy the list to clipboard"
+                >
+                  Copy list
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
-        <span className={`text-sm font-semibold ${colorClass}`}>{isReady ? readyText : unreadyText}</span>
+
+        <span className={`shrink-0 text-sm font-semibold ${colorClass}`}>
+          {isReady ? readyText : unreadyText}
+        </span>
       </div>
     </div>
   );
