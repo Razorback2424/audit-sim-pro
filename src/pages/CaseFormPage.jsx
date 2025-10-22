@@ -1673,22 +1673,31 @@ function StepIntro({ title, items = [], helper }) {
   );
 }
 
-const ChecklistItem = ({ label, isReady, readyText = 'Ready', unreadyText = 'Incomplete' }) => {
+const ChecklistItem = ({
+  label,
+  isReady,
+  details,
+  readyText = 'Ready',
+  unreadyText = 'Incomplete',
+}) => {
   const Icon = isReady ? CheckCircle2 : AlertTriangle;
   const colorClass = isReady ? 'text-emerald-600' : 'text-amber-600';
 
   return (
-    <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
-      <div className="flex items-center gap-3">
-        <Icon size={20} className={colorClass} />
-        <span className="text-sm font-medium text-gray-800">{label}</span>
+    <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <Icon size={20} className={colorClass} />
+          <span className="text-sm font-medium text-gray-800">{label}</span>
+        </div>
+        <span className={`text-sm font-semibold ${colorClass}`}>{isReady ? readyText : unreadyText}</span>
       </div>
-      <span className={`text-sm font-semibold ${colorClass}`}>{isReady ? readyText : unreadyText}</span>
+      {details ? <p className="mt-2 text-xs text-gray-600">{details}</p> : null}
     </div>
   );
 };
 
-function ReviewStep({ summaryData }) {
+function ReviewStep({ summaryData, reviewChecklist }) {
   const formatDateTime = (value) => {
     if (!value) return 'Not set';
     const date = new Date(value);
@@ -1703,6 +1712,11 @@ function ReviewStep({ summaryData }) {
     ? 'Visible to all trainees'
     : `${summaryData.selectedUserIds.length} specific user${summaryData.selectedUserIds.length === 1 ? '' : 's'}`;
 
+  const readyCount = Array.isArray(reviewChecklist)
+    ? reviewChecklist.filter((item) => item.isReady).length
+    : 0;
+  const totalCount = Array.isArray(reviewChecklist) ? reviewChecklist.length : 0;
+
   return (
     <div className="space-y-6">
       <StepIntro
@@ -1714,6 +1728,27 @@ function ReviewStep({ summaryData }) {
         ]}
         helper="You can navigate back to earlier steps if something needs a quick edit before publishing."
       />
+
+      <div className="rounded-2xl border border-gray-200 bg-gray-50 p-6 shadow-sm">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Submission checklist</h2>
+            <p className="mt-1 text-sm text-gray-600">
+              {readyCount}/{totalCount} items ready for submission
+            </p>
+          </div>
+        </div>
+        <div className="mt-4 space-y-3">
+          {reviewChecklist.map((item) => (
+            <ChecklistItem
+              key={item.id}
+              label={item.label}
+              isReady={item.isReady}
+              details={item.details}
+            />
+          ))}
+        </div>
+      </div>
 
       <div className="rounded-2xl border border-gray-200 bg-gray-50 p-6 shadow-sm">
         <h2 className="text-lg font-semibold text-gray-900">Case Summary</h2>
@@ -2451,6 +2486,197 @@ export default function CaseFormPage({ params }) {
     attachments.referenceDocuments,
   ]);
 
+  const reviewChecklist = useMemo(() => {
+    const entries = [];
+
+    const trimmedCaseName = (basics.caseName || '').trim();
+    entries.push({
+      id: 'case-name',
+      label: 'Case name provided',
+      isReady: trimmedCaseName.length > 0,
+      details:
+        trimmedCaseName.length > 0
+          ? `Using “${trimmedCaseName}”.`
+          : 'Enter a descriptive case name trainees will recognize.',
+    });
+
+    const disbursementList = Array.isArray(transactions.disbursements)
+      ? transactions.disbursements
+      : [];
+    const disbursementKeyFields = [
+      { key: 'paymentId', label: 'Payment ID' },
+      { key: 'payee', label: 'Payee' },
+      { key: 'amount', label: 'Amount' },
+      { key: 'paymentDate', label: 'Payment Date' },
+    ];
+    const disbursementFieldIssues = [];
+    if (disbursementList.length === 0) {
+      disbursementFieldIssues.push(
+        'Add at least one disbursement with a payment ID, payee, amount, and payment date.'
+      );
+    }
+    disbursementList.forEach((disbursement, index) => {
+      if (!disbursement) return;
+      const missingFields = disbursementKeyFields
+        .filter(({ key }) => !disbursement[key])
+        .map(({ label }) => label);
+      if (missingFields.length > 0) {
+        disbursementFieldIssues.push(
+          `Disbursement #${index + 1} is missing ${missingFields.join(', ')}.`
+        );
+      }
+    });
+
+    entries.push({
+      id: 'disbursement-fields',
+      label: 'Disbursement details complete',
+      isReady: disbursementFieldIssues.length === 0,
+      details:
+        disbursementFieldIssues.length === 0
+          ? `All ${disbursementList.length} disbursement${
+              disbursementList.length === 1 ? '' : 's'
+            } include the required fields.`
+          : disbursementFieldIssues.join(' '),
+    });
+
+    const incompleteAnswerKeys = [];
+    disbursementList.forEach((disbursement, index) => {
+      if (!disbursement) return;
+      if (!isAnswerKeyReady(disbursement)) {
+        const identifier = disbursement.paymentId || disbursement.payee || 'unnamed disbursement';
+        incompleteAnswerKeys.push(
+          `Answer key incomplete for disbursement #${index + 1} (${identifier}).`
+        );
+      }
+    });
+
+    entries.push({
+      id: 'answer-key',
+      label: 'Answer keys ready',
+      isReady: disbursementList.length > 0 && incompleteAnswerKeys.length === 0,
+      details:
+        disbursementList.length === 0
+          ? 'Add disbursements to build corresponding answer keys.'
+          : incompleteAnswerKeys.length === 0
+          ? 'Answer keys include classifications, explanations, and matching totals.'
+          : incompleteAnswerKeys.join(' '),
+    });
+
+    const uniqueSelectedUserIds = Array.isArray(audience.selectedUserIds)
+      ? Array.from(new Set(audience.selectedUserIds))
+      : [];
+    const privateAudienceReady = audience.publicVisible || uniqueSelectedUserIds.length > 0;
+    entries.push({
+      id: 'audience',
+      label: 'Audience visibility configured',
+      isReady: privateAudienceReady,
+      details: audience.publicVisible
+        ? 'Case is visible to all trainees.'
+        : uniqueSelectedUserIds.length > 0
+        ? `Private case with ${uniqueSelectedUserIds.length} authorized user${
+            uniqueSelectedUserIds.length === 1 ? '' : 's'
+          }.`
+        : 'Add at least one authorized user for a private case.',
+    });
+
+    const referenceDocs = Array.isArray(attachments.referenceDocuments)
+      ? attachments.referenceDocuments
+      : [];
+    const referenceIssues = [];
+    referenceDocs.forEach((doc, index) => {
+      if (!doc) return;
+      const hasAnyContent = Boolean(
+        doc.clientSideFile || doc.fileName || doc.downloadURL || doc.storagePath
+      );
+      if (!hasAnyContent) return;
+      const trimmedName = (doc.fileName || '').trim();
+      const hasDisplayName = trimmedName.length > 0;
+      const hasSource = Boolean(doc.clientSideFile || doc.downloadURL || doc.storagePath);
+      if (!hasDisplayName) {
+        referenceIssues.push(`Reference document #${index + 1} is missing a display name.`);
+      }
+      if (!hasSource) {
+        const label = trimmedName || `Reference document #${index + 1}`;
+        referenceIssues.push(
+          `${label} needs an uploaded file, download URL, or storage path before submission.`
+        );
+      }
+    });
+
+    entries.push({
+      id: 'reference-documents',
+      label: 'Reference materials complete',
+      isReady: referenceIssues.length === 0,
+      details:
+        referenceIssues.length === 0
+          ? referenceDocs.some(
+              (doc) =>
+                doc &&
+                (doc.clientSideFile || doc.fileName || doc.downloadURL || doc.storagePath)
+            )
+            ? 'All reference documents include names and accessible files or links.'
+            : 'No reference documents have been added yet.'
+          : referenceIssues.join(' '),
+    });
+
+    const parseForChecklist = (value, label) => {
+      if (!value) {
+        return { timestamp: null };
+      }
+      const parsed = new Date(value);
+      if (Number.isNaN(parsed.getTime())) {
+        return { error: `${label} must be a valid date/time.` };
+      }
+      return { timestamp: parsed };
+    };
+
+    const opensResult = parseForChecklist(audience.opensAtStr, 'Opens At');
+    const dueResult = parseForChecklist(audience.dueAtStr, 'Due At');
+
+    let scheduleReady = true;
+    let scheduleDetails = 'Schedule dates look good.';
+    if (opensResult.error) {
+      scheduleReady = false;
+      scheduleDetails = opensResult.error;
+    } else if (dueResult.error) {
+      scheduleReady = false;
+      scheduleDetails = dueResult.error;
+    } else if (
+      opensResult.timestamp &&
+      dueResult.timestamp &&
+      dueResult.timestamp.getTime() < opensResult.timestamp.getTime()
+    ) {
+      scheduleReady = false;
+      scheduleDetails = 'Due At must be after Opens At.';
+    } else if (opensResult.timestamp && dueResult.timestamp) {
+      const formatter = new Intl.DateTimeFormat(undefined, {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      });
+      scheduleDetails = `Runs from ${formatter.format(opensResult.timestamp)} to ${formatter.format(
+        dueResult.timestamp
+      )}.`;
+    }
+
+    entries.push({
+      id: 'schedule',
+      label: 'Schedule validated',
+      isReady: scheduleReady,
+      details: scheduleDetails,
+    });
+
+    return entries;
+  }, [
+    attachments.referenceDocuments,
+    audience.dueAtStr,
+    audience.opensAtStr,
+    audience.publicVisible,
+    audience.selectedUserIds,
+    basics.caseName,
+    transactions.disbursements,
+    answerKey.disbursements,
+  ]);
+
   const isLastStep = activeStep === steps.length - 1;
 
   const handleNext = () => {
@@ -2486,7 +2712,9 @@ export default function CaseFormPage({ params }) {
             {activeStep === 4 ? (
               <AnswerKeyStep disbursements={answerKey.disbursements} onUpdate={answerKey.updateAnswerKeyForDisbursement} />
             ) : null}
-            {activeStep === 5 ? <ReviewStep summaryData={summaryData} /> : null}
+            {activeStep === 5 ? (
+              <ReviewStep summaryData={summaryData} reviewChecklist={reviewChecklist} />
+            ) : null}
 
             <div className="flex flex-col gap-3 border-t border-gray-200 pt-6 sm:flex-row sm:items-center sm:justify-between">
               <div>
