@@ -1,11 +1,16 @@
 import {
   collection,
+  collectionGroup,
   doc,
   getDoc,
   getDocs,
   setDoc,
   serverTimestamp,
   arrayUnion,
+  query,
+  orderBy,
+  limit as limitConstraint,
+  onSnapshot,
 } from 'firebase/firestore';
 import { db, FirestorePaths, appId as defaultAppId } from '../AppCore';
 
@@ -97,4 +102,35 @@ export const listUserSubmissions = async ({ uid, appId = defaultAppId } = {}) =>
   });
 
   return submissions;
+};
+
+export const subscribeToRecentSubmissionActivity = (
+  onData,
+  onError,
+  { appId = defaultAppId, limit: limitCount = 5 } = {}
+) => {
+  const groupRef = collectionGroup(db, 'caseSubmissions');
+  const q = query(groupRef, orderBy('submittedAt', 'desc'), limitConstraint(limitCount * 3));
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const filteredDocs = snapshot.docs.filter((docSnap) =>
+        docSnap.ref.path.includes(`/artifacts/${appId}/users/`)
+      );
+      const entries = filteredDocs.slice(0, limitCount).map((docSnap) => {
+        const data = docSnap.data() || {};
+        const parent = docSnap.ref.parent?.parent;
+        const submittedAt = data.submittedAt ?? null;
+        return {
+          caseId: docSnap.id,
+          caseName: data.caseName || '',
+          userId: parent?.id || data.userId || null,
+          submittedAt,
+          attempts: normalizeAttemptList(data),
+        };
+      });
+      onData(entries);
+    },
+    onError
+  );
 };

@@ -424,6 +424,71 @@ export const markCaseDeleted = async (caseId) => {
   await setDoc(ref, { _deleted: true, updatedAt: serverTimestamp() }, { merge: true });
 };
 
+const toMillis = (timestamp) => {
+  if (!timestamp) return null;
+  if (typeof timestamp.toMillis === 'function') {
+    try {
+      return timestamp.toMillis();
+    } catch (err) {
+      return null;
+    }
+  }
+  if (timestamp instanceof Date) {
+    return timestamp.getTime();
+  }
+  if (typeof timestamp === 'number') {
+    return timestamp;
+  }
+  if (typeof timestamp === 'string') {
+    const parsed = new Date(timestamp);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.getTime();
+    }
+  }
+  return null;
+};
+
+const computeDisbursementAlerts = (caseData) => {
+  const alerts = [];
+  const disbursements = Array.isArray(caseData.disbursements) ? caseData.disbursements : [];
+  if (disbursements.length === 0) return alerts;
+
+  const mappedPayments = new Set(
+    (Array.isArray(caseData.invoiceMappings) ? caseData.invoiceMappings : [])
+      .map((mapping) => mapping?.paymentId)
+      .filter(Boolean)
+  );
+
+  disbursements.forEach((item) => {
+    const paymentId = item?.paymentId || 'Unknown payment';
+    const hasAnswerKey = item && item.answerKey && Object.keys(item.answerKey).length > 0;
+    const hasSupportingDocs = Array.isArray(item?.supportingDocuments) && item.supportingDocuments.length > 0;
+    const isMapped = mappedPayments.has(item?.paymentId);
+
+    if (!hasAnswerKey) {
+      alerts.push({
+        id: `${caseData.id}-missing-ak-${paymentId}`,
+        type: 'Answer key',
+        message: `Missing answer key for ${paymentId}.`,
+        context: caseData.caseName,
+        actionPath: `/admin/case-overview/${caseData.id}?section=disbursements&focus=${encodeURIComponent(paymentId)}`,
+      });
+    }
+
+    if (!isMapped && !hasSupportingDocs) {
+      alerts.push({
+        id: `${caseData.id}-unmapped-${paymentId}`,
+        type: 'Mapping',
+        message: `Unmapped disbursement ${paymentId}.`,
+        context: caseData.caseName,
+        actionPath: `/admin/case-data-audit?caseId=${caseData.id}&focus=${encodeURIComponent(paymentId)}`,
+      });
+    }
+  });
+
+  return alerts;
+};
+
 const DEFAULT_STUDENT_STATUSES = ['assigned', 'in_progress'];
 
 /**
@@ -549,3 +614,53 @@ export const repairLegacyCases = async () => {
 
   return { repaired: updates.length };
 };
+
+const subscribeToActiveCaseModels = (onData, onError) =>
+  subscribeToCases(
+    (cases) => {
+      const activeCases = cases.filter((item) => !item._deleted);
+      onData(activeCases);
+    },
+    onError
+  );
+
+export const subscribeToAdminCaseSummary = (onData, onError) =>
+  subscribeToActiveCaseModels((cases) => {
+    const summary = cases.reduce(
+      (acc, current) => {
+        acc.activeCases += 1;
+        acc.totalDisbursements += Array.isArray(current.disbursements) ? current.disbursements.length : 0;
+        acc.totalMappings += Array.isArray(current.invoiceMappings) ? current.invoiceMappings.length : 0;
+        if (current.publicVisible === false && Array.isArray(current.visibleToUserIds) && current.visibleToUserIds.length > 0) {
+          acc.privateAudiences += 1;
+        }
+        return acc;
+      },
+      { activeCases: 0, totalDisbursements: 0, totalMappings: 0, privateAudiences: 0 }
+    );
+    onData(summary);
+  }, onError);
+
+export const subscribeToAdminCaseAlerts = (onData, onError) =>
+  subscribeToActiveCaseModels((cases) => {
+    const allAlerts = cases.flatMap((caseData) => computeDisbursementAlerts(caseData));
+    onData(allAlerts);
+  }, onError);
+
+export const subscribeToRecentCaseActivity = (onData, onError, { limit: limitCount = 5 } = {}) =>
+  subscribeToActiveCaseModels((cases) => {
+    const items = cases
+      .map((caseData) => {
+        const timestamp = toMillis(caseData.updatedAt) ?? toMillis(caseData.createdAt) ?? 0;
+        return {
+          id: `case-${caseData.id}`,
+          title: caseData.caseName || 'Untitled case',
+          description: `Status: ${caseData.status || 'assigned'}`,
+          actionPath: `/admin/case-overview/${caseData.id}`,
+          timestamp,
+        };
+      })
+      .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+      .slice(0, limitCount);
+    onData(items);
+  }, onError);
