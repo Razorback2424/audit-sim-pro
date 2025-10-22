@@ -153,11 +153,44 @@ export default function TraineeCaseViewPage({ params }) {
 
   const createEmptyAllocation = useCallback(() => createEmptyClassification(), []);
 
-  const parseAmount = useCallback((value) => {
-    if (value === '' || value === null || value === undefined) return 0;
-    const num = Number(value);
-    return Number.isFinite(num) ? num : NaN;
+  const normalizeAllocationInput = useCallback((rawValue) => {
+    if (rawValue === null || rawValue === undefined) return '';
+    const stringValue = String(rawValue).trim();
+    if (stringValue === '') return '';
+
+    const withoutCurrency = stringValue.replace(/[$\s]/g, '');
+    const withoutCommas = withoutCurrency.replace(/,/g, '');
+    const digitsAndDots = withoutCommas.replace(/[^0-9.]/g, '');
+    if (digitsAndDots === '') return '';
+
+    const parts = digitsAndDots.split('.');
+    let wholePart = parts.shift() || '';
+    const decimalPart = parts.join('');
+    if (wholePart === '') {
+      wholePart = '0';
+    }
+
+    let normalized = decimalPart ? `${wholePart}.${decimalPart}` : wholePart;
+    if (digitsAndDots.endsWith('.') && decimalPart === '') {
+      normalized = `${wholePart}.`;
+    }
+
+    return normalized;
   }, []);
+
+  const parseAmount = useCallback(
+    (value) => {
+      if (value === '' || value === null || value === undefined) return 0;
+      if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : NaN;
+      }
+      const normalized = normalizeAllocationInput(value);
+      if (normalized === '' || normalized === '.') return 0;
+      const num = Number(normalized);
+      return Number.isFinite(num) ? num : NaN;
+    },
+    [normalizeAllocationInput]
+  );
 
   const isAllocationComplete = useCallback(
     (disbursement, allocation) => {
@@ -689,7 +722,7 @@ export default function TraineeCaseViewPage({ params }) {
 
   const handleAllocationChange = (paymentId, fieldKey, rawValue) => {
     if (isLocked) return;
-    const sanitized = rawValue === '' ? '' : rawValue.replace(/[^0-9.]/g, '');
+    const sanitized = rawValue === '' ? '' : normalizeAllocationInput(rawValue);
     setClassificationAmounts((prev) => {
       const next = { ...prev };
       const allocation = { ...(next[paymentId] || createEmptyAllocation()) };
@@ -1240,9 +1273,9 @@ export default function TraineeCaseViewPage({ params }) {
                           <label key={key} className="flex flex-col text-sm text-gray-700">
                             <span className="font-medium mb-1">{label}</span>
                             <Input
-                              type="number"
-                              min="0"
-                              step="0.01"
+                              type="text"
+                              inputMode="decimal"
+                              pattern="[0-9.,]*"
                               value={allocation[key] ?? ''}
                               onChange={(e) => handleAllocationChange(d.paymentId, key, e.target.value)}
                               disabled={isLocked}

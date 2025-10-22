@@ -165,9 +165,10 @@ const Button = ({
 }) => {
   const baseStyle =
     'px-4 py-2 rounded-md font-semibold focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-opacity-75 transition-colors duration-150 inline-flex items-center justify-center disabled:opacity-60 disabled:cursor-not-allowed';
-  const variants = { // Ensure all variants used by your app (secondary, danger etc.) are defined here or passed via className
+  const variants = {
     primary: 'bg-blue-600 hover:bg-blue-700 text-white focus:ring-blue-500',
-    secondary: "bg-gray-200 hover:bg-gray-300 text-gray-800 focus:ring-gray-400", // Added for completeness
+    secondary: 'bg-gray-100 hover:bg-gray-200 text-gray-800 focus:ring-gray-400',
+    danger: 'bg-red-500 hover:bg-red-600 text-white focus:ring-red-500',
   };
   return (
     <button

@@ -6,7 +6,16 @@ import { useAuth, Input, Button, Select, useRoute, useModal, Textarea } from '..
 import { fetchCase, createCase, updateCase } from '../services/caseService';
 import { fetchUserRosterOptions } from '../services/userService';
 import getUUID from '../utils/getUUID';
-import { PlusCircle, Trash2, Paperclip, CheckCircle2, AlertTriangle, UploadCloud } from 'lucide-react';
+import {
+  PlusCircle,
+  Trash2,
+  Paperclip,
+  CheckCircle2,
+  AlertTriangle,
+  UploadCloud,
+  ChevronDown,
+  ChevronRight,
+} from 'lucide-react';
 import {
   AUDIT_AREA_VALUES,
   CASE_GROUP_VALUES,
@@ -24,6 +33,100 @@ const STATUS_OPTIONS = [
 
 const ANSWER_KEY_FIELDS = ['properlyIncluded', 'properlyExcluded', 'improperlyIncluded', 'improperlyExcluded'];
 const ANSWER_KEY_TOLERANCE = 0.01;
+const ANSWER_KEY_LABELS = {
+  properlyIncluded: 'Properly Included',
+  properlyExcluded: 'Properly Excluded',
+  improperlyIncluded: 'Improperly Included',
+  improperlyExcluded: 'Improperly Excluded',
+};
+const ANSWER_KEY_PLACEHOLDER = '__choose';
+const DEFAULT_ANSWER_KEY_CLASSIFICATION = ANSWER_KEY_PLACEHOLDER;
+const ANSWER_KEY_CLASSIFICATION_OPTIONS = [
+  { value: ANSWER_KEY_PLACEHOLDER, label: 'Choose classification…' },
+  ...ANSWER_KEY_FIELDS.map((key) => ({
+    value: key,
+    label: ANSWER_KEY_LABELS[key],
+  })),
+];
+
+const buildSingleAnswerKey = (classification, amountValue, explanation = '') => {
+  const sanitizedAmount = Number(amountValue) || 0;
+  const next = {
+    properlyIncluded: 0,
+    properlyExcluded: 0,
+    improperlyIncluded: 0,
+    improperlyExcluded: 0,
+    explanation,
+  };
+  if (classification && ANSWER_KEY_FIELDS.includes(classification)) {
+    next[classification] = sanitizedAmount;
+  }
+  return next;
+};
+
+const detectAnswerKeyMode = (disbursement) => {
+  const answerKey = disbursement.answerKey || {};
+  const amountNumber = Number(disbursement.amount || 0);
+  let nonZeroCount = 0;
+  let lastClassification = DEFAULT_ANSWER_KEY_CLASSIFICATION;
+  let lastValue = 0;
+  ANSWER_KEY_FIELDS.forEach((field) => {
+    const value = Number(answerKey[field] || 0);
+    if (!Number.isNaN(value) && value > 0) {
+      nonZeroCount += 1;
+      lastClassification = field;
+      lastValue = value;
+    }
+  });
+  const total = ANSWER_KEY_FIELDS.reduce((sum, field) => {
+    const value = Number(answerKey[field] || 0);
+    if (Number.isNaN(value)) return sum;
+    return sum + value;
+  }, 0);
+  if (nonZeroCount <= 1) {
+    // Treat as single classification; ensure totals match amount for consistency.
+    const classificationCandidate =
+      nonZeroCount === 1 && Math.abs(total - amountNumber) <= ANSWER_KEY_TOLERANCE
+        ? lastClassification
+        : ANSWER_KEY_PLACEHOLDER;
+    const normalized = buildSingleAnswerKey(
+      classificationCandidate === ANSWER_KEY_PLACEHOLDER ? null : classificationCandidate,
+      classificationCandidate === ANSWER_KEY_PLACEHOLDER ? 0 : amountNumber,
+      answerKey.explanation || ''
+    );
+    return {
+      mode: 'single',
+      classification: classificationCandidate,
+      answerKey: normalized,
+    };
+  }
+  return {
+    mode: 'split',
+    classification: lastClassification,
+    answerKey,
+  };
+};
+
+const isAnswerKeyReady = (disbursement) => {
+  const amountNumber = Number(disbursement.amount || 0);
+  const answerKey = disbursement.answerKey || {};
+  const explanationOk = String(answerKey.explanation || '').trim().length > 0;
+
+  if (disbursement.answerKeyMode === 'split') {
+    const totals = ANSWER_KEY_FIELDS.reduce((sum, field) => {
+      const value = Number(answerKey[field] || 0);
+      if (!Number.isNaN(value)) return sum + value;
+      return sum;
+    }, 0);
+    const hasValues = ANSWER_KEY_FIELDS.some((field) => Number(answerKey[field] || 0) > 0);
+    return explanationOk && hasValues && Math.abs(totals - amountNumber) <= ANSWER_KEY_TOLERANCE;
+  }
+
+  const classification = disbursement.answerKeySingleClassification;
+  if (!classification || classification === ANSWER_KEY_PLACEHOLDER) return false;
+  const assignedAmount = Number(answerKey[classification] || 0);
+  return explanationOk && Math.abs(assignedAmount - amountNumber) <= ANSWER_KEY_TOLERANCE;
+};
 
 export const mergeDisbursementDocuments = (disbursementList, invoiceMappings) => {
   const baseDisbursements = (disbursementList || []).map(({ _tempId, ...rest }) => rest);
@@ -109,17 +212,27 @@ export const mergeDisbursementDocuments = (disbursementList, invoiceMappings) =>
   });
 };
 
-export default function CaseFormPage({ params }) {
+function useCaseForm({ params }) {
   const { caseId: editingCaseId } = params || {};
   const isEditing = !!editingCaseId;
   const { navigate } = useRoute();
   const { userId } = useAuth();
   const { showModal } = useModal();
 
-  const initialDisbursement = () => ({ _tempId: getUUID(), paymentId: '', payee: '', amount: '', paymentDate: '' });
-  const initialMapping = () => ({
+  const initialDisbursement = () => ({
     _tempId: getUUID(),
     paymentId: '',
+    payee: '',
+    amount: '',
+    paymentDate: '',
+    answerKeyMode: 'single',
+    answerKeySingleClassification: DEFAULT_ANSWER_KEY_CLASSIFICATION,
+    answerKey: buildSingleAnswerKey(null, 0, ''),
+    mappings: [],
+  });
+  const initialMapping = () => ({
+    _tempId: getUUID(),
+    disbursementTempId: '',
     fileName: '',
     storagePath: '',
     clientSideFile: null,
@@ -152,10 +265,10 @@ export default function CaseFormPage({ params }) {
   const [opensAtStr, setOpensAtStr] = useState('');
   const [dueAtStr, setDueAtStr] = useState('');
   const [disbursements, setDisbursements] = useState([initialDisbursement()]);
-  const [invoiceMappings, setInvoiceMappings] = useState([initialMapping()]);
   const [referenceDocuments, setReferenceDocuments] = useState([initialReferenceDocument()]);
   const [loading, setLoading] = useState(false);
   const [originalCaseData, setOriginalCaseData] = useState(null);
+
   const disbursementCsvInputRef = useRef(null);
 
   const auditAreaSelectOptions = useMemo(
@@ -207,9 +320,8 @@ export default function CaseFormPage({ params }) {
     });
   }, [selectedUserIds]);
 
-  // ---- upload helpers (no console or flags needed)
-  const MAX_ARTIFACT_BYTES = 5 * 1024 * 1024; // 5 MB (keep in sync with storage.rules soft limit)
-  const UPLOAD_TIMEOUT_MS = 120000; // 2 minutes
+  const MAX_ARTIFACT_BYTES = 5 * 1024 * 1024;
+  const UPLOAD_TIMEOUT_MS = 120000;
   const ulog = (event, payload) => {
     const data = payload || {};
     try {
@@ -220,7 +332,7 @@ export default function CaseFormPage({ params }) {
     } catch (e) {
       // no-op
     }
-  }; // surface errors during investigation
+  };
 
   const toDateTimeLocalInput = (value) => {
     if (!value) return '';
@@ -258,17 +370,66 @@ export default function CaseFormPage({ params }) {
             setStatus(data.status || 'assigned');
             setOpensAtStr(toDateTimeLocalInput(data.opensAt));
             setDueAtStr(toDateTimeLocalInput(data.dueAt));
-            setDisbursements(data.disbursements?.map((d) => ({ ...d, _tempId: d._tempId || getUUID() })) || [initialDisbursement()]);
-            setInvoiceMappings(
-              data.invoiceMappings?.map((m) => ({
+            const baseDisbursements =
+              data.disbursements?.map((d) => {
+                const draft = {
+                  _tempId: d._tempId || getUUID(),
+                  paymentId: d.paymentId || '',
+                  payee: d.payee || '',
+                  amount: d.amount || '',
+                  paymentDate: d.paymentDate || '',
+                  answerKey: {
+                    properlyIncluded: d.answerKey?.properlyIncluded ?? 0,
+                    properlyExcluded: d.answerKey?.properlyExcluded ?? 0,
+                    improperlyIncluded: d.answerKey?.improperlyIncluded ?? 0,
+                    improperlyExcluded: d.answerKey?.improperlyExcluded ?? 0,
+                    explanation: d.answerKey?.explanation ?? '',
+                  },
+                  mappings: [],
+                };
+                const derived = detectAnswerKeyMode({
+                  amount: draft.amount,
+                  answerKey: draft.answerKey,
+                });
+                return {
+                  ...draft,
+                  answerKeyMode: derived.mode,
+                  answerKeySingleClassification: derived.classification || DEFAULT_ANSWER_KEY_CLASSIFICATION,
+                  answerKey: derived.answerKey,
+                };
+              }) || [initialDisbursement()];
+
+            const mappingGroups = new Map();
+            (data.invoiceMappings || []).forEach((m) => {
+              const key = (m.paymentId || '').trim();
+              const normalizedKey = key || '__unlinked';
+              if (!mappingGroups.has(normalizedKey)) {
+                mappingGroups.set(normalizedKey, []);
+              }
+              mappingGroups.get(normalizedKey).push({
                 ...m,
                 _tempId: m._tempId || getUUID(),
+                disbursementTempId: null,
                 clientSideFile: null,
                 uploadProgress: m.storagePath ? 100 : undefined,
                 uploadError: null,
                 contentType: m.contentType || '',
-              })) || [initialMapping()]
-            );
+              });
+            });
+
+            const disbursementsWithMappings = baseDisbursements.map((d) => {
+              const mappingsForPayment = mappingGroups.get((d.paymentId || '').trim()) || [];
+              return {
+                ...d,
+                mappings: mappingsForPayment.map((mapping) => ({
+                  ...mapping,
+                  disbursementTempId: d._tempId,
+                  paymentId: d.paymentId,
+                })),
+              };
+            });
+
+            setDisbursements(disbursementsWithMappings);
             setReferenceDocuments(
               data.referenceDocuments && data.referenceDocuments.length > 0
                 ? data.referenceDocuments.map((doc) => ({
@@ -288,8 +449,7 @@ export default function CaseFormPage({ params }) {
                 ? data.auditArea.trim()
                 : DEFAULT_AUDIT_AREA
             );
-            const existingGroupId =
-              typeof data.caseGroupId === 'string' ? data.caseGroupId.trim() : '';
+            const existingGroupId = typeof data.caseGroupId === 'string' ? data.caseGroupId.trim() : '';
             if (existingGroupId && CASE_GROUP_VALUES.includes(existingGroupId)) {
               setCaseGroupSelection(existingGroupId);
               setCustomCaseGroupId('');
@@ -320,7 +480,6 @@ export default function CaseFormPage({ params }) {
       setOpensAtStr('');
       setDueAtStr('');
       setDisbursements([initialDisbursement()]);
-      setInvoiceMappings([initialMapping()]);
       setReferenceDocuments([initialReferenceDocument()]);
       setOriginalCaseData(null);
       setAuditArea(DEFAULT_AUDIT_AREA);
@@ -330,17 +489,67 @@ export default function CaseFormPage({ params }) {
   }, [isEditing, editingCaseId, navigate, showModal]);
 
   const handleDisbursementChange = (index, updatedItem) => {
-    const newDisbursements = [...disbursements];
-    newDisbursements[index] = updatedItem;
-    setDisbursements(newDisbursements);
+    setDisbursements((prev) =>
+      prev.map((item, i) => {
+        if (i !== index) return item;
+        let nextItem = updatedItem;
+        if (nextItem.answerKeyMode !== 'split') {
+          const classification = nextItem.answerKeySingleClassification || DEFAULT_ANSWER_KEY_CLASSIFICATION;
+          const amountNumber = Number(nextItem.amount || 0);
+          const explanation = nextItem.answerKey?.explanation || '';
+          nextItem = {
+            ...nextItem,
+            answerKey: buildSingleAnswerKey(classification, amountNumber, explanation),
+          };
+        }
+        return nextItem;
+      })
+    );
   };
   const addDisbursement = () => setDisbursements([...disbursements, initialDisbursement()]);
   const removeDisbursement = (index) => setDisbursements(disbursements.filter((_, i) => i !== index));
 
-  const handleMappingChange = (index, updatedItem) => {
-    const newMappings = [...invoiceMappings];
-    newMappings[index] = updatedItem;
-    setInvoiceMappings(newMappings);
+  const addMappingToDisbursement = (disbursementTempId) => {
+    setDisbursements((prev) =>
+      prev.map((disbursement) => {
+        if (disbursement._tempId !== disbursementTempId) return disbursement;
+        const newMapping = {
+          ...initialMapping(),
+          disbursementTempId,
+          paymentId: disbursement.paymentId,
+        };
+        return {
+          ...disbursement,
+          mappings: [...(disbursement.mappings || []), newMapping],
+        };
+      })
+    );
+  };
+
+  const updateMappingForDisbursement = (disbursementTempId, mappingTempId, updater) => {
+    setDisbursements((prev) =>
+      prev.map((disbursement) => {
+        if (disbursement._tempId !== disbursementTempId) return disbursement;
+        return {
+          ...disbursement,
+          mappings: (disbursement.mappings || []).map((mapping) =>
+            mapping._tempId === mappingTempId ? updater(mapping) : mapping
+          ),
+        };
+      })
+    );
+  };
+
+  const removeMappingFromDisbursement = (disbursementTempId, mappingTempId) => {
+    setDisbursements((prev) =>
+      prev.map((disbursement) => {
+        if (disbursement._tempId !== disbursementTempId) return disbursement;
+        return {
+          ...disbursement,
+          mappings: (disbursement.mappings || []).filter((mapping) => mapping._tempId !== mappingTempId),
+        };
+      })
+    );
   };
 
   const SUPPORTED_FILE_TYPES = [
@@ -358,9 +567,7 @@ export default function CaseFormPage({ params }) {
     SUPPORTED_FILE_TYPES.flatMap((entry) => entry.extensions.map((ext) => ext.toLowerCase()))
   );
 
-  const prettySupportedLabels = Array.from(
-    new Set(SUPPORTED_FILE_TYPES.map((entry) => entry.label))
-  ).join(', ');
+  const prettySupportedLabels = Array.from(new Set(SUPPORTED_FILE_TYPES.map((entry) => entry.label))).join(', ');
 
   const FILE_INPUT_ACCEPT = Array.from(
     new Set([
@@ -404,7 +611,7 @@ export default function CaseFormPage({ params }) {
 
   const ensureSafeStorageName = (rawName, desiredContentType) => {
     const sanitized = (rawName || 'artifact')
-      .replace(/[/\\#?[\]*<>:"|]+/g, '_')
+      .replace(/[\/\\#?[\]*<>:"|]+/g, '_')
       .replace(/\s+/g, ' ')
       .trim();
     const baseName = sanitized || 'artifact';
@@ -431,47 +638,60 @@ export default function CaseFormPage({ params }) {
     return `${baseName}${extensionForType}`;
   };
 
-  const handleMappingFileSelect = (index, file) => {
+  const handleMappingFileSelect = (disbursementTempId, mappingTempId, file) => {
     if (!file) return;
     if (!isSupportedFile(file)) {
-      ulog('reject:unsupported-file', { index, name: file.name, type: file.type });
+      ulog('reject:unsupported-file', { mappingTempId, name: file.name, type: file.type });
       showModal(`Unsupported file type. Allowed formats: ${prettySupportedLabels}.`, 'Invalid File Type');
       return;
     }
     if (file.size > MAX_ARTIFACT_BYTES) {
-      ulog('reject:too-large', { index, name: file.name, size: file.size });
+      ulog('reject:too-large', { mappingTempId, name: file.name, size: file.size });
       showModal(`File must be under ${Math.round(MAX_ARTIFACT_BYTES / (1024 * 1024))} MB.`, 'File Too Large');
       return;
     }
-    ulog('select', { index, name: file.name, type: file.type, size: file.size });
+    ulog('select', { mappingTempId, name: file.name, type: file.type, size: file.size });
     const contentType = pickContentType(file);
-    setInvoiceMappings((prevMappings) =>
-      prevMappings.map((m, i) =>
-        i === index
-          ? {
-              ...m,
-              clientSideFile: file,
-              fileName: file.name,
-              storagePath: '',
-              uploadProgress: 0,
-              uploadError: null,
-              downloadURL: '',
-              contentType,
-            }
-          : m
-      )
-    );
+    updateMappingForDisbursement(disbursementTempId, mappingTempId, (mapping) => ({
+      ...mapping,
+      clientSideFile: file,
+      fileName: file.name,
+      storagePath: '',
+      uploadProgress: 0,
+      uploadError: null,
+      downloadURL: '',
+      contentType,
+    }));
   };
 
-  const addMapping = () => {
-    setInvoiceMappings([...invoiceMappings, initialMapping()]);
+  const syncMappingsWithPaymentId = (disbursementTempId, newPaymentId) => {
+    setDisbursements((prev) =>
+      prev.map((disbursement) => {
+        if (disbursement._tempId !== disbursementTempId) return disbursement;
+        return {
+          ...disbursement,
+          mappings: (disbursement.mappings || []).map((mapping) => ({
+            ...mapping,
+            paymentId: newPaymentId,
+          })),
+        };
+      })
+    );
   };
-  const removeMapping = (index) => setInvoiceMappings(invoiceMappings.filter((_, i) => i !== index));
 
   const handleReferenceDocChange = (index, updatedItem) => {
     const next = [...referenceDocuments];
     next[index] = updatedItem;
     setReferenceDocuments(next);
+  };
+
+  const updateAnswerKeyForDisbursement = (disbursementIndex, updater) => {
+    setDisbursements((prev) =>
+      prev.map((disbursement, index) => {
+        if (index !== disbursementIndex) return disbursement;
+        return updater(disbursement);
+      })
+    );
   };
 
   const handleReferenceDocFileSelect = (index, file) => {
@@ -525,145 +745,149 @@ export default function CaseFormPage({ params }) {
     return { timestamp: Timestamp.fromDate(parsed) };
   };
 
-  const availablePaymentIdsForMapping = disbursements.map((d) => d.paymentId).filter((id) => id);
-
   const handleCsvImport = (event) => {
-    const file = event.target.files[0];
+    const file = event.target.files?.[0];
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (e) => {
-      const text = e.target.result;
-      if (!text || text.trim() === '') {
-        showModal('CSV file is empty or contains no processable content.', 'CSV Import Error');
-        return;
-      }
+    reader.onload = (loadEvent) => {
       try {
-        const lines = text.split(/\r\n|\n/);
-        if (lines.length <= 1 && !(lines.length === 1 && lines[0].trim() !== '')) {
-          showModal('CSV file is empty or contains only a header row.', 'CSV Import Error');
+        const text = String(loadEvent.target?.result || '').trim();
+        if (!text) {
+          showModal('CSV file appears to be empty.', 'Import Error');
+          return;
+        }
+        const rows = text.split(/\r?\n/).filter(Boolean);
+        if (rows.length === 0) {
+          showModal('CSV file appears to be empty.', 'Import Error');
+          return;
+        }
+        const [headerLine, ...dataLines] = rows;
+        const headers = headerLine.split(',').map((h) => h.trim().toLowerCase());
+        const paymentIdIdx = headers.indexOf('paymentid');
+        const payeeIdx = headers.indexOf('payee');
+        const amountIdx = headers.indexOf('amount');
+        const paymentDateIdx = headers.indexOf('paymentdate');
+
+        if (paymentIdIdx === -1 || payeeIdx === -1 || amountIdx === -1 || paymentDateIdx === -1) {
+          showModal('CSV must include PaymentID, Payee, Amount, PaymentDate columns.', 'Import Error');
           if (disbursementCsvInputRef.current) disbursementCsvInputRef.current.value = '';
           return;
         }
-        const importedDisbursements = lines
-          .slice(1)
-          .map((line) => {
-            const parts = line.split(',');
-            if (parts.length >= 4) {
-              const [paymentId, payee, amount, paymentDate] = parts;
-              if (paymentId && payee && amount && paymentDate) {
-                return {
-                  _tempId: getUUID(),
-                  paymentId: paymentId.trim(),
-                  payee: payee.trim(),
-                  amount: amount.trim(),
-                  paymentDate: paymentDate.trim(),
-                };
-              }
-            }
-            return null;
-          })
-          .filter((d) => d !== null);
 
-        if (importedDisbursements.length > 0) {
-          setDisbursements(importedDisbursements);
-          showModal(`${importedDisbursements.length} disbursements imported successfully. Please review. Existing manual entries were replaced.`, 'CSV Import');
-        } else {
-          showModal('No valid disbursements found in CSV or CSV format is incorrect. Expected columns: PaymentID,Payee,Amount,PaymentDate', 'CSV Import Error');
+        const imported = dataLines.map((line) => {
+          const cells = line.split(',');
+          const amountValue = cells[amountIdx]?.trim() || '';
+          const amountNumber = Number(amountValue) || 0;
+          return {
+            _tempId: getUUID(),
+            paymentId: cells[paymentIdIdx]?.trim() || '',
+            payee: cells[payeeIdx]?.trim() || '',
+            amount: amountValue,
+            paymentDate: cells[paymentDateIdx]?.trim() || '',
+            answerKeyMode: 'single',
+            answerKeySingleClassification: DEFAULT_ANSWER_KEY_CLASSIFICATION,
+            answerKey: buildSingleAnswerKey(null, amountNumber, ''),
+            mappings: [],
+          };
+        });
+
+        if (imported.length === 0) {
+          showModal('No rows found in CSV after header.', 'Import Error');
+          if (disbursementCsvInputRef.current) disbursementCsvInputRef.current.value = '';
+          return;
         }
+
+        setDisbursements(imported);
+        showModal(`Imported ${imported.length} disbursement${imported.length === 1 ? '' : 's'} from CSV.`, 'Import Complete');
       } catch (error) {
         console.error('Error parsing CSV:', error);
-        showModal('Error parsing CSV file: ' + error.message, 'CSV Import Error');
+        showModal('Unable to read the CSV file. Please verify the format and try again.', 'Import Error');
+      } finally {
+        if (disbursementCsvInputRef.current) {
+          disbursementCsvInputRef.current.value = '';
+        }
       }
+    };
+
+    reader.onerror = () => {
+      showModal('Unexpected error reading the CSV file. Please try again.', 'Import Error');
       if (disbursementCsvInputRef.current) {
         disbursementCsvInputRef.current.value = '';
       }
     };
+
     reader.readAsText(file);
   };
 
   const uploadFileAndGetMetadata = async (mappingItem, caseIdForUpload) => {
-    if (!mappingItem.clientSideFile) {
-      return mappingItem.fileName
-        ? {
-            paymentId: mappingItem.paymentId,
-            fileName: mappingItem.fileName,
-            storagePath: mappingItem.storagePath,
-            downloadURL: mappingItem.downloadURL || '',
-            contentType: mappingItem.contentType || null,
-          }
-        : null;
-    }
-
+    const uploadId = `mapping_${mappingItem._tempId || Math.random().toString(36).slice(2, 8)}`;
     const file = mappingItem.clientSideFile;
-    const uploadId = `u_${Math.random().toString(36).slice(2, 8)}`;
-    ulog(uploadId, 'start', { paymentId: mappingItem.paymentId, caseIdForUpload, name: file?.name, type: file?.type, size: file?.size, online: navigator.onLine });
+    const fallbackName = (mappingItem.fileName || '').trim() || (file?.name || '').trim();
+    const parentTempId = mappingItem.disbursementTempId;
 
-    if (!navigator.onLine) {
-      ulog(uploadId, 'offline-abort');
+    if (!file) {
+      if (!fallbackName) {
+        return {
+          paymentId: mappingItem.paymentId,
+          fileName: '',
+          uploadError: 'No file selected',
+          storagePath: '',
+          downloadURL: '',
+        };
+      }
       return {
         paymentId: mappingItem.paymentId,
-        fileName: file?.name || 'invoice.pdf',
-        uploadError: 'Browser is offline',
-        storagePath: '',
-        downloadURL: '',
-        contentType: mappingItem.contentType || pickContentType(file),
+        fileName: fallbackName,
+        storagePath: mappingItem.storagePath || '',
+        downloadURL: mappingItem.downloadURL || '',
+        contentType: mappingItem.contentType || '',
       };
-    }
-    if (!caseIdForUpload) {
-      const errorMsg = 'Cannot upload file: Case ID is not yet finalized for new case.';
-      console.error(errorMsg, mappingItem);
-      ulog(uploadId, 'abort:no-case-id');
-      setInvoiceMappings((prev) => prev.map((m) => (m._tempId === mappingItem._tempId ? { ...m, uploadError: errorMsg, uploadProgress: undefined } : m)));
-      throw new Error(errorMsg);
     }
 
     const desiredContentType = mappingItem.contentType || pickContentType(file);
-    const rawName = file?.name || 'invoice.pdf';
-    const safeName = ensureSafeStorageName(rawName, desiredContentType);
-    const finalStoragePath = `artifacts/${appId}/case_documents/${caseIdForUpload}/${safeName}`;
-    ulog(uploadId, 'path', { rawName, safeName, finalStoragePath });
-
-    setInvoiceMappings((prev) =>
-      prev.map((m) =>
-        m._tempId === mappingItem._tempId
-          ? {
-              ...m,
-              storagePath: finalStoragePath,
-              uploadProgress: 0,
-              uploadError: null,
-              fileName: safeName,
-              contentType: desiredContentType,
-            }
-          : m
-      )
-    );
-
-    const timeoutMs = UPLOAD_TIMEOUT_MS;
-
-
+    const safeName = ensureSafeStorageName(fallbackName || file.name || 'supporting-document.pdf', desiredContentType);
+    const finalStoragePath = `artifacts/${appId}/case_invoice/${caseIdForUpload}/${safeName}`;
     const fileRef = storageRef(storage, finalStoragePath);
 
-    const awaitResumable = (task) => {
-      return new Promise((resolve, reject) => {
+    updateMappingForDisbursement(parentTempId, mappingItem._tempId, (current) => ({
+      ...current,
+      fileName: safeName,
+      storagePath: finalStoragePath,
+      uploadProgress: 0,
+      uploadError: null,
+      contentType: desiredContentType,
+    }));
+
+    const awaitResumable = (task) =>
+      new Promise((resolve, reject) => {
         let lastLogged = -10;
         const timer = setTimeout(() => {
-          try { task.cancel(); } catch {}
-          ulog(uploadId, 'timeout', `${timeoutMs}ms`);
+          try {
+            task.cancel();
+          } catch {}
+          ulog(uploadId, 'timeout', `${UPLOAD_TIMEOUT_MS}ms`);
           unsubscribe();
-          reject(new Error(`Upload timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
+          reject(new Error(`Upload timed out after ${UPLOAD_TIMEOUT_MS}ms`));
+        }, UPLOAD_TIMEOUT_MS);
 
-        const unsubscribe = task.on('state_changed',
+        const unsubscribe = task.on(
+          'state_changed',
           (snapshot) => {
             const pct = Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100);
             if (pct - lastLogged >= 10) {
-              ulog(uploadId, 'progress', { pct, state: snapshot.state, bytesTransferred: snapshot.bytesTransferred, totalBytes: snapshot.totalBytes });
+              ulog(uploadId, 'progress', {
+                pct,
+                state: snapshot.state,
+                bytesTransferred: snapshot.bytesTransferred,
+                totalBytes: snapshot.totalBytes,
+              });
               lastLogged = pct;
             }
-            setInvoiceMappings((prev) =>
-              prev.map((m) => (m._tempId === mappingItem._tempId ? { ...m, uploadProgress: pct } : m))
-            );
+            updateMappingForDisbursement(parentTempId, mappingItem._tempId, (current) => ({
+              ...current,
+              uploadProgress: pct,
+            }));
           },
           (err) => {
             clearTimeout(timer);
@@ -677,8 +901,6 @@ export default function CaseFormPage({ params }) {
           }
         );
       });
-    };
-
 
     const runResumable = async () => {
       ulog(uploadId, 'mode', 'resumable');
@@ -709,7 +931,8 @@ export default function CaseFormPage({ params }) {
         if (code === 'storage/retry-limit-exceeded') {
           msg = 'Network was unstable for too long and the upload was aborted. Please check your connection and try again.';
         }
-        const response = error?.serverResponse ??
+        const response =
+          error?.serverResponse ??
           error?.customData?.serverResponse ??
           error?.customData?._rawError ??
           error?.message ??
@@ -719,23 +942,29 @@ export default function CaseFormPage({ params }) {
         } catch {}
         let parsedResponse = null;
         if (typeof response === 'string') {
-          try { parsedResponse = JSON.parse(response); } catch {}
+          try {
+            parsedResponse = JSON.parse(response);
+          } catch {}
         }
         ulog(uploadId, 'error:resumable', {
           code,
           msg,
-          error: error ? {
-            message: error.message,
-            code: error.code,
-            name: error.name,
-            customData: error.customData,
-            serverResponse: response,
-            parsedResponse,
-          } : null,
+          error: error
+            ? {
+                message: error.message,
+                code: error.code,
+                name: error.name,
+                customData: error.customData,
+                serverResponse: response,
+                parsedResponse,
+              }
+            : null,
         });
-        setInvoiceMappings((prev) =>
-          prev.map((m) => (m._tempId === mappingItem._tempId ? { ...m, uploadError: msg, uploadProgress: undefined } : m))
-        );
+        updateMappingForDisbursement(parentTempId, mappingItem._tempId, (current) => ({
+          ...current,
+          uploadError: msg,
+          uploadProgress: undefined,
+        }));
         return {
           paymentId: mappingItem.paymentId,
           fileName: safeName,
@@ -747,12 +976,15 @@ export default function CaseFormPage({ params }) {
       }
     };
 
-    // Always use resumable upload
     const first = await runResumable();
-
-    // Optional single retry on transient failures
     const msgLower = String(first?.uploadError || '').toLowerCase();
-    const transient = msgLower.includes('retry-limit-exceeded') || msgLower.includes('network') || msgLower.includes('500') || msgLower.includes('503') || msgLower.includes('quota') || msgLower.includes('timeout');
+    const transient =
+      msgLower.includes('retry-limit-exceeded') ||
+      msgLower.includes('network') ||
+      msgLower.includes('500') ||
+      msgLower.includes('503') ||
+      msgLower.includes('quota') ||
+      msgLower.includes('timeout');
 
     if (first && first.uploadError && transient) {
       ulog(uploadId, 'retry:once', first.uploadError);
@@ -948,135 +1180,115 @@ export default function CaseFormPage({ params }) {
         });
         setReferenceDocuments((prev) =>
           prev.map((doc) =>
-            doc._tempId === docItem._tempId ? { ...doc, uploadError: msg, uploadProgress: undefined } : doc
+            doc._tempId === docItem._tempId
+              ? { ...doc, uploadError: msg, uploadProgress: undefined }
+              : doc
           )
         );
         return {
           _tempId: docItem._tempId,
-          fileName: displayName || file?.name || 'reference.pdf',
-          uploadError: msg,
+          fileName: displayName,
           storagePath: finalStoragePath,
           downloadURL: '',
+          uploadError: msg,
           contentType: desiredContentType || 'application/octet-stream',
         };
       }
     };
 
-    const firstAttempt = await runResumable();
-    const lowerMessage = String(firstAttempt?.uploadError || '').toLowerCase();
-    const shouldRetry =
-      firstAttempt && firstAttempt.uploadError && (lowerMessage.includes('network') || lowerMessage.includes('timeout') || lowerMessage.includes('retry-limit-exceeded') || lowerMessage.includes('500') || lowerMessage.includes('503') || lowerMessage.includes('quota'));
+    const first = await runResumable();
+    const msgLower = String(first?.uploadError || '').toLowerCase();
+    const transient =
+      msgLower.includes('retry-limit-exceeded') ||
+      msgLower.includes('network') ||
+      msgLower.includes('500') ||
+      msgLower.includes('503') ||
+      msgLower.includes('quota') ||
+      msgLower.includes('timeout');
 
-    if (shouldRetry) {
-      ulog(uploadId, 'reference:retry', firstAttempt.uploadError);
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+    if (first && first.uploadError && transient) {
+      ulog(uploadId, 'reference:retry:once', first.uploadError);
+      await new Promise((r) => setTimeout(r, 1500));
       return await runResumable();
     }
 
-    return firstAttempt;
+    return first;
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    if (!userId) {
-      showModal('You must be logged in to create/edit a case.', 'Authentication Error');
-      return;
-    }
+  const handleSubmit = async (event) => {
+    event.preventDefault();
 
     if (!caseName.trim()) {
       showModal('Case name is required.', 'Validation Error');
       return;
     }
-    if (disbursements.some((d) => !d.paymentId || !d.payee || !d.amount || !d.paymentDate)) {
-      showModal('All disbursement fields (Payment ID, Payee, Amount, Payment Date) are required.', 'Validation Error');
-      return;
-    }
-    const currentDisbursementIds = new Set(disbursements.map((d) => d.paymentId).filter(Boolean));
-    if (currentDisbursementIds.size !== disbursements.filter((d) => d.paymentId).length) {
-      showModal('Disbursement Payment IDs must be unique within this case.', 'Validation Error');
+
+    if (!Array.isArray(disbursements) || disbursements.length === 0) {
+      showModal('Add at least one disbursement before saving.', 'Validation Error');
       return;
     }
 
-    const activeMappings = invoiceMappings.filter((m) => m.paymentId || m.clientSideFile || m.fileName);
-    if (activeMappings.some((m) => !m.paymentId || (!m.fileName && !m.clientSideFile))) {
-      showModal('Each active invoice mapping must have both a Payment ID selected and an uploaded artifact.', 'Validation Error');
-      return;
+    const keyFields = ['paymentId', 'payee', 'amount', 'paymentDate'];
+    for (let index = 0; index < disbursements.length; index++) {
+      const item = disbursements[index];
+      const missingFields = keyFields.filter((field) => !item[field]);
+      if (missingFields.length > 0) {
+        showModal(`Disbursement #${index + 1} is missing: ${missingFields.join(', ')}.`, 'Validation Error');
+        return;
+      }
     }
-    if (activeMappings.some((m) => m.paymentId && !currentDisbursementIds.has(m.paymentId))) {
-      showModal('One or more invoice mappings reference a Payment ID that no longer exists in the disbursements list. Please correct the mappings or remove them.', 'Invalid Payment ID in Mapping');
-      return;
-    }
-
-    const activeReferenceDocs = referenceDocuments.filter((doc) => {
-      const name = (doc.fileName || '').trim() || (doc.clientSideFile?.name || '').trim();
-      const storagePath = (doc.storagePath || '').trim();
-      const downloadURL = (doc.downloadURL || '').trim();
-      return Boolean(name || storagePath || downloadURL || doc.clientSideFile);
-    });
-
-    const referenceValidationFailed = activeReferenceDocs.some((doc) => {
-      const name = (doc.fileName || '').trim() || (doc.clientSideFile?.name || '').trim();
-      if (!name) return true;
-      const hasLink =
-        (doc.storagePath && doc.storagePath.trim()) ||
-        (doc.downloadURL && doc.downloadURL.trim()) ||
-        doc.clientSideFile;
-      return !hasLink;
-    });
-
-    if (referenceValidationFailed) {
-      showModal(
-        'Each reference document must include a display name and either an uploaded file, a storage path, or a download URL.',
-        'Validation Error'
-      );
-      return;
-    }
-
-    const parseAnswerValue = (value) => {
-      if (value === '' || value === null || value === undefined) return null;
-      const numeric = Number(value);
-      return Number.isFinite(numeric) ? numeric : NaN;
-    };
 
     const answerKeyIssues = [];
-    const isDevMode = process.env.NODE_ENV !== 'production';
+    disbursements.forEach((disbursement, index) => {
+      const key = disbursement.answerKey || {};
+      const amountNumber = Number(disbursement.amount || 0);
+      const explanationMissing = !String(key.explanation || '').trim();
 
-    disbursements.forEach((disbursement) => {
-      const answerKey = disbursement.answerKey || {};
-      const parsedValues = ANSWER_KEY_FIELDS.map((field) => parseAnswerValue(answerKey[field]));
-      const hasAnyEntry = parsedValues.some((value) => value !== null);
-
-      if (!hasAnyEntry) return;
-
-      const invalidIndex = parsedValues.findIndex((value) => value !== null && Number.isNaN(value));
-      if (invalidIndex >= 0) {
-        answerKeyIssues.push(
-          `Answer key for Payment ID ${disbursement.paymentId || 'unknown'} has a non-numeric value in the ${ANSWER_KEY_FIELDS[invalidIndex]} field.`
-        );
+      if (disbursement.answerKeyMode === 'split') {
+        const totals = ANSWER_KEY_FIELDS.reduce((sum, field) => {
+          const value = Number(key[field] || 0);
+          if (!Number.isNaN(value)) return sum + value;
+          return sum;
+        }, 0);
+        const hasValues = ANSWER_KEY_FIELDS.some((field) => Number(key[field] || 0) > 0);
+        if (!hasValues || explanationMissing) {
+          answerKeyIssues.push(
+            `Answer key for disbursement #${index + 1} (${disbursement.paymentId || 'no payment ID'}) requires split amounts and an explanation.`
+          );
+          return;
+        }
+        const diff = Math.abs(totals - amountNumber);
+        if (diff > ANSWER_KEY_TOLERANCE) {
+          answerKeyIssues.push(
+            `Disbursement #${index + 1} (${disbursement.paymentId || 'no payment ID'}) has answer key totals (${totals.toFixed(
+              2
+            )}) that do not match the disbursement amount (${amountNumber.toFixed(2)}).`
+          );
+        }
         return;
       }
 
-      const amountNumber = Number(disbursement.amount);
-      if (!Number.isFinite(amountNumber)) {
+      const classification = disbursement.answerKeySingleClassification;
+      if (!classification || classification === ANSWER_KEY_PLACEHOLDER) {
         answerKeyIssues.push(
-          `Answer key for Payment ID ${disbursement.paymentId || 'unknown'} could not validate because the disbursement amount is not numeric.`
+          `Choose a classification for disbursement #${index + 1} (${disbursement.paymentId || 'no payment ID'}).`
         );
         return;
       }
-
-      const total = parsedValues.reduce((sum, value) => sum + (value ?? 0), 0);
-      if (Math.abs(total - amountNumber) > ANSWER_KEY_TOLERANCE) {
+      if (explanationMissing) {
         answerKeyIssues.push(
-          `Answer key totals (${total.toFixed(2)}) must equal the disbursement amount (${amountNumber.toFixed(2)}) for Payment ID ${
-            disbursement.paymentId || 'unknown'
-          }.`
+          `Provide an explanation for disbursement #${index + 1} (${disbursement.paymentId || 'no payment ID'}).`
         );
-      } else if (isDevMode) {
-        console.debug('[case-form] answerKey validated', {
-          paymentId: disbursement.paymentId,
-          total,
-          amount: amountNumber,
-        });
+        return;
+      }
+      const assignedAmount = Number(key[classification] || 0);
+      const diff = Math.abs(assignedAmount - amountNumber);
+      if (diff > ANSWER_KEY_TOLERANCE) {
+        answerKeyIssues.push(
+          `Disbursement #${index + 1} (${disbursement.paymentId || 'no payment ID'}) has answer key totals (${assignedAmount.toFixed(
+            2
+          )}) that do not match the disbursement amount (${amountNumber.toFixed(2)}).`
+        );
       }
     });
 
@@ -1126,12 +1338,45 @@ export default function CaseFormPage({ params }) {
     let currentCaseId = editingCaseId;
     let isNewCaseCreation = !isEditing;
 
+    const activeReferenceDocs = referenceDocuments.filter((doc) => {
+      if (!doc) return false;
+      if (doc.clientSideFile) return true;
+      if (doc.fileName) return true;
+      if (doc.downloadURL) return true;
+      if (doc.storagePath) return true;
+      return false;
+    });
+
+    const referenceValidationFailed = activeReferenceDocs.some((doc) => {
+      const name = (doc.fileName || '').trim();
+      const hasUpload = !!doc.clientSideFile;
+      const hasUrl = !!doc.downloadURL;
+      const hasStoragePath = !!doc.storagePath;
+      if (!name) return true;
+      if (!hasUpload && !hasUrl && !hasStoragePath) return true;
+      return false;
+    });
+
+    if (referenceValidationFailed) {
+      showModal('Reference documents must include a display name and either an uploaded file, download URL, or storage path.', 'Validation Error');
+      setLoading(false);
+      return;
+    }
+
+    const flattenedMappings = disbursements.flatMap((disbursement) =>
+      (disbursement.mappings || []).map((mapping) => ({
+        ...mapping,
+        paymentId: disbursement.paymentId,
+        disbursementTempId: disbursement._tempId,
+      }))
+    );
+
     try {
       if (isNewCaseCreation) {
         const tempCaseData = {
           caseName,
           title: caseName,
-          disbursements: disbursements.map(({ _tempId, ...rest }) => rest),
+          disbursements: disbursements.map(({ _tempId, mappings, ...rest }) => rest),
           invoiceMappings: [],
           referenceDocuments: [],
           visibleToUserIds: visibleToUserIdsArray,
@@ -1145,37 +1390,60 @@ export default function CaseFormPage({ params }) {
           caseGroupId: resolvedCaseGroupId,
         };
         currentCaseId = await createCase(tempCaseData);
-        showModal(`Case structure created (ID: ${currentCaseId}). Uploading files... This may take a moment. Please do not navigate away.`, 'Processing', null);
+        showModal(
+          `Case structure created (ID: ${currentCaseId}). Uploading files... This may take a moment. Please do not navigate away.`,
+          'Processing',
+          null
+        );
       } else if (editingCaseId) {
         currentCaseId = editingCaseId;
-        showModal(`Updating case (ID: ${currentCaseId}). Uploading any new/changed files... Please do not navigate away.`, 'Processing', null);
+        showModal(
+          `Updating case (ID: ${currentCaseId}). Uploading any new/changed files... Please do not navigate away.`,
+          'Processing',
+          null
+        );
       }
 
       if (!currentCaseId) throw new Error('Case ID is missing. Cannot proceed with file uploads.');
 
-      const candidates = invoiceMappings.filter((m) => m.paymentId && (m.clientSideFile || m.fileName));
+      const uploadCandidates = flattenedMappings.filter((m) => m.paymentId && m.clientSideFile);
 
       const settled = await Promise.allSettled(
-        candidates.map((mapping) => uploadFileAndGetMetadata(mapping, currentCaseId))
+        uploadCandidates.map((mapping) => uploadFileAndGetMetadata(mapping, currentCaseId))
       );
 
       const uploadResults = settled.map((r, idx) =>
         r.status === 'fulfilled'
           ? r.value
-          : { uploadError: r.reason?.message || 'Upload failed', fileName: candidates[idx]?.fileName, paymentId: candidates[idx]?.paymentId }
+          : {
+              uploadError: r.reason?.message || 'Upload failed',
+              fileName: uploadCandidates[idx]?.fileName,
+              paymentId: uploadCandidates[idx]?.paymentId,
+            }
       );
 
       const failedUploads = uploadResults.filter((result) => result && result.uploadError);
       if (failedUploads.length > 0) {
-        const errorMessages = failedUploads.map((f) => `- ${f.fileName || 'A file'} for Payment ID ${f.paymentId}: ${f.uploadError}`).join('\n');
-        showModal(`Some file uploads failed:\n${errorMessages}\n\nPlease correct the issues by re-selecting files or removing problematic mappings, then try saving again. Case data has not been fully saved.`, 'Upload Errors');
+        const errorMessages = failedUploads
+          .map((f) => `- ${f.fileName || 'A file'} for Payment ID ${f.paymentId}: ${f.uploadError}`)
+          .join('\n');
+        showModal(
+          `Some file uploads failed:\n${errorMessages}\n\nPlease correct the issues by re-selecting files or removing problematic mappings, then try saving again. Case data has not been fully saved.`,
+          'Upload Errors'
+        );
         setLoading(false);
         return;
       }
 
-      const finalInvoiceMappings = uploadResults
+      const uploadedMappings = uploadResults
         .filter((r) => r && !r.uploadError)
-        .map(({ clientSideFile, uploadProgress, _tempId, ...rest }) => rest);
+        .map(({ clientSideFile, uploadProgress, _tempId, disbursementTempId, uploadError, ...rest }) => rest);
+
+      const retainedMappings = flattenedMappings
+        .filter((mapping) => mapping.paymentId && !mapping.clientSideFile)
+        .map(({ clientSideFile, uploadProgress, uploadError, disbursementTempId, ...rest }) => rest);
+
+      const finalInvoiceMappings = [...retainedMappings, ...uploadedMappings];
 
       let finalReferenceDocuments = [];
       if (activeReferenceDocs.length > 0) {
@@ -1213,7 +1481,9 @@ export default function CaseFormPage({ params }) {
           .map(({ _tempId, clientSideFile, uploadProgress, uploadError, ...rest }) => rest);
       }
 
-      const disbursementPayload = mergeDisbursementDocuments(disbursements, finalInvoiceMappings);
+      const disbursementPayload = mergeDisbursementDocuments(disbursements, finalInvoiceMappings).map(
+        ({ mappings, answerKeyMode, answerKeySingleClassification, ...rest }) => rest
+      );
 
       const caseDataPayload = {
         caseName,
@@ -1250,238 +1520,1007 @@ export default function CaseFormPage({ params }) {
     }
   };
 
-  if (loading && isEditing) return <div className="p-4 text-center">Loading case details...</div>;
+  const goBack = () => navigate('/admin');
+
+  const basics = {
+    caseName,
+    setCaseName,
+    auditArea,
+    setAuditArea,
+    auditAreaSelectOptions,
+    caseGroupSelection,
+    setCaseGroupSelection,
+    caseGroupSelectOptions,
+    customCaseGroupId,
+    setCustomCaseGroupId,
+    status,
+    setStatus,
+    statusOptions: STATUS_OPTIONS,
+  };
+
+  const audience = {
+    publicVisible,
+    setPublicVisible,
+    selectedUserIds,
+    setSelectedUserIds,
+    rosterOptions,
+    rosterLoading,
+    rosterError,
+    opensAtStr,
+    setOpensAtStr,
+    dueAtStr,
+    setDueAtStr,
+  };
+
+  const transactions = {
+    disbursements,
+    handleDisbursementChange,
+    addDisbursement,
+    removeDisbursement,
+    addMappingToDisbursement,
+    removeMappingFromDisbursement,
+    handleMappingFileSelect,
+    syncMappingsWithPaymentId,
+    disbursementCsvInputRef,
+    handleCsvImport,
+  };
+
+  const attachments = {
+    disbursements,
+    referenceDocuments,
+    handleReferenceDocChange,
+    addReferenceDocument,
+    removeReferenceDocument,
+    handleReferenceDocFileSelect,
+  };
+
+  const answerKey = {
+    disbursements,
+    updateAnswerKeyForDisbursement,
+  };
+
+  const files = {
+    FILE_INPUT_ACCEPT,
+    prettySupportedLabels,
+    MAX_ARTIFACT_BYTES,
+  };
+
+  return {
+    meta: { isEditing, editingCaseId },
+    status: { loading },
+    basics,
+    audience,
+    transactions,
+    attachments,
+    answerKey,
+    files,
+    actions: { handleSubmit, goBack },
+  };
+}
+
+function CaseFormStepNav({ steps, activeStep, onStepChange, disabled }) {
+  const progressPct = Math.round(((activeStep + 1) / steps.length) * 100);
 
   return (
-    <div className="p-6 bg-gray-50 min-h-screen">
-      <div className="max-w-3xl mx-auto bg-white p-8 rounded-lg shadow-xl">
-        <h1 className="text-3xl font-bold text-gray-800 mb-8">{isEditing ? 'Edit Audit Case' : 'Create New Audit Case'}</h1>
-        <form onSubmit={handleSubmit} className="space-y-8">
-          <div>
-            <label htmlFor="caseName" className="block text-sm font-medium text-gray-700 mb-1">
-              Case Name
-            </label>
-            <Input id="caseName" value={caseName} onChange={(e) => setCaseName(e.target.value)} placeholder="e.g., Q1 Unrecorded Liabilities Review" required />
+    <div className="mb-6">
+      <div className="overflow-x-auto pb-2">
+        <div className="flex min-w-[560px] flex-nowrap gap-2">
+          {steps.map((step, index) => {
+            const isActive = index === activeStep;
+            const isComplete = index < activeStep;
+            return (
+              <button
+                key={step.id}
+                type="button"
+                onClick={() => !disabled && onStepChange(index)}
+                className={
+                  'flex min-w-[140px] items-center justify-center gap-2 rounded-full border px-4 py-2 text-sm font-medium transition ' +
+                  (isActive
+                    ? 'border-blue-600 bg-blue-50 text-blue-700 shadow-sm'
+                    : isComplete
+                    ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
+                    : 'border-gray-200 bg-gray-100 text-gray-600 hover:border-gray-300 hover:bg-gray-200')
+                }
+                disabled={disabled}
+              >
+                <span
+                  className={
+                    'inline-flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ' +
+                    (isActive || isComplete ? 'bg-current text-white' : 'bg-white text-gray-600')
+                  }
+                >
+                  {index + 1}
+                </span>
+                <span className="truncate">{step.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div className="mt-4 h-2 w-full rounded-full bg-gray-200" aria-hidden="true">
+        <div
+          className="h-2 rounded-full bg-gradient-to-r from-blue-500 via-indigo-500 to-emerald-400 transition-all"
+          style={{ width: `${progressPct}%` }}
+        />
+      </div>
+      <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-gray-500">
+        {progressPct}% complete
+      </p>
+      {steps[activeStep]?.description ? (
+        <p className="mt-3 text-sm text-gray-500">{steps[activeStep].description}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function StepIntro({ title, items = [], helper }) {
+  if (!title && items.length === 0 && !helper) return null;
+  return (
+    <div className="rounded-2xl border border-blue-100 bg-gradient-to-br from-blue-50 via-white to-emerald-50 p-5 text-sm shadow-sm">
+      {title ? <p className="text-sm font-semibold text-blue-700">{title}</p> : null}
+      {items.length > 0 ? (
+        <ul className="mt-3 space-y-1 text-gray-700">
+          {items.map((item) => (
+            <li key={item} className="flex items-start gap-2">
+              <span className="mt-1 h-1.5 w-1.5 rounded-full bg-blue-400" aria-hidden="true" />
+              <span>{item}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {helper ? <p className="mt-3 text-xs text-gray-500">{helper}</p> : null}
+    </div>
+  );
+}
+
+const ChecklistItem = ({ label, isReady, readyText = 'Ready', unreadyText = 'Incomplete' }) => {
+  const Icon = isReady ? CheckCircle2 : AlertTriangle;
+  const colorClass = isReady ? 'text-emerald-600' : 'text-amber-600';
+
+  return (
+    <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
+      <div className="flex items-center gap-3">
+        <Icon size={20} className={colorClass} />
+        <span className="text-sm font-medium text-gray-800">{label}</span>
+      </div>
+      <span className={`text-sm font-semibold ${colorClass}`}>{isReady ? readyText : unreadyText}</span>
+    </div>
+  );
+};
+
+function ReviewStep({ summaryData }) {
+  const formatDateTime = (value) => {
+    if (!value) return 'Not set';
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return 'Not set';
+    return new Intl.DateTimeFormat(undefined, {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }).format(date);
+  };
+
+  const audienceLabel = summaryData.publicVisible
+    ? 'Visible to all trainees'
+    : `${summaryData.selectedUserIds.length} specific user${summaryData.selectedUserIds.length === 1 ? '' : 's'}`;
+
+  return (
+    <div className="space-y-6">
+      <StepIntro
+        title="Final review"
+        items={[
+          'Confirm key dates, status, and audience visibility.',
+          'Double-check disbursement counts and supporting files.',
+          'Submit when you are confident everything is accurate.',
+        ]}
+        helper="You can navigate back to earlier steps if something needs a quick edit before publishing."
+      />
+
+      <div className="rounded-2xl border border-gray-200 bg-gray-50 p-6 shadow-sm">
+        <h2 className="text-lg font-semibold text-gray-900">Case Summary</h2>
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <div className="space-y-1">
+            <span className="text-xs uppercase tracking-wide text-gray-500 whitespace-nowrap">Case Name</span>
+            <p className="font-medium text-gray-900">{summaryData.caseName?.trim() || 'Untitled case'}</p>
           </div>
-          <section className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label htmlFor="auditArea" className="block text-sm font-medium text-gray-700 mb-1">
-                  Audit Area
-                </label>
-                <Select
-                  id="auditArea"
-                  value={auditArea}
-                  onChange={(e) => setAuditArea(e.target.value)}
-                  options={auditAreaSelectOptions}
-                  className="mt-1"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Choose the focus area used when trainees filter or analyze cases.
-                </p>
-              </div>
-              <div>
-                <label htmlFor="caseGroupSelection" className="block text-sm font-medium text-gray-700 mb-1">
-                  Case Group (optional)
-                </label>
-                <Select
-                  id="caseGroupSelection"
-                  value={caseGroupSelection}
-                  onChange={(e) => setCaseGroupSelection(e.target.value)}
-                  options={caseGroupSelectOptions}
-                  className="mt-1"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Organize scenarios by cohort or curriculum. Leave as &ldquo;No group&rdquo; if not needed.
-                </p>
-              </div>
-            </div>
-            {caseGroupSelection === '__custom' ? (
-              <div>
-                <label htmlFor="customCaseGroupId" className="block text-sm font-medium text-gray-700 mb-1">
-                  Custom Group Identifier
-                </label>
-                <Input
-                  id="customCaseGroupId"
-                  value={customCaseGroupId}
-                  onChange={(e) => setCustomCaseGroupId(e.target.value)}
-                  placeholder="e.g., ap-advanced-spring"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Use a lowercase slug that matches your reporting conventions.
-                </p>
-              </div>
+          <div className="space-y-1">
+            <span className="text-xs uppercase tracking-wide text-gray-500 whitespace-nowrap">Status</span>
+            <p className="font-medium text-gray-900 capitalize">{summaryData.status}</p>
+          </div>
+          <div className="space-y-1">
+            <span className="text-xs uppercase tracking-wide text-gray-500 whitespace-nowrap">Opens</span>
+            <p className="font-medium text-gray-900">{formatDateTime(summaryData.opensAtStr)}</p>
+          </div>
+          <div className="space-y-1">
+            <span className="text-xs uppercase tracking-wide text-gray-500 whitespace-nowrap">Due</span>
+            <p className="font-medium text-gray-900">{formatDateTime(summaryData.dueAtStr)}</p>
+          </div>
+          <div className="space-y-1 md:col-span-2">
+            <span className="text-xs uppercase tracking-wide text-gray-500 whitespace-nowrap">Audience</span>
+            <p className="font-medium text-gray-900">{audienceLabel}</p>
+            {!summaryData.publicVisible && summaryData.selectedUserIds.length > 0 ? (
+              <ul className="mt-1 flex flex-wrap gap-2 text-xs text-gray-600">
+                {summaryData.selectedUserIds.slice(0, 6).map((id) => (
+                  <li key={id} className="rounded bg-white px-2 py-1 shadow-sm">
+                    {id}
+                  </li>
+                ))}
+                {summaryData.selectedUserIds.length > 6 ? (
+                  <li className="rounded bg-white px-2 py-1 shadow-sm text-gray-500">
+                    +{summaryData.selectedUserIds.length - 6} more
+                  </li>
+                ) : null}
+              </ul>
             ) : null}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Audience</label>
-              <div className="flex items-center space-x-3">
-                <input
-                  id="publicVisible"
-                  type="checkbox"
-                  className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
-                  checked={publicVisible}
-                  onChange={(e) => setPublicVisible(e.target.checked)}
-                />
-                <label htmlFor="publicVisible" className="text-sm text-gray-700">
-                  Visible to all signed-in trainees
-                </label>
-              </div>
-              <p className="text-xs text-gray-500 mt-1">
-                Disable this to restrict the case to specific user IDs.
+          </div>
+        </div>
+
+        <div className="mt-6 grid gap-3 sm:grid-cols-3">
+          <SummaryPill label="Disbursements" value={summaryData.disbursementCount} />
+          <SummaryPill label="Invoice Docs" value={summaryData.mappingCount} />
+          <SummaryPill label="References" value={summaryData.attachmentCount} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const SummaryPill = ({ label, value }) => (
+  <div className="rounded-xl border border-gray-200 bg-white p-4 text-center shadow-sm">
+    <span className="block text-[11px] font-semibold uppercase tracking-wide text-gray-500 whitespace-nowrap">
+      {label}
+    </span>
+    <span className="mt-2 block text-2xl font-semibold text-gray-900">{value}</span>
+  </div>
+);
+
+function CaseBasicsStep({ basics }) {
+  const {
+    caseName,
+    setCaseName,
+    auditArea,
+    setAuditArea,
+    auditAreaSelectOptions,
+    caseGroupSelection,
+    setCaseGroupSelection,
+    caseGroupSelectOptions,
+    customCaseGroupId,
+    setCustomCaseGroupId,
+    status,
+    setStatus,
+    statusOptions,
+  } = basics;
+
+  return (
+    <div className="space-y-6">
+      <StepIntro
+        title="In this step"
+        items={[
+          'Give the case a clear name trainees will recognize.',
+          'Choose the audit area and active status.',
+          'Optionally group the case for cohorts or curriculum.'
+        ]}
+        helper="You can revisit these details later. Keeping the status accurate helps trainees understand whether the case is ready."
+      />
+
+      <div>
+        <label htmlFor="caseName" className="block text-sm font-medium text-gray-700">
+          Case Name
+        </label>
+        <Input
+          id="caseName"
+          value={caseName}
+          onChange={(e) => setCaseName(e.target.value)}
+          placeholder="e.g., Q1 Unrecorded Liabilities Review"
+          required
+          className="mt-2"
+        />
+        <p className="mt-1 text-xs text-gray-500">Trainees see this title on their dashboard.</p>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+        <div>
+          <label htmlFor="auditArea" className="block text-sm font-medium text-gray-700">
+            Audit Area
+          </label>
+          <Select
+            id="auditArea"
+            value={auditArea}
+            onChange={(e) => setAuditArea(e.target.value)}
+            options={auditAreaSelectOptions}
+            className="mt-2"
+          />
+          <p className="mt-1 text-xs text-gray-500">Used for filtering and reporting.</p>
+        </div>
+        <div>
+          <label htmlFor="caseStatus" className="block text-sm font-medium text-gray-700">
+            Case Status
+          </label>
+          <Select
+            id="caseStatus"
+            value={status}
+            onChange={(e) => setStatus(e.target.value)}
+            options={statusOptions}
+            className="mt-2"
+          />
+        </div>
+      </div>
+
+      <div>
+        <label htmlFor="caseGroupSelection" className="block text-sm font-medium text-gray-700">
+          Case Group (optional)
+        </label>
+        <Select
+          id="caseGroupSelection"
+          value={caseGroupSelection}
+          onChange={(e) => setCaseGroupSelection(e.target.value)}
+          options={caseGroupSelectOptions}
+          className="mt-2"
+        />
+        <p className="mt-1 text-xs text-gray-500">Organize scenarios by cohort or curriculum. Leave as “No group” if not needed.</p>
+      </div>
+
+      {caseGroupSelection === '__custom' ? (
+        <div>
+          <label htmlFor="customCaseGroupId" className="block text-sm font-medium text-gray-700">
+            Custom Group Identifier
+          </label>
+          <Input
+            id="customCaseGroupId"
+            value={customCaseGroupId}
+            onChange={(e) => setCustomCaseGroupId(e.target.value)}
+            placeholder="e.g., ap-advanced-spring"
+            className="mt-2"
+          />
+          <p className="mt-1 text-xs text-gray-500">Use a lowercase slug that matches your reporting conventions.</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function AudienceScheduleStep({ audience }) {
+  const {
+    publicVisible,
+    setPublicVisible,
+    selectedUserIds,
+    setSelectedUserIds,
+    rosterOptions,
+    rosterLoading,
+    rosterError,
+    opensAtStr,
+    setOpensAtStr,
+    dueAtStr,
+    setDueAtStr,
+  } = audience;
+
+  return (
+    <div className="space-y-6">
+      <StepIntro
+        title="Focus for this step"
+        items={[
+          'Decide who should see the case.',
+          'Add or remove specific trainees when privacy is needed.',
+          'Set optional open and due dates so trainees see a clear timeline.'
+        ]}
+        helper="Private cases must have at least one trainee selected. You can leave the schedule blank if timing is flexible."
+      />
+
+      <div className="rounded-lg border border-gray-200 p-4">
+        <div className="flex items-start justify-between">
+          <div>
+            <h3 className="text-base font-semibold text-gray-800">Audience</h3>
+            <p className="mt-1 text-xs text-gray-500">Limit visibility to specific trainees or keep it open to everyone.</p>
+          </div>
+          <label className="inline-flex items-center space-x-2 text-sm">
+            <input
+              id="publicVisible"
+              type="checkbox"
+              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              checked={publicVisible}
+              onChange={(e) => setPublicVisible(e.target.checked)}
+            />
+            <span className="text-gray-700">Visible to all signed-in trainees</span>
+          </label>
+        </div>
+        {!publicVisible ? (
+          <div className="mt-4">
+            <label htmlFor="visibleToUserIds" className="block text-sm font-medium text-gray-700">
+              Visible to Specific Users
+            </label>
+            <RosterMultiSelect
+              id="visibleToUserIds"
+              options={rosterOptions}
+              value={selectedUserIds}
+              onChange={setSelectedUserIds}
+              disabled={publicVisible || rosterLoading}
+              loading={rosterLoading}
+              placeholder="Search by name, email, or ID"
+            />
+            <p className="mt-1 text-xs text-gray-500">Select one or more users who should see this case.</p>
+            {rosterError ? (
+              <p className="mt-1 text-xs text-red-600">
+                {rosterError} You can still type a user ID and press Enter to add it manually.
               </p>
-            </div>
+            ) : null}
+          </div>
+        ) : (
+          <p className="mt-4 text-xs text-gray-500">This case is currently visible to all trainees.</p>
+        )}
+      </div>
 
-            <div>
-              <label htmlFor="visibleToUserIds" className="block text-sm font-medium text-gray-700 mb-1">
-                Visible to Specific Users
-              </label>
-              <RosterMultiSelect
-                id="visibleToUserIds"
-                options={rosterOptions}
-                value={selectedUserIds}
-                onChange={setSelectedUserIds}
-                disabled={publicVisible || rosterLoading}
-                loading={rosterLoading}
-                placeholder="Search by name, email, or ID"
-              />
-              {publicVisible ? (
-                <p className="text-xs text-gray-500 mt-1">
-                  This case is visible to all trainees. Disable the toggle above to limit access.
-                </p>
-              ) : (
-                <p className="text-xs text-gray-500 mt-1">
-                  Select one or more users who should see this case.
-                </p>
-              )}
-              {rosterError ? (
-                <p className="text-xs text-red-600 mt-1">
-                  {rosterError} You can still type a user ID and press Enter to add it manually.
-                </p>
-              ) : null}
-            </div>
+      <div className="rounded-lg border border-gray-200 p-4">
+        <h3 className="text-base font-semibold text-gray-800">Schedule</h3>
+        <p className="mt-1 text-xs text-gray-500">Times are stored in UTC and shown in the trainee’s local timezone.</p>
+        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div>
+            <label htmlFor="opensAt" className="block text-sm font-medium text-gray-700">
+              Opens At (UTC)
+            </label>
+            <Input
+              id="opensAt"
+              type="datetime-local"
+              value={opensAtStr}
+              onChange={(e) => setOpensAtStr(e.target.value)}
+              className="mt-2"
+            />
+            <p className="mt-1 text-xs text-gray-500">Optional. Trainees will see the case after this time.</p>
+          </div>
+          <div>
+            <label htmlFor="dueAt" className="block text-sm font-medium text-gray-700">
+              Due At (UTC)
+            </label>
+            <Input
+              id="dueAt"
+              type="datetime-local"
+              value={dueAtStr}
+              onChange={(e) => setDueAtStr(e.target.value)}
+              className="mt-2"
+            />
+            <p className="mt-1 text-xs text-gray-500">Optional deadline for trainees.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
-            <div>
-              <label htmlFor="caseStatus" className="block text-sm font-medium text-gray-700 mb-1">
-                Case Status
+function TransactionsStep({ transactions, files }) {
+  const {
+    disbursements,
+    handleDisbursementChange,
+    addDisbursement,
+    removeDisbursement,
+    addMappingToDisbursement,
+    removeMappingFromDisbursement,
+    handleMappingFileSelect,
+    syncMappingsWithPaymentId,
+    disbursementCsvInputRef,
+    handleCsvImport,
+  } = transactions;
+  const { FILE_INPUT_ACCEPT, prettySupportedLabels, MAX_ARTIFACT_BYTES } = files;
+
+  return (
+    <div className="space-y-8">
+      <StepIntro
+        title="Complete these tasks"
+        items={[
+          'Review each disbursement and confirm amount, payee, and date.',
+          'Attach supporting invoices for the transactions trainees will inspect.',
+          'Use CSV import if you have many disbursements to add at once.'
+        ]}
+        helper="Keep each card closed once the details are confirmed. This keeps the list scannable, especially for longer cases."
+      />
+
+      <section className="rounded-lg border border-gray-200 p-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h3 className="text-base font-semibold text-gray-800">Disbursements</h3>
+            <p className="text-xs text-gray-500">
+              Import a CSV or add entries manually. Answer keys stay hidden until you expand an item.
+            </p>
+          </div>
+          <div>
+            <label
+              htmlFor="csvImportDisbursements"
+              className="inline-flex cursor-pointer items-center rounded-md bg-green-500 px-3 py-2 text-sm font-semibold text-white shadow hover:bg-green-600"
+            >
+              <UploadCloud size={16} className="mr-2" /> Import CSV
+            </label>
+            <Input
+              id="csvImportDisbursements"
+              type="file"
+              accept=".csv"
+              onChange={handleCsvImport}
+              className="hidden"
+              ref={disbursementCsvInputRef}
+            />
+          </div>
+        </div>
+        <p className="mt-2 text-xs text-gray-500">
+          CSV format: PaymentID,Payee,Amount,PaymentDate (with header row). Dates should be YYYY-MM-DD.
+        </p>
+        <div className="mt-4 space-y-4">
+          {disbursements.map((item, index) => (
+            <DisbursementItem
+              key={item._tempId}
+              item={item}
+              index={index}
+              onChange={handleDisbursementChange}
+              onRemove={removeDisbursement}
+              onAddMapping={addMappingToDisbursement}
+              onRemoveMapping={removeMappingFromDisbursement}
+              onSelectMappingFile={handleMappingFileSelect}
+              onSyncPaymentId={syncMappingsWithPaymentId}
+              fileAcceptValue={FILE_INPUT_ACCEPT}
+              maxUploadBytes={MAX_ARTIFACT_BYTES}
+              prettySupportedLabels={prettySupportedLabels}
+            />
+          ))}
+        </div>
+        <div className="mt-4 flex justify-end">
+          <Button onClick={addDisbursement} variant="secondary" type="button">
+            <PlusCircle size={16} className="mr-1" /> Add Disbursement
+          </Button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function AttachmentsStep({ attachments, files }) {
+  const {
+    disbursements,
+    referenceDocuments,
+    handleReferenceDocChange,
+    addReferenceDocument,
+    removeReferenceDocument,
+    handleReferenceDocFileSelect,
+  } = attachments;
+  const { FILE_INPUT_ACCEPT } = files;
+
+  return (
+    <div className="space-y-6">
+      <StepIntro
+        title="Check supporting files"
+        items={[
+          'Review invoice documents linked to each disbursement.',
+          'Upload or link reference materials trainees need for context.',
+          'Confirm file names and statuses before publishing.'
+        ]}
+        helper="Use this step as a final file audit. Disbursement invoices are edited in the Transactions step; reference files can be updated here."
+      />
+
+      <section className="rounded-lg border border-gray-200 p-4">
+        <h3 className="text-base font-semibold text-gray-800">Invoice Attachments</h3>
+        <p className="mt-1 text-xs text-gray-500">
+          Each disbursement should have at least one supporting document. Use the Transactions step to add or remove files.
+        </p>
+        <div className="mt-4 space-y-4">
+          {disbursements.map((disbursement) => (
+            <div
+              key={disbursement._tempId}
+              className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
+            >
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">
+                    {disbursement.paymentId || 'Payment ID pending'}
+                  </p>
+                  <p className="text-xs text-gray-500">
+                    {disbursement.payee || 'Payee pending'} ·{' '}
+                    {disbursement.amount ? `$${Number(disbursement.amount).toLocaleString()}` : 'Amount pending'}
+                  </p>
+                </div>
+                <span className="rounded-full bg-blue-50 px-3 py-1 text-xs font-semibold text-blue-700">
+                  {(disbursement.mappings || []).length} document{(disbursement.mappings || []).length === 1 ? '' : 's'}
+                </span>
+              </div>
+              <div className="mt-3 space-y-2">
+                {(disbursement.mappings || []).length === 0 ? (
+                  <p className="rounded border border-dashed border-gray-200 bg-gray-50 p-3 text-xs text-gray-500">
+                    No documents linked yet. Add them under the Transactions step.
+                  </p>
+                ) : (
+                  (disbursement.mappings || []).map((mapping) => (
+                    <InvoiceMappingSummaryRow key={mapping._tempId} mapping={mapping} />
+                  ))
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-gray-200 p-4">
+        <h3 className="text-base font-semibold text-gray-800">Reference Documents</h3>
+        <p className="mt-1 text-xs text-gray-500">
+          Provide supplemental files (e.g., AP aging, accrual schedules). Expand an item to configure download URLs or storage paths.
+        </p>
+        <div className="mt-4 space-y-4">
+          {referenceDocuments.map((item, index) => (
+            <ReferenceDocumentItem
+              key={item._tempId}
+              item={item}
+              index={index}
+              onChange={handleReferenceDocChange}
+              onRemove={removeReferenceDocument}
+              onFileSelect={handleReferenceDocFileSelect}
+              acceptValue={FILE_INPUT_ACCEPT}
+            />
+          ))}
+        </div>
+        <div className="mt-4 flex justify-end">
+          <Button onClick={addReferenceDocument} variant="secondary" type="button">
+            <PlusCircle size={16} className="mr-1" /> Add Reference Document
+          </Button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function AnswerKeyStep({ disbursements, onUpdate }) {
+  return (
+    <div className="space-y-6">
+      <StepIntro
+        title="Define the correct answer"
+        items={[
+          'Enter the correct totals for each classification per disbursement.',
+          'Add a concise explanation so trainees understand the reasoning.',
+          'Ensure the totals match the disbursement amount before submitting.',
+        ]}
+        helper="These answers power automated feedback. Every disbursement must be fully completed."
+      />
+
+      <div className="space-y-4">
+        {disbursements.map((disbursement, index) => (
+          <AnswerKeyCard
+            key={disbursement._tempId}
+            disbursement={disbursement}
+            index={index}
+            onUpdate={onUpdate}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const AnswerKeyCard = ({ disbursement, index, onUpdate }) => {
+  const paymentLabel = disbursement.paymentId || `Disbursement ${index + 1}`;
+  const answerKey = disbursement.answerKey || {};
+  const mode = disbursement.answerKeyMode || 'single';
+  const splitEnabled = mode === 'split';
+  const classification = disbursement.answerKeySingleClassification || DEFAULT_ANSWER_KEY_CLASSIFICATION;
+  const classificationChosen = classification && classification !== ANSWER_KEY_PLACEHOLDER;
+  const classificationLabel = classificationChosen
+    ? ANSWER_KEY_LABELS[classification]
+    : 'Choose classification';
+  const amountNumber = Number(disbursement.amount || 0);
+  const ready = isAnswerKeyReady(disbursement);
+  const [expanded, setExpanded] = useState(false);
+
+  const handleClassificationChange = (value) => {
+    onUpdate(index, (current) => {
+      const explanation = current.answerKey?.explanation || '';
+      return {
+        ...current,
+        answerKeyMode: 'single',
+        answerKeySingleClassification: value,
+        answerKey: buildSingleAnswerKey(
+          value && value !== ANSWER_KEY_PLACEHOLDER ? value : null,
+          value && value !== ANSWER_KEY_PLACEHOLDER ? Number(current.amount || 0) : 0,
+          explanation
+        ),
+      };
+    });
+  };
+
+  const handleSplitToggle = (checked) => {
+    if (checked) {
+      onUpdate(index, (current) => ({
+        ...current,
+        answerKeyMode: 'split',
+      }));
+    } else {
+      onUpdate(index, (current) => {
+        const existingClassification =
+          current.answerKeySingleClassification && current.answerKeySingleClassification !== ANSWER_KEY_PLACEHOLDER
+            ? current.answerKeySingleClassification
+            : null;
+        const fallbackClassification = existingClassification || ANSWER_KEY_PLACEHOLDER;
+        const explanation = current.answerKey?.explanation || '';
+        return {
+          ...current,
+          answerKeyMode: 'single',
+          answerKeySingleClassification: fallbackClassification,
+          answerKey: buildSingleAnswerKey(
+            fallbackClassification && fallbackClassification !== ANSWER_KEY_PLACEHOLDER ? fallbackClassification : null,
+            fallbackClassification && fallbackClassification !== ANSWER_KEY_PLACEHOLDER ? Number(current.amount || 0) : 0,
+            explanation
+          ),
+        };
+      });
+    }
+  };
+
+  const handleExplanationChange = (value) => {
+    onUpdate(index, (current) => ({
+      ...current,
+      answerKey: {
+        ...current.answerKey,
+        explanation: value,
+      },
+    }));
+  };
+
+  const handleSplitFieldChange = (field, value) => {
+    onUpdate(index, (current) => ({
+      ...current,
+      answerKey: {
+        ...current.answerKey,
+        [field]: value,
+      },
+    }));
+  };
+
+  const explanationPreview = String(answerKey.explanation || '').trim() || 'Not provided yet';
+  const statusBadgeClass = ready ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700';
+  const statusText = ready ? 'READY' : 'INCOMPLETE';
+
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3 p-4">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-gray-900">{paymentLabel}</p>
+          <p className="text-xs text-gray-500">
+            {disbursement.payee || 'Payee pending'} ·{' '}
+            {disbursement.amount
+              ? `$${Number(disbursement.amount).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+              : 'Amount pending'}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={`rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide ${statusBadgeClass}`}>
+            {statusText}
+          </span>
+          <button
+            type="button"
+            className="inline-flex h-10 w-32 items-center justify-center gap-2 rounded-full border border-blue-100 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2"
+            onClick={() => setExpanded((prev) => !prev)}
+          >
+            {expanded ? 'Hide details' : 'Edit details'}
+          </button>
+        </div>
+      </div>
+
+      {expanded ? (
+        <div className="space-y-4 border-t border-gray-100 p-4">
+          <div className="flex flex-col gap-3 rounded-xl border border-blue-100 bg-blue-50/40 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-2 text-sm">
+              <label className="font-medium text-blue-900" htmlFor={`classification-${disbursement._tempId}`}>
+                Classification
               </label>
               <Select
-                id="caseStatus"
-                value={status}
-                onChange={(e) => setStatus(e.target.value)}
-                options={STATUS_OPTIONS}
-                className="mt-1"
+                id={`classification-${disbursement._tempId}`}
+                value={classification}
+                onChange={(event) => handleClassificationChange(event.target.value)}
+                options={ANSWER_KEY_CLASSIFICATION_OPTIONS}
+                disabled={splitEnabled}
               />
+              <p className="text-xs text-blue-700">
+                {splitEnabled
+                  ? 'Splitting enabled below'
+                  : classificationChosen && amountNumber
+                  ? `Entire amount of $${amountNumber.toLocaleString()} assigned to this classification.`
+                  : 'Select the correct classification or enable split disbursement.'}
+              </p>
             </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label htmlFor="opensAt" className="block text-sm font-medium text-gray-700 mb-1">
-                  Opens At (UTC)
-                </label>
-                <Input
-                  id="opensAt"
-                  type="datetime-local"
-                  value={opensAtStr}
-                  onChange={(e) => setOpensAtStr(e.target.value)}
-                />
-                <p className="text-xs text-gray-500 mt-1">Optional. Trainees will see the case after this time.</p>
-              </div>
-              <div>
-                <label htmlFor="dueAt" className="block text-sm font-medium text-gray-700 mb-1">
-                  Due At (UTC)
-                </label>
-                <Input
-                  id="dueAt"
-                  type="datetime-local"
-                  value={dueAtStr}
-                  onChange={(e) => setDueAtStr(e.target.value)}
-                />
-                <p className="text-xs text-gray-500 mt-1">Optional deadline for trainees.</p>
-              </div>
-            </div>
-          </section>
-
-          <section>
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-xl font-semibold text-gray-700">Disbursements</h2>
-              <div>
-                <label htmlFor="csvImportDisbursements" className="bg-green-500 hover:bg-green-600 text-white px-3 py-2 rounded-md text-sm font-semibold cursor-pointer inline-flex items-center">
-                  <UploadCloud size={16} className="inline mr-2" /> Import CSV
-                </label>
-                <Input id="csvImportDisbursements" type="file" accept=".csv" onChange={handleCsvImport} className="hidden" ref={disbursementCsvInputRef} />
-              </div>
-            </div>
-            <p className="text-xs text-gray-500 mb-2">CSV format: PaymentID,Payee,Amount,PaymentDate (with header row). Dates should be YYYY-MM-DD.</p>
-            <div className="space-y-4">
-              {disbursements.map((item, index) => (
-                <DisbursementItem key={item._tempId} item={item} index={index} onChange={handleDisbursementChange} onRemove={removeDisbursement} />
-              ))}
-            </div>
-            <Button onClick={addDisbursement} variant="secondary" className="mt-4 text-sm" type="button">
-              <PlusCircle size={16} className="inline mr-1" /> Add Disbursement Manually
-            </Button>
-          </section>
-
-          <section>
-            <h2 className="text-xl font-semibold text-gray-700 mb-4">Invoice Document Mappings</h2>
-            <p className="text-sm text-gray-500 mb-3">
-              Map Payment IDs to their supporting documents (allowed: {prettySupportedLabels}; max {Math.round(
-                MAX_ARTIFACT_BYTES / (1024 * 1024)
-              )}{' '}
-              MB per file). Files upload to Firebase Storage when you save.
-            </p>
-            <div className="space-y-4">
-              {invoiceMappings.map((item, index) => (
-                <InvoiceMappingItem
-                  key={item._tempId}
-                  item={item}
-                  index={index}
-                  onChange={handleMappingChange}
-                  onRemove={removeMapping}
-                  availablePaymentIds={availablePaymentIdsForMapping}
-                  onFileSelect={handleMappingFileSelect}
-                  caseIdForPath={editingCaseId}
-                  acceptValue={FILE_INPUT_ACCEPT}
-                />
-              ))}
-            </div>
-            <Button onClick={addMapping} variant="secondary" className="mt-4 text-sm" type="button">
-              <PlusCircle size={16} className="inline mr-1" /> Add Mapping
-            </Button>
-          </section>
-
-          <section>
-            <h2 className="text-xl font-semibold text-gray-700 mb-4">Reference Documents</h2>
-            <p className="text-sm text-gray-500 mb-3">
-              Upload or link supplemental files (e.g., AP aging, accrual schedules) for trainees to reference while working the case.
-            </p>
-            <div className="space-y-4">
-              {referenceDocuments.map((item, index) => (
-                <ReferenceDocumentItem
-                  key={item._tempId}
-                  item={item}
-                  index={index}
-                  onChange={handleReferenceDocChange}
-                  onRemove={removeReferenceDocument}
-                  onFileSelect={handleReferenceDocFileSelect}
-                  acceptValue={FILE_INPUT_ACCEPT}
-                />
-              ))}
-            </div>
-            <Button onClick={addReferenceDocument} variant="secondary" className="mt-4 text-sm" type="button">
-              <PlusCircle size={16} className="inline mr-1" /> Add Reference Document
-            </Button>
-          </section>
-
-          <div className="flex justify-end space-x-3 pt-6 border-t border-gray-200">
-            <Button onClick={() => navigate('/admin')} variant="secondary" type="button" disabled={loading} isLoading={loading && !isEditing}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="primary" disabled={loading} isLoading={loading}>
-              {isEditing ? 'Save Changes' : 'Create Case'}
-            </Button>
+            <label className="inline-flex items-center gap-2 text-sm font-medium text-blue-800">
+              <input
+                type="checkbox"
+                className="rounded border-blue-300 text-blue-600 focus:ring-blue-500"
+                checked={splitEnabled}
+                onChange={(event) => handleSplitToggle(event.target.checked)}
+              />
+              Split disbursement across classifications
+            </label>
           </div>
-        </form>
+
+          {splitEnabled ? (
+            <div className="rounded-xl border border-gray-200 bg-white/90 p-4 shadow-sm">
+              <p className="text-xs text-gray-500">
+                Enter the portion allocated to each classification. Totals must equal the disbursement amount.
+              </p>
+              <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+                {ANSWER_KEY_FIELDS.map((field) => (
+                  <div key={field} className="flex flex-col text-sm">
+                    <label className="mb-1 font-medium text-gray-700" htmlFor={`${disbursement._tempId}-${field}`}>
+                      {ANSWER_KEY_LABELS[field]}
+                    </label>
+                    <Input
+                      id={`${disbursement._tempId}-${field}`}
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      required
+                      value={answerKey?.[field] ?? ''}
+                      onChange={(event) => handleSplitFieldChange(field, event.target.value)}
+                      placeholder="0.00"
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <div>
+            <label className="mb-1 block text-sm font-medium text-gray-700" htmlFor={`${disbursement._tempId}-explanation`}>
+              Explanation shown to trainees
+            </label>
+            <Textarea
+              id={`${disbursement._tempId}-explanation`}
+              rows={splitEnabled ? 4 : 3}
+              required
+              value={answerKey?.explanation ?? ''}
+              onChange={(event) => handleExplanationChange(event.target.value)}
+              placeholder="Briefly explain why this allocation is correct."
+            />
+          </div>
+        </div>
+      ) : (
+        <div className="border-t border-gray-100 p-4">
+          <div className="grid gap-4 text-sm text-gray-700 md:grid-cols-2">
+            <div>
+              <span className="text-xs uppercase tracking-wide text-gray-500">Classification</span>
+              <p className={`mt-1 font-semibold ${splitEnabled ? 'text-blue-700' : classificationChosen ? 'text-gray-900' : 'text-amber-600'}`}>
+                {splitEnabled ? 'Split across classifications' : classificationLabel}
+              </p>
+            </div>
+            <div>
+              <span className="text-xs uppercase tracking-wide text-gray-500">Explanation</span>
+              <p className="mt-1 truncate text-gray-600">{explanationPreview}</p>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+export default function CaseFormPage({ params }) {
+  const {
+    meta: { isEditing },
+    status: { loading },
+    basics,
+    audience,
+    transactions,
+    attachments,
+    answerKey,
+    files,
+    actions: { handleSubmit, goBack },
+  } = useCaseForm({ params });
+
+  const [activeStep, setActiveStep] = useState(0);
+  const steps = useMemo(
+    () => [
+      { id: 'basics', label: 'Basics', description: 'Name, status, audit area, and grouping' },
+      { id: 'audience', label: 'Audience & Schedule', description: 'Visibility controls and timing' },
+      { id: 'transactions', label: 'Transactions', description: 'Disbursements and supporting invoices' },
+      { id: 'attachments', label: 'Attachments', description: 'Invoice and reference files' },
+      { id: 'answerKey', label: 'Answer Key', description: 'Correct classifications and rationale' },
+      { id: 'review', label: 'Review & Submit', description: 'Final summary before publishing' },
+    ],
+    []
+  );
+
+  const summaryData = useMemo(() => {
+    const disbursementCount = transactions.disbursements.filter((item) => {
+      if (!item) return false;
+      return Boolean(item.paymentId || item.payee || item.amount || item.paymentDate);
+    }).length;
+    const mappingCount = transactions.disbursements.reduce(
+      (sum, disbursement) =>
+        sum + (disbursement.mappings || []).filter((mapping) => mapping && mapping.paymentId).length,
+      0
+    );
+    const attachmentCount = attachments.referenceDocuments.filter((item) => {
+      if (!item) return false;
+      return Boolean(item.fileName || item.clientSideFile || item.downloadURL || item.storagePath);
+    }).length;
+
+    return {
+      caseName: basics.caseName,
+      status: basics.status,
+      publicVisible: audience.publicVisible,
+      selectedUserIds: audience.selectedUserIds,
+      opensAtStr: audience.opensAtStr,
+      dueAtStr: audience.dueAtStr,
+      disbursementCount,
+      mappingCount,
+      attachmentCount,
+    };
+  }, [
+    basics.caseName,
+    basics.status,
+    audience.publicVisible,
+    audience.selectedUserIds,
+    audience.opensAtStr,
+    audience.dueAtStr,
+    transactions.disbursements,
+    attachments.referenceDocuments,
+  ]);
+
+  const isLastStep = activeStep === steps.length - 1;
+
+  const handleNext = () => {
+    setActiveStep((prev) => Math.min(prev + 1, steps.length - 1));
+  };
+
+  const handleBackStep = () => {
+    setActiveStep((prev) => Math.max(prev - 1, 0));
+  };
+
+  if (loading && isEditing) {
+    return <div className="p-4 text-center">Loading case details...</div>;
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50 p-6">
+      <div className="mx-auto max-w-6xl">
+        <div className="rounded-3xl bg-white p-6 shadow-xl">
+          <h1 className="text-3xl font-bold text-gray-800">
+            {isEditing ? 'Edit Audit Case' : 'Create New Audit Case'}
+          </h1>
+          <p className="mt-2 text-sm text-gray-500">
+            Move through each step to update the case. Your progress is saved only when you finish the final review.
+          </p>
+
+          <CaseFormStepNav steps={steps} activeStep={activeStep} onStepChange={setActiveStep} disabled={loading} />
+
+          <form onSubmit={handleSubmit} className="space-y-10">
+            {activeStep === 0 ? <CaseBasicsStep basics={basics} /> : null}
+            {activeStep === 1 ? <AudienceScheduleStep audience={audience} /> : null}
+            {activeStep === 2 ? <TransactionsStep transactions={transactions} files={files} /> : null}
+            {activeStep === 3 ? <AttachmentsStep attachments={attachments} files={files} /> : null}
+            {activeStep === 4 ? (
+              <AnswerKeyStep disbursements={answerKey.disbursements} onUpdate={answerKey.updateAnswerKeyForDisbursement} />
+            ) : null}
+            {activeStep === 5 ? <ReviewStep summaryData={summaryData} /> : null}
+
+            <div className="flex flex-col gap-3 border-t border-gray-200 pt-6 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                {activeStep > 0 ? (
+                  <Button onClick={handleBackStep} variant="secondary" type="button" disabled={loading}>
+                    Back
+                  </Button>
+                ) : null}
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+                <Button
+                  onClick={() => {
+                    goBack();
+                  }}
+                  variant="secondary"
+                  type="button"
+                  disabled={loading}
+                  className="justify-center"
+                >
+                  Cancel
+                </Button>
+                {isLastStep ? (
+                  <Button type="submit" variant="primary" disabled={loading} isLoading={loading} className="justify-center">
+                    {isEditing ? 'Save Changes' : 'Create Case'}
+                  </Button>
+                ) : (
+                  <Button onClick={handleNext} variant="primary" type="button" disabled={loading} className="justify-center">
+                    Next
+                  </Button>
+                )}
+              </div>
+            </div>
+          </form>
+        </div>
       </div>
     </div>
   );
@@ -1598,48 +2637,37 @@ const RosterMultiSelect = ({ id, options, value, onChange, disabled, loading, pl
   };
 
   const dropdownId = id ? `${id}-options` : undefined;
-  const showDropdown = open && !disabled;
+
+  const showDropdown = !disabled && open && filteredOptions.length > 0;
 
   return (
-    <div className="relative" data-testid="roster-multi-select">
-      <div
-        ref={containerRef}
-        className={`flex flex-wrap items-center gap-2 border rounded-md px-2 py-2 bg-white text-sm ${
-          disabled ? 'bg-gray-100 cursor-not-allowed border-gray-200' : 'border-gray-300 focus-within:ring-2 focus-within:ring-blue-500'
-        }`}
-      >
+    <div className="relative" ref={containerRef}>
+      <div className="flex flex-wrap items-center gap-1 rounded-md border border-gray-300 px-2 py-1 focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-200">
         {normalizedSelected.map((selected) => (
           <span
             key={selected.id}
-            className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-medium ${
-              disabled ? 'bg-gray-200 text-gray-600' : 'bg-blue-100 text-blue-700'
-            }`}
+            className="flex items-center space-x-1 rounded bg-blue-100 px-2 py-1 text-xs text-blue-800"
           >
-            {selected.label}
-            {!disabled && (
-              <button
-                type="button"
-                className="ml-1 text-blue-600 hover:text-blue-800 focus:outline-none"
-                onClick={() => removeSelected(selected.id)}
-                aria-label={`Remove ${selected.label}`}
-              >
-                ×
-              </button>
-            )}
+            <span>{selected.label}</span>
+            <button
+              type="button"
+              className="text-blue-600 hover:text-blue-800"
+              aria-label={`Remove ${selected.label}`}
+              onClick={() => removeSelected(selected.id)}
+            >
+              ×
+            </button>
           </span>
         ))}
         <input
           id={id}
-          type="text"
-          className={`flex-1 min-w-[140px] border-none focus:outline-none bg-transparent text-sm ${
-            disabled ? 'text-gray-500' : 'text-gray-700'
-          }`}
-          value={disabled ? '' : query}
+          value={query}
           onChange={handleInputChange}
           onFocus={handleInputFocus}
           onKeyDown={handleKeyDown}
           placeholder={normalizedSelected.length === 0 ? placeholder : ''}
           disabled={disabled}
+          className="flex-1 border-none bg-transparent py-1 text-sm text-gray-700 outline-none"
           role="combobox"
           aria-expanded={showDropdown}
           aria-haspopup="listbox"
@@ -1651,188 +2679,351 @@ const RosterMultiSelect = ({ id, options, value, onChange, disabled, loading, pl
         <ul
           id={dropdownId}
           role="listbox"
-          className="absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-48 overflow-auto"
+          className="absolute z-10 left-0 right-0 mt-1 max-h-48 overflow-auto rounded-md border border-gray-200 bg-white shadow-lg"
         >
+          {filteredOptions.map((option) => (
+            <li key={option.id}>
+              <button
+                type="button"
+                role="option"
+                aria-selected="false"
+                className="flex w-full flex-col px-3 py-2 text-left text-sm hover:bg-blue-50 focus:bg-blue-50 focus:outline-none"
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => selectOption(option)}
+              >
+                <span className="text-gray-700">{option.label}</span>
+                {option.email ? <span className="text-xs text-gray-500">{option.email}</span> : null}
+              </button>
+            </li>
+          ))}
           {filteredOptions.length === 0 ? (
             <li className="px-3 py-2 text-sm text-gray-500">No matches found.</li>
-          ) : (
-            filteredOptions.map((option) => (
-              <li key={option.id}>
-                <button
-                  type="button"
-                  role="option"
-                  aria-selected="false"
-                  className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 focus:bg-blue-50 focus:outline-none"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => selectOption(option)}
-                >
-                  <span className="block text-gray-700">{option.label}</span>
-                  {option.email ? <span className="block text-xs text-gray-500">{option.email}</span> : null}
-                </button>
-              </li>
-            ))
-          )}
+          ) : null}
         </ul>
       ) : null}
-      {loading ? <p className="text-xs text-gray-500 mt-1">Loading roster…</p> : null}
+      {loading ? <p className="mt-1 text-xs text-gray-500">Loading roster…</p> : null}
     </div>
   );
 };
 
-const DisbursementItem = ({ item, index, onChange, onRemove }) => {
-  const handleChange = (e) => {
-    onChange(index, { ...item, [e.target.name]: e.target.value });
-  };
+const DisbursementItem = ({
+  item,
+  index,
+  onChange,
+  onRemove,
+  onAddMapping,
+  onRemoveMapping,
+  onSelectMappingFile,
+  onSyncPaymentId,
+  fileAcceptValue,
+  maxUploadBytes,
+  prettySupportedLabels,
+}) => {
+  const isNewItem = !item.paymentId && !item.payee && !item.amount && !item.paymentDate;
+  const [expanded, setExpanded] = useState(isNewItem || index === 0);
 
-  const handleAnswerKeyChange = (field, rawValue) => {
-    const normalized = typeof rawValue === 'string' ? rawValue.trim() : rawValue;
-    const current = { ...(item.answerKey || {}) };
-
-    if (normalized === '' || normalized === null || normalized === undefined) {
-      delete current[field];
-    } else {
-      current[field] = normalized;
+  useEffect(() => {
+    if (isNewItem) {
+      setExpanded(true);
     }
+  }, [isNewItem]);
 
-    const updated = { ...item };
-    if (Object.keys(current).length > 0) {
-      updated.answerKey = current;
-    } else {
-      delete updated.answerKey;
+  const handleChange = (event) => {
+    const { name, value } = event.target;
+    let nextItem = { ...item, [name]: value };
+    if (name === 'amount' && nextItem.answerKeyMode !== 'split') {
+      const classification = nextItem.answerKeySingleClassification || DEFAULT_ANSWER_KEY_CLASSIFICATION;
+      const amountNumber = Number(value) || 0;
+      const explanation = nextItem.answerKey?.explanation || '';
+      nextItem.answerKey = buildSingleAnswerKey(classification, amountNumber, explanation);
     }
-
-    onChange(index, updated);
+    onChange(index, nextItem);
+    if (name === 'paymentId') {
+      onSyncPaymentId(nextItem._tempId, value);
+    }
   };
 
   const baseId = item._tempId || item.paymentId || `disbursement-${index}`;
-  const answerKeyFieldConfigs = [
-    { key: 'properlyIncluded', label: 'Properly Included' },
-    { key: 'properlyExcluded', label: 'Properly Excluded' },
-    { key: 'improperlyIncluded', label: 'Improperly Included' },
-    { key: 'improperlyExcluded', label: 'Improperly Excluded' },
+  const mappings = item.mappings || [];
+
+  const formatAmount = (value) => {
+    const numberValue = Number(value);
+    if (Number.isFinite(numberValue)) {
+      return numberValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+    return value || 'Pending';
+  };
+
+  const summaryFields = [
+    {
+      label: 'Payment ID',
+      value: item.paymentId || 'Pending',
+      editor: (
+        <Input
+          id={`${baseId}-paymentId`}
+          name="paymentId"
+          value={item.paymentId}
+          onChange={handleChange}
+          placeholder="Payment ID"
+          required
+        />
+      ),
+    },
+    {
+      label: 'Payee',
+      value: item.payee || 'Pending',
+      editor: (
+        <Input
+          id={`${baseId}-payee`}
+          name="payee"
+          value={item.payee}
+          onChange={handleChange}
+          placeholder="Payee"
+          required
+        />
+      ),
+    },
+    {
+      label: 'Amount',
+      value: item.amount ? `$${formatAmount(item.amount)}` : 'Pending',
+      editor: (
+        <Input
+          id={`${baseId}-amount`}
+          name="amount"
+          type="number"
+          value={item.amount}
+          onChange={handleChange}
+          placeholder="Amount (e.g., 123.45)"
+          required
+        />
+      ),
+    },
+    {
+      label: 'Payment Date',
+      value: item.paymentDate
+        ? new Date(item.paymentDate).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+        : 'Pending',
+      editor: (
+        <Input
+          id={`${baseId}-date`}
+          name="paymentDate"
+          type="date"
+          value={item.paymentDate}
+          onChange={handleChange}
+          placeholder="Payment Date (YYYY-MM-DD)"
+          required
+        />
+      ),
+    },
   ];
 
   return (
-    <div className="p-3 border border-gray-200 rounded-md space-y-3">
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-center">
-        <Input name="paymentId" value={item.paymentId} onChange={handleChange} placeholder="Payment ID" required />
-        <Input name="payee" value={item.payee} onChange={handleChange} placeholder="Payee" required />
-        <Input name="amount" type="number" value={item.amount} onChange={handleChange} placeholder="Amount (e.g., 123.45)" required />
-        <Input name="paymentDate" type="date" value={item.paymentDate} onChange={handleChange} placeholder="Payment Date" required />
-        <Button onClick={() => onRemove(index)} variant="danger" className="h-10">
-          <Trash2 size={18} />
-        </Button>
-      </div>
-
-      <div className="pt-2 border-t border-gray-100">
-        <p className="text-sm font-medium text-gray-700 mb-2">Answer Key (Correct Allocation) — optional</p>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-          {answerKeyFieldConfigs.map(({ key, label }) => (
-            <div key={key} className="flex flex-col text-sm">
-              <label className="mb-1 text-gray-700" htmlFor={`${baseId}-${key}`}>
-                {label}
-              </label>
-              <Input
-                id={`${baseId}-${key}`}
-                type="number"
-                step="0.01"
-                min="0"
-                value={item.answerKey?.[key] ?? ''}
-                onChange={(e) => handleAnswerKeyChange(key, e.target.value)}
-                placeholder="0.00"
-              />
+    <div className="rounded-2xl border border-gray-200 bg-white shadow-sm transition hover:border-blue-200">
+      <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="grid w-full gap-4 text-sm text-gray-700 sm:grid-cols-2 lg:grid-cols-[170px_minmax(0,1fr)_140px_160px]">
+          {summaryFields.map(({ label, value, editor }) => (
+            <div key={label} className="flex flex-col gap-1">
+              <span className="text-xs font-medium uppercase tracking-wide text-gray-500 whitespace-nowrap">{label}</span>
+              {expanded ? (
+                editor
+              ) : (
+                <span className={`truncate font-semibold ${value === 'Pending' ? 'text-gray-400' : 'text-gray-900'}`}>{value}</span>
+              )}
             </div>
           ))}
         </div>
-        <div className="mt-3">
-          <label className="block text-sm font-medium text-gray-700 mb-1" htmlFor={`${baseId}-explanation`}>
-            Explanation (shown on results)
-          </label>
-          <Textarea
-            id={`${baseId}-explanation`}
-            rows={2}
-            value={item.answerKey?.explanation ?? ''}
-            onChange={(e) => handleAnswerKeyChange('explanation', e.target.value)}
-            placeholder="Brief rationale for correct allocation and why alternatives are incorrect."
-          />
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            className="inline-flex h-10 w-32 items-center justify-center gap-2 rounded-full bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2"
+            onClick={() => setExpanded((prev) => !prev)}
+          >
+            {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            {expanded ? 'Done' : 'Edit details'}
+          </button>
+          <Button onClick={() => onRemove(index)} variant="danger" className="h-10 w-12 justify-center">
+            <Trash2 size={16} />
+            <span className="sr-only">Remove disbursement</span>
+          </Button>
         </div>
+      </div>
+
+      {expanded ? (
+        <div className="space-y-4 border-t border-gray-100 p-4">
+          <div className="rounded-lg border border-blue-100 bg-blue-50/40 p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h4 className="text-sm font-semibold text-blue-800">Supporting Documents</h4>
+                <p className="text-xs text-blue-700">
+                  {mappings.length > 0 ? `${mappings.length} document${mappings.length === 1 ? '' : 's'} linked` : 'No documents yet'}
+                </p>
+              </div>
+              <Button
+                onClick={() => onAddMapping(item._tempId)}
+                variant="secondary"
+                type="button"
+                className="text-sm"
+              >
+                <PlusCircle size={16} className="mr-1" />
+                Add document
+              </Button>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {mappings.length === 0 ? (
+                <p className="rounded-md border border-dashed border-blue-200 bg-white/80 p-3 text-xs text-blue-700">
+                  Attach the supporting invoice trainees will review. Allowed formats: {prettySupportedLabels}. Maximum size{' '}
+                  {Math.round(maxUploadBytes / (1024 * 1024))} MB.
+                </p>
+              ) : (
+                mappings.map((mapping) => (
+                  <InvoiceMappingInline
+                    key={mapping._tempId}
+                    mapping={mapping}
+                    disbursementTempId={item._tempId}
+                    onRemove={onRemoveMapping}
+                    onFileSelect={onSelectMappingFile}
+                    acceptValue={fileAcceptValue}
+                  />
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
+const InvoiceMappingInline = ({ mapping, disbursementTempId, onRemove, onFileSelect, acceptValue }) => {
+  const fileInputId = `mapping-file-${mapping._tempId}`;
+  const fileLabel =
+    mapping.clientSideFile?.name || mapping.fileName || mapping.storagePath || mapping.downloadURL || 'No file selected';
+
+  const status = (() => {
+    if (mapping.uploadError) return { text: mapping.uploadError, className: 'text-red-600' };
+    if (typeof mapping.uploadProgress === 'number' && mapping.uploadProgress < 100) {
+      return { text: `Uploading (${Math.round(mapping.uploadProgress)}%)`, className: 'text-blue-600' };
+    }
+    if (mapping.uploadProgress === 100 || mapping.storagePath || mapping.downloadURL || mapping.fileName) {
+      return { text: 'Ready', className: 'text-emerald-600' };
+    }
+    return { text: 'Pending upload', className: 'text-gray-500' };
+  })();
+
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-blue-100 bg-white p-3 shadow-sm">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 whitespace-nowrap">Attachment</p>
+          <p className="truncate text-sm font-medium text-gray-900" title={fileLabel}>
+            {fileLabel}
+          </p>
+          {mapping.storagePath ? (
+            <p className="mt-1 truncate text-xs text-gray-500" title={mapping.storagePath}>
+              {mapping.storagePath}
+            </p>
+          ) : null}
+          {mapping.downloadURL ? (
+            <a
+              href={mapping.downloadURL}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-1 inline-flex items-center text-xs text-blue-600 underline"
+            >
+              View stored file
+            </a>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className={`text-xs font-semibold ${status.className}`}>{status.text}</span>
+          <Button
+            onClick={() => onRemove(disbursementTempId, mapping._tempId)}
+            variant="danger"
+            type="button"
+            className="h-8 px-2"
+          >
+            <Trash2 size={14} />
+            <span className="sr-only">Remove document</span>
+          </Button>
+        </div>
+      </div>
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <Input
+          id={fileInputId}
+          type="file"
+          accept={acceptValue}
+          onChange={(event) => onFileSelect(disbursementTempId, mapping._tempId, event.target.files?.[0] || null)}
+          className="sm:max-w-xs"
+        />
+        {typeof mapping.uploadProgress === 'number' && mapping.uploadProgress >= 0 && mapping.uploadProgress < 100 ? (
+          <div className="w-full sm:w-48">
+            <div className="h-1.5 rounded-full bg-gray-200">
+              <div
+                className="h-1.5 rounded-full bg-blue-500 transition-all"
+                style={{ width: `${mapping.uploadProgress}%` }}
+              />
+            </div>
+          </div>
+        ) : null}
       </div>
     </div>
   );
 };
 
-const InvoiceMappingItem = ({ item, index, onChange, onRemove, availablePaymentIds, onFileSelect, caseIdForPath, acceptValue }) => {
-  const fileInputId = `pdfFile-${item._tempId}`;
-
-  const handleFileChange = (event) => {
-    const file = event.target.files[0];
-    if (file) {
-      onFileSelect(index, file);
+const InvoiceMappingSummaryRow = ({ mapping }) => {
+  const summary = (() => {
+    if (mapping.uploadError) return { text: mapping.uploadError, tone: 'text-red-600' };
+    if (typeof mapping.uploadProgress === 'number' && mapping.uploadProgress < 100) {
+      return { text: `Uploading (${Math.round(mapping.uploadProgress)}%)`, tone: 'text-blue-600' };
     }
-  };
+    if (mapping.uploadProgress === 100 || mapping.storagePath || mapping.downloadURL || mapping.fileName) {
+      return { text: 'Ready', tone: 'text-emerald-600' };
+    }
+    return { text: 'Pending upload', tone: 'text-gray-500' };
+  })();
+
+  const label = mapping.fileName || mapping.clientSideFile?.name || mapping.storagePath || mapping.downloadURL || 'Unnamed file';
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-start p-3 border border-gray-200 rounded-md">
-      <div>
-        <label htmlFor={`paymentId-${item._tempId}`} className="block text-xs font-medium text-gray-700">
-          Payment ID
-        </label>
-        <select
-          id={`paymentId-${item._tempId}`}
-          name="paymentId"
-          value={item.paymentId}
-          onChange={(e) => onChange(index, { ...item, paymentId: e.target.value })}
-          required
-          className="mt-1 w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+    <div className="flex flex-col rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="font-semibold text-gray-800" title={label}>
+          {label}
+        </span>
+        <span className={`font-semibold ${summary.tone}`}>{summary.text}</span>
+      </div>
+      {mapping.storagePath ? (
+        <span className="mt-1 truncate text-[11px] text-gray-500" title={mapping.storagePath}>
+          {mapping.storagePath}
+        </span>
+      ) : null}
+      {mapping.downloadURL ? (
+        <a
+          href={mapping.downloadURL}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-1 inline-flex items-center text-[11px] text-blue-600 underline"
         >
-          <option value="">Select Payment ID</option>
-          {availablePaymentIds.map((pid) => (
-            <option key={pid} value={pid}>
-              {pid}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="flex flex-col">
-        <label htmlFor={fileInputId} className="block text-xs font-medium text-gray-700">
-          Invoice Document
-        </label>
-        <Input id={fileInputId} type="file" accept={acceptValue} onChange={handleFileChange} className="mt-1" />
-        {item.fileName && (
-          <div className="mt-1 text-xs text-gray-600 flex items-center">
-            <Paperclip size={12} className="mr-1 flex-shrink-0" />
-            <span className="truncate" title={item.fileName}>
-              {item.fileName}
-            </span>
-          </div>
-        )}
-        {item.uploadProgress !== undefined && item.uploadProgress >= 0 && item.uploadProgress < 100 && !item.uploadError && (
-          <div className="w-full bg-gray-200 rounded-full h-2.5 mt-2 dark:bg-gray-700">
-            <div className="bg-blue-600 h-2.5 rounded-full text-xs text-white text-center leading-none" style={{ width: `${item.uploadProgress}%` }}>
-              {item.uploadProgress > 10 ? `${Math.round(item.uploadProgress)}%` : ''}
-            </div>
-          </div>
-        )}
-        {item.uploadProgress === 100 && !item.uploadError && (
-          <p className="text-xs text-green-600 mt-1 flex items-center">
-            <CheckCircle2 size={14} className="mr-1" />Uploaded
-          </p>
-        )}
-        {item.uploadError && (
-          <p className="text-xs text-red-500 mt-1 flex items-center">
-            <AlertTriangle size={14} className="mr-1" />{item.uploadError}
-          </p>
-        )}
-      </div>
-      <Button onClick={() => onRemove(index)} variant="danger" className="h-10 self-end">
-        <Trash2 size={18} />
-      </Button>
+          View file
+        </a>
+      ) : null}
     </div>
   );
 };
 
 const ReferenceDocumentItem = ({ item, index, onChange, onRemove, onFileSelect, acceptValue }) => {
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const isNewDoc =
+    !item.fileName && !item.clientSideFile && !item.storagePath && !item.downloadURL;
+  const [expanded, setExpanded] = useState(isNewDoc || index === 0);
   const fileInputId = `referenceFile-${item._tempId}`;
+
+  useEffect(() => {
+    if (isNewDoc) {
+      setExpanded(true);
+    }
+  }, [isNewDoc]);
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -1849,91 +3040,149 @@ const ReferenceDocumentItem = ({ item, index, onChange, onRemove, onFileSelect, 
   const storagePathLabel = (item.storagePath || '').trim();
   const downloadUrlLabel = (item.downloadURL || '').trim();
 
-  return (
-    <div className="p-3 border border-gray-200 rounded-md space-y-3">
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div>
-          <label className="block text-xs font-medium text-gray-700 mb-1" htmlFor={`referenceName-${item._tempId}`}>
-            Display Name
-          </label>
-          <Input
-            id={`referenceName-${item._tempId}`}
-            name="fileName"
-            value={item.fileName}
-            onChange={handleChange}
-            placeholder="e.g., AP Aging Summary"
-          />
-        </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-700 mb-1" htmlFor={`referenceUrl-${item._tempId}`}>
-            Download URL (optional)
-          </label>
-          <Input
-            id={`referenceUrl-${item._tempId}`}
-            name="downloadURL"
-            value={item.downloadURL}
-            onChange={handleChange}
-            placeholder="https://storage.googleapis.com/..."
-          />
-        </div>
-      </div>
+  const summarySource = (() => {
+    if (item.clientSideFile) return item.clientSideFile.name;
+    if (item.fileName) return item.fileName;
+    if (storagePathLabel) return storagePathLabel;
+    if (downloadUrlLabel) return downloadUrlLabel;
+    return 'No attachment yet';
+  })();
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-end">
-        <div>
-          <label className="block text-xs font-medium text-gray-700 mb-1" htmlFor={fileInputId}>
-            Upload File (optional)
-          </label>
-          <Input id={fileInputId} type="file" accept={acceptValue} onChange={handleFileChange} className="mt-1" />
-          {(item.clientSideFile || storagePathLabel) && (
-            <div className="mt-1 text-xs text-gray-600 flex items-center">
-              <Paperclip size={12} className="mr-1 flex-shrink-0" />
-              <span className="truncate" title={item.clientSideFile?.name || storagePathLabel || item.fileName}>
-                {item.clientSideFile?.name || storagePathLabel || item.fileName}
+  const statusLabel = (() => {
+    if (item.uploadError) return 'Upload error';
+    if (typeof item.uploadProgress === 'number' && item.uploadProgress < 100) {
+      return `Uploading (${Math.round(item.uploadProgress)}%)`;
+    }
+    if (item.uploadProgress === 100) return 'Ready';
+    if (summarySource !== 'No attachment yet') return 'Ready';
+    return 'Pending';
+  })();
+
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white shadow-sm transition hover:border-blue-200">
+      <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="grid w-full gap-4 text-sm text-gray-700 sm:grid-cols-2 lg:grid-cols-[220px_minmax(0,1fr)_140px]">
+          <div className="flex flex-col gap-1">
+            <span className="text-xs uppercase tracking-wide text-gray-500">Display name</span>
+            {expanded ? (
+              <Input
+                id={`referenceName-${item._tempId}`}
+                name="fileName"
+                value={item.fileName}
+                onChange={handleChange}
+                placeholder="e.g., AP Aging Summary"
+                className="mt-1"
+              />
+            ) : (
+              <span className={`truncate font-semibold ${item.fileName ? 'text-gray-900' : 'text-gray-400'}`}>
+                {item.fileName || 'Untitled reference'}
               </span>
-            </div>
-          )}
+            )}
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-xs uppercase tracking-wide text-gray-500">Attachment</span>
+            {expanded ? (
+              <>
+                <Input id={fileInputId} type="file" accept={acceptValue} onChange={handleFileChange} className="mt-1" />
+                <p className="mt-1 text-xs text-gray-500">{summarySource}</p>
+              </>
+            ) : (
+              <span className={`truncate font-semibold ${summarySource === 'No attachment yet' ? 'text-gray-400' : 'text-gray-900'}`}>
+                {summarySource}
+              </span>
+            )}
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="text-xs uppercase tracking-wide text-gray-500">Status</span>
+            <span
+              className={`font-semibold ${
+                item.uploadError
+                  ? 'text-red-600'
+                  : statusLabel === 'Ready'
+                  ? 'text-emerald-600'
+                  : 'text-gray-900'
+              }`}
+            >
+              {statusLabel}
+            </span>
+          </div>
         </div>
-        <div>
-          <label className="block text-xs font-medium text-gray-700 mb-1" htmlFor={`referencePath-${item._tempId}`}>
-            Storage Path (optional)
-          </label>
-          <Input
-            id={`referencePath-${item._tempId}`}
-            name="storagePath"
-            value={item.storagePath}
-            onChange={handleChange}
-            placeholder="Set automatically when uploading"
-          />
-          <p className="text-[11px] text-gray-500 mt-1">Provide only if referencing an existing Firebase Storage file.</p>
-        </div>
-        <div className="flex justify-end md:justify-start">
-          <Button onClick={() => onRemove(index)} variant="danger" className="md:self-end">
-            <Trash2 size={18} />
+        <div className="flex shrink-0 items-center gap-2">
+          <button
+            type="button"
+            className="inline-flex h-10 w-32 items-center justify-center gap-2 rounded-full bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2"
+            onClick={() => setExpanded((prev) => !prev)}
+          >
+            {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+            {expanded ? 'Done' : 'Edit details'}
+          </button>
+          <Button onClick={() => onRemove(index)} variant="danger" className="h-10 w-12 justify-center">
+            <Trash2 size={16} />
+            <span className="sr-only">Remove reference document</span>
           </Button>
         </div>
       </div>
 
-      {typeof item.uploadProgress === 'number' && item.uploadProgress < 100 && (
-        <p className="text-xs text-blue-600">Upload in progress: {item.uploadProgress}%</p>
-      )}
-      {item.uploadProgress === 100 && !item.uploadError && (
-        <p className="text-xs text-green-600 flex items-center">
-          <CheckCircle2 size={14} className="mr-1" /> Upload complete
-        </p>
-      )}
-      {item.uploadError && (
-        <p className="text-xs text-red-500 flex items-center">
-          <AlertTriangle size={14} className="mr-1" />
-          {item.uploadError}
-        </p>
-      )}
+      {expanded ? (
+        <div className="space-y-4 border-t border-gray-100 p-4">
+          <div className="rounded-lg border border-blue-100 bg-blue-50/50 p-4 text-xs text-gray-600">
+            <button
+              type="button"
+              className="flex items-center gap-2 text-sm font-semibold text-blue-700 hover:text-blue-900"
+              onClick={() => setShowAdvanced((prev) => !prev)}
+            >
+              {showAdvanced ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+              Advanced options
+            </button>
 
-      {(storagePathLabel || downloadUrlLabel) && (
-        <div className="text-[11px] text-gray-500 space-y-0.5">
-          {storagePathLabel && <div>Storage path: {storagePathLabel}</div>}
-          {downloadUrlLabel && <div>Download URL: {downloadUrlLabel}</div>}
+            {showAdvanced ? (
+              <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700" htmlFor={`referenceUrl-${item._tempId}`}>
+                    Download URL (optional)
+                  </label>
+                  <Input
+                    id={`referenceUrl-${item._tempId}`}
+                    name="downloadURL"
+                    value={item.downloadURL}
+                    onChange={handleChange}
+                    placeholder="https://storage.googleapis.com/..."
+                    className="mt-1"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700" htmlFor={`referencePath-${item._tempId}`}>
+                    Storage Path (optional)
+                  </label>
+                  <Input
+                    id={`referencePath-${item._tempId}`}
+                    name="storagePath"
+                    value={item.storagePath}
+                    onChange={handleChange}
+                    placeholder="Set automatically when uploading"
+                    className="mt-1"
+                  />
+                  <p className="mt-1 text-[11px] text-gray-500">Provide only if referencing an existing Firebase Storage file.</p>
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          {typeof item.uploadProgress === 'number' && item.uploadProgress < 100 ? (
+            <p className="text-xs text-blue-600">Upload in progress: {item.uploadProgress}%</p>
+          ) : null}
+          {item.uploadProgress === 100 && !item.uploadError ? (
+            <p className="flex items-center text-xs text-emerald-600">
+              <CheckCircle2 size={14} className="mr-1" /> Uploaded successfully
+            </p>
+          ) : null}
+          {item.uploadError ? (
+            <p className="flex items-center text-xs text-red-500">
+              <AlertTriangle size={14} className="mr-1" /> {item.uploadError}
+            </p>
+          ) : null}
         </div>
-      )}
+      ) : null}
     </div>
   );
 };

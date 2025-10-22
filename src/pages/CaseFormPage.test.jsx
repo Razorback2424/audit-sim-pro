@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import CaseFormPage, { mergeDisbursementDocuments } from './CaseFormPage';
 import { fetchCase, createCase, updateCase } from '../services/caseService';
@@ -22,7 +22,15 @@ jest.mock('../AppCore', () => ({
   Button: ({ children, isLoading, ...props }) => <button {...props}>{isLoading ? 'Loading…' : children}</button>,
   Input: (props) => <input {...props} />,
   Textarea: (props) => <textarea {...props} />,
-  Select: (props) => <select {...props} />,
+  Select: ({ options = [], ...props }) => (
+    <select {...props}>
+      {options.map((option) => (
+        <option key={option.value} value={option.value} disabled={option.disabled}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  ),
   useRoute: () => ({ navigate: mockNavigate }),
   useModal: () => ({ showModal: mockShowModal }),
   useAuth: () => ({ userId: 'u1' }),
@@ -154,19 +162,33 @@ describe('answer key validation', () => {
     await flushRosterEffect();
 
     await userEvent.type(screen.getByLabelText(/Case Name/i), 'Mismatch Case');
+
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+
     await userEvent.type(screen.getByPlaceholderText(/Payment ID/i), 'P-100');
     await userEvent.type(screen.getByPlaceholderText(/Payee/i), 'Vendor Mismatch');
     await userEvent.type(screen.getByPlaceholderText(/Amount \(e\.g\., 123\.45\)/i), '150');
     const paymentDateInput = screen.getByPlaceholderText(/Payment Date/i);
     fireEvent.change(paymentDateInput, { target: { value: '2024-03-01' } });
 
-    const answerKeySection = screen.getByText('Answer Key (Correct Allocation) — optional').closest('div');
-    const properlyIncluded = within(answerKeySection).getByLabelText('Properly Included');
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+
+    await userEvent.click(await screen.findByRole('button', { name: /Edit details/i }));
+    await userEvent.click(screen.getByLabelText(/Split disbursement across classifications/i));
+    const properlyIncluded = screen.getByLabelText('Properly Included');
     await userEvent.type(properlyIncluded, '100');
-    const properlyExcluded = within(answerKeySection).getByLabelText('Properly Excluded');
+    const properlyExcluded = screen.getByLabelText('Properly Excluded');
     await userEvent.type(properlyExcluded, '25');
     const improperlyIncluded = screen.getByLabelText(/Improperly Included/i);
     await userEvent.type(improperlyIncluded, '10');
+    const improperlyExcluded = screen.getByLabelText(/Improperly Excluded/i);
+    await userEvent.type(improperlyExcluded, '0');
+    const explanation = screen.getByLabelText(/Explanation shown to trainees/i);
+    await userEvent.type(explanation, 'Intentional mismatch to trigger validation.');
+
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
 
     const submitButton = screen.getByRole('button', { name: /Create Case/i });
     await userEvent.click(submitButton);
@@ -174,7 +196,7 @@ describe('answer key validation', () => {
     await waitFor(() => expect(mockShowModal).toHaveBeenCalled());
     const [message, title] = mockShowModal.mock.calls[0];
     expect(title).toBe('Answer Key Validation');
-    expect(message).toMatch(/must equal the disbursement amount/i);
+    expect(message).toMatch(/do not match the disbursement amount/i);
     expect(createCase).not.toHaveBeenCalled();
     expect(updateCase).not.toHaveBeenCalled();
   });
@@ -188,7 +210,10 @@ describe('reference documents', () => {
   it('renders reference documents section for new case', async () => {
     render(<CaseFormPage params={{}} />);
     await flushRosterEffect();
-    expect(screen.getByText(/Reference Documents/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    expect(screen.getByRole('heading', { name: /Reference Documents/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Add Reference Document/i })).toBeInTheDocument();
   });
 
@@ -206,7 +231,11 @@ describe('reference documents', () => {
 
     await flushRosterEffect();
     await waitFor(() => expect(fetchCase).toHaveBeenCalledWith('case-1'));
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
     expect(await screen.findByDisplayValue('AP Aging Summary.pdf')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /Advanced options/i }));
     expect(screen.getByDisplayValue('https://example.com/aging.pdf')).toBeInTheDocument();
   });
 });
@@ -221,8 +250,9 @@ describe('audience selection', () => {
 
     await flushRosterEffect();
     await waitFor(() => expect(fetchUserRosterOptions).toHaveBeenCalled());
-    const rosterInput = await screen.findByLabelText(/search roster/i);
-    expect(rosterInput).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    expect(screen.queryByLabelText(/search roster/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/This case is currently visible to all trainees./i)).toBeInTheDocument();
   });
 
   it('submits selected roster IDs for private cases', async () => {
@@ -238,6 +268,8 @@ describe('audience selection', () => {
     await flushRosterEffect();
     await waitFor(() => expect(fetchUserRosterOptions).toHaveBeenCalled());
 
+    await userEvent.type(screen.getByLabelText(/Case Name/i), 'Case Title');
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
     const visibilityToggle = await screen.findByLabelText(/Visible to all signed-in trainees/i);
     await userEvent.click(visibilityToggle);
 
@@ -249,23 +281,34 @@ describe('audience selection', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: /Remove User Two/i })).toBeInTheDocument());
     expect(rosterInput).toHaveValue('');
 
-    await userEvent.type(screen.getByLabelText(/Case Name/i), 'Case Title');
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
     await userEvent.type(screen.getByPlaceholderText(/Payment ID/i), 'P-1');
     await userEvent.type(screen.getByPlaceholderText(/Payee/i), 'Vendor Inc');
     await userEvent.type(screen.getByPlaceholderText(/Amount \(e\.g\., 123\.45\)/i), '125.50');
     const paymentDateInput = screen.getByPlaceholderText(/Payment Date/i);
     fireEvent.change(paymentDateInput, { target: { value: '2024-01-01' } });
 
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+
+    await userEvent.click(await screen.findByRole('button', { name: /Edit details/i }));
+    const classificationSelect = await screen.findByRole('combobox', { name: /^Classification$/i });
+    fireEvent.change(classificationSelect, { target: { value: 'properlyIncluded' } });
+    await waitFor(() => expect(classificationSelect.value).toBe('properlyIncluded'));
+    await userEvent.type(screen.getByLabelText(/Explanation shown to trainees/i), 'All allocated to properly included.');
+    await userEvent.click(screen.getByRole('button', { name: /Hide details/i }));
+
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    await screen.findByText(/Case Summary/);
+
     const submitButton = screen.getByRole('button', { name: /Create Case/i });
     await userEvent.click(submitButton);
 
-    await waitFor(() => expect(updateCase).toHaveBeenCalled());
-    const [, payload] = updateCase.mock.calls[0];
-    expect(payload.visibleToUserIds).toEqual(['user-2']);
-    expect(payload.auditArea).toBe(DEFAULT_AUDIT_AREA);
-    expect(payload.caseGroupId).toBeNull();
-    expect(createCase).toHaveBeenCalled();
+    expect(mockShowModal).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(createCase).toHaveBeenCalled());
     const [createPayload] = createCase.mock.calls[0];
+    expect(createPayload.visibleToUserIds).toEqual(['user-2']);
     expect(createPayload.auditArea).toBe(DEFAULT_AUDIT_AREA);
     expect(createPayload.caseGroupId).toBeNull();
   });
@@ -279,37 +322,48 @@ describe('audience selection', () => {
 
     await flushRosterEffect();
     await waitFor(() => expect(fetchUserRosterOptions).toHaveBeenCalled());
-    expect(
-      await screen.findByText(/Unable to load roster options\. Try refreshing or contact support\./i)
-    ).toBeInTheDocument();
-
+    await userEvent.type(screen.getByLabelText(/Case Name/i), 'Manual Case');
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
     const visibilityToggle = await screen.findByLabelText(/Visible to all signed-in trainees/i);
     await userEvent.click(visibilityToggle);
+
+    const rosterMessage = await screen.findByText((content) =>
+      content.includes('Unable to load roster options')
+    );
+    expect(rosterMessage).toBeInTheDocument();
 
     const rosterInput = await screen.findByLabelText(/search roster/i);
     await userEvent.type(rosterInput, 'manual-user');
     await userEvent.keyboard('{Enter}');
 
     await waitFor(() => expect(rosterInput).toHaveValue(''));
-    expect(screen.getByText(/manual-user/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/manual-user/i).length).toBeGreaterThan(0);
 
-    await userEvent.type(screen.getByLabelText(/Case Name/i), 'Manual Case');
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
     await userEvent.type(screen.getByPlaceholderText(/Payment ID/i), 'P-2');
     await userEvent.type(screen.getByPlaceholderText(/Payee/i), 'Vendor B');
     await userEvent.type(screen.getByPlaceholderText(/Amount \(e\.g\., 123\.45\)/i), '99.00');
     const paymentDateInput = screen.getByPlaceholderText(/Payment Date/i);
     fireEvent.change(paymentDateInput, { target: { value: '2024-02-02' } });
 
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+
+    await userEvent.click(await screen.findByRole('button', { name: /Edit details/i }));
+    const classificationSelect = await screen.findByRole('combobox', { name: /^Classification$/i });
+    fireEvent.change(classificationSelect, { target: { value: 'properlyIncluded' } });
+    await waitFor(() => expect(classificationSelect.value).toBe('properlyIncluded'));
+    await userEvent.type(screen.getByLabelText(/Explanation shown to trainees/i), 'All properly included.');
+    await userEvent.click(screen.getByRole('button', { name: /Hide details/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    await screen.findByText(/Case Summary/);
+
     const submitButton = screen.getByRole('button', { name: /Create Case/i });
     await userEvent.click(submitButton);
 
-    await waitFor(() => expect(updateCase).toHaveBeenCalled());
-    const [, payload] = updateCase.mock.calls[0];
-    expect(payload.visibleToUserIds).toEqual(['manual-user']);
-    expect(payload.auditArea).toBe(DEFAULT_AUDIT_AREA);
-    expect(payload.caseGroupId).toBeNull();
-    expect(createCase).toHaveBeenCalled();
+    await waitFor(() => expect(createCase).toHaveBeenCalled());
     const [createPayload] = createCase.mock.calls[0];
+    expect(createPayload.visibleToUserIds).toEqual(['manual-user']);
     expect(createPayload.auditArea).toBe(DEFAULT_AUDIT_AREA);
     expect(createPayload.caseGroupId).toBeNull();
   });
