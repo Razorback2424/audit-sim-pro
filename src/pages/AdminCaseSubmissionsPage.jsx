@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Button, useRoute, useModal } from '../AppCore';
 import { fetchCase } from '../services/caseService';
 import { fetchSubmissionsForCase } from '../services/submissionService';
+import { DEFAULT_AUDIT_AREA, getAuditAreaLabel, getCaseGroupLabel } from '../models/caseConstants';
 
 export default function AdminCaseSubmissionsPage({ params }) {
   const { caseId } = params;
@@ -10,6 +11,8 @@ export default function AdminCaseSubmissionsPage({ params }) {
   const [submissions, setSubmissions] = useState([]);
   const [loadingSubmissions, setLoadingSubmissions] = useState(true);
   const [caseName, setCaseName] = useState('');
+  const [auditArea, setAuditArea] = useState(DEFAULT_AUDIT_AREA);
+  const [caseGroupId, setCaseGroupId] = useState('');
 
   useEffect(() => {
     if (!caseId) {
@@ -18,9 +21,21 @@ export default function AdminCaseSubmissionsPage({ params }) {
     }
     setLoadingSubmissions(true);
 
-    fetchCase(caseId).then((caseDoc) => {
-      if (caseDoc) setCaseName(caseDoc.caseName);
-    });
+    fetchCase(caseId)
+      .then((caseDoc) => {
+        if (caseDoc) {
+          setCaseName(caseDoc.caseName);
+          setAuditArea(
+            typeof caseDoc.auditArea === 'string' && caseDoc.auditArea.trim()
+              ? caseDoc.auditArea.trim()
+              : DEFAULT_AUDIT_AREA
+          );
+          setCaseGroupId(typeof caseDoc.caseGroupId === 'string' ? caseDoc.caseGroupId.trim() : '');
+        }
+      })
+      .catch((error) => {
+        console.error('Error fetching case for submissions:', error);
+      });
 
     fetchSubmissionsForCase(caseId)
       .then((allSubmissions) => {
@@ -43,10 +58,19 @@ export default function AdminCaseSubmissionsPage({ params }) {
           <div>
             <h1 className="text-3xl font-bold text-gray-800">Submissions for:</h1>
             <h2 className="text-xl text-blue-600">{caseName || caseId}</h2>
+            <p className="text-sm text-gray-500 mt-1">
+              Audit Area: {getAuditAreaLabel(auditArea)}
+              {caseGroupId ? ` • Group: ${getCaseGroupLabel(caseGroupId)}` : ''}
+            </p>
           </div>
-          <Button onClick={() => navigate('/admin')} variant="secondary">
-            &larr; Back to Dashboard
-          </Button>
+          <div className="flex space-x-2">
+            <Button onClick={() => navigate(`/admin/case-progress/${caseId}`)} variant="secondary" className="text-sm">
+              View Progress
+            </Button>
+            <Button onClick={() => navigate('/admin')} variant="secondary">
+              &larr; Back to Dashboard
+            </Button>
+          </div>
         </div>
         {submissions.length === 0 ? (
           <div className="text-center py-10 bg-white rounded-lg shadow">

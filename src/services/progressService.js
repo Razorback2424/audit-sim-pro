@@ -116,6 +116,37 @@ export const subscribeProgressForCases = ({ appId, uid, caseIds }, onUpdate, onE
 };
 
 /**
+ * Aggregates progress for every user with progress for the supplied case.
+ * @param {{ appId: string, caseId: string }} params
+ * @returns {Promise<Array<{ userId: string, progress: import('../models/progress').ProgressModel }>>}
+ */
+export const fetchProgressRosterForCase = async ({ appId, caseId }) => {
+  if (!appId || !caseId) {
+    throw new Error('fetchProgressRosterForCase requires both appId and caseId.');
+  }
+
+  const rosterRoot = collection(db, `artifacts/${appId}/student_progress`);
+  const rosterSnapshot = await getDocs(rosterRoot);
+  const roster = [];
+
+  await Promise.all(
+    rosterSnapshot.docs.map(async (userDoc) => {
+      const userId = userDoc.id;
+      const progressRef = doc(db, FirestorePaths.STUDENT_PROGRESS_COLLECTION(appId, userId), caseId);
+      const progressSnap = await getDoc(progressRef);
+      if (!progressSnap.exists()) return;
+      roster.push({
+        userId,
+        progress: toProgressModel(progressSnap.data(), progressSnap.id),
+      });
+    })
+  );
+
+  roster.sort((a, b) => a.userId.localeCompare(b.userId));
+  return roster;
+};
+
+/**
  * Saves progress for a case.
  * @param {{ appId: string, uid: string, caseId: string, patch: Partial<import('../models/progress').ProgressModel> }} params
  */

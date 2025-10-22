@@ -1,11 +1,19 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Timestamp } from 'firebase/firestore';
 import { storage, appId } from '../AppCore';
 import { ref as storageRef, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { useAuth, Input, Textarea, Button, Select, useRoute, useModal } from '../AppCore';
+import { useAuth, Input, Button, Select, useRoute, useModal, Textarea } from '../AppCore';
 import { fetchCase, createCase, updateCase } from '../services/caseService';
+import { fetchUserRosterOptions } from '../services/userService';
 import getUUID from '../utils/getUUID';
 import { PlusCircle, Trash2, Paperclip, CheckCircle2, AlertTriangle, UploadCloud } from 'lucide-react';
+import {
+  AUDIT_AREA_VALUES,
+  CASE_GROUP_VALUES,
+  DEFAULT_AUDIT_AREA,
+  AUDIT_AREA_LABELS,
+  CASE_GROUP_LABELS,
+} from '../models/caseConstants';
 
 const STATUS_OPTIONS = [
   { value: 'assigned', label: 'Assigned' },
@@ -13,6 +21,9 @@ const STATUS_OPTIONS = [
   { value: 'submitted', label: 'Submitted' },
   { value: 'archived', label: 'Archived' },
 ];
+
+const ANSWER_KEY_FIELDS = ['properlyIncluded', 'properlyExcluded', 'improperlyIncluded', 'improperlyExcluded'];
+const ANSWER_KEY_TOLERANCE = 0.01;
 
 export const mergeDisbursementDocuments = (disbursementList, invoiceMappings) => {
   const baseDisbursements = (disbursementList || []).map(({ _tempId, ...rest }) => rest);
@@ -129,8 +140,14 @@ export default function CaseFormPage({ params }) {
   });
 
   const [caseName, setCaseName] = useState('');
-  const [visibleToUserIdsStr, setVisibleToUserIdsStr] = useState('');
   const [publicVisible, setPublicVisible] = useState(true);
+  const [auditArea, setAuditArea] = useState(DEFAULT_AUDIT_AREA);
+  const [caseGroupSelection, setCaseGroupSelection] = useState('__none');
+  const [customCaseGroupId, setCustomCaseGroupId] = useState('');
+  const [selectedUserIds, setSelectedUserIds] = useState([]);
+  const [rosterOptions, setRosterOptions] = useState([]);
+  const [rosterLoading, setRosterLoading] = useState(true);
+  const [rosterError, setRosterError] = useState('');
   const [status, setStatus] = useState('assigned');
   const [opensAtStr, setOpensAtStr] = useState('');
   const [dueAtStr, setDueAtStr] = useState('');
@@ -139,7 +156,56 @@ export default function CaseFormPage({ params }) {
   const [referenceDocuments, setReferenceDocuments] = useState([initialReferenceDocument()]);
   const [loading, setLoading] = useState(false);
   const [originalCaseData, setOriginalCaseData] = useState(null);
-  const disbursementCsvInputRef = React.useRef(null);
+  const disbursementCsvInputRef = useRef(null);
+
+  const auditAreaSelectOptions = useMemo(
+    () => AUDIT_AREA_VALUES.map((value) => ({ value, label: AUDIT_AREA_LABELS[value] || value })),
+    []
+  );
+
+  const caseGroupSelectOptions = useMemo(() => {
+    const baseOptions = CASE_GROUP_VALUES.map((value) => ({
+      value,
+      label: CASE_GROUP_LABELS[value] || value,
+    }));
+    return [
+      { value: '__none', label: 'No group' },
+      ...baseOptions,
+      { value: '__custom', label: 'Custom group…' },
+    ];
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRosterLoading(true);
+    fetchUserRosterOptions()
+      .then((options) => {
+        if (cancelled) return;
+        setRosterOptions(options);
+        setRosterLoading(false);
+        setRosterError('');
+      })
+      .catch((error) => {
+        if (process.env.NODE_ENV !== 'test') {
+          console.error('Error loading roster options:', error);
+        }
+        if (cancelled) return;
+        setRosterError('Unable to load roster options. Try refreshing or contact support.');
+        setRosterLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    setRosterOptions((existing) => {
+      const missing = selectedUserIds.filter((id) => !existing.some((option) => option.id === id));
+      if (missing.length === 0) return existing;
+      const supplemental = missing.map((id) => ({ id, label: id }));
+      return [...existing, ...supplemental];
+    });
+  }, [selectedUserIds]);
 
   // ---- upload helpers (no console or flags needed)
   const MAX_ARTIFACT_BYTES = 5 * 1024 * 1024; // 5 MB (keep in sync with storage.rules soft limit)
@@ -188,7 +254,7 @@ export default function CaseFormPage({ params }) {
                 : !(Array.isArray(data.visibleToUserIds) && data.visibleToUserIds.length > 0);
             setPublicVisible(inferredPublic);
             const rosterList = Array.isArray(data.visibleToUserIds) ? data.visibleToUserIds : [];
-            setVisibleToUserIdsStr(inferredPublic ? '' : rosterList.join(', '));
+            setSelectedUserIds(inferredPublic ? [] : rosterList);
             setStatus(data.status || 'assigned');
             setOpensAtStr(toDateTimeLocalInput(data.opensAt));
             setDueAtStr(toDateTimeLocalInput(data.dueAt));
@@ -217,6 +283,23 @@ export default function CaseFormPage({ params }) {
                   }))
                 : [initialReferenceDocument()]
             );
+            setAuditArea(
+              typeof data.auditArea === 'string' && data.auditArea.trim()
+                ? data.auditArea.trim()
+                : DEFAULT_AUDIT_AREA
+            );
+            const existingGroupId =
+              typeof data.caseGroupId === 'string' ? data.caseGroupId.trim() : '';
+            if (existingGroupId && CASE_GROUP_VALUES.includes(existingGroupId)) {
+              setCaseGroupSelection(existingGroupId);
+              setCustomCaseGroupId('');
+            } else if (existingGroupId) {
+              setCaseGroupSelection('__custom');
+              setCustomCaseGroupId(existingGroupId);
+            } else {
+              setCaseGroupSelection('__none');
+              setCustomCaseGroupId('');
+            }
           } else {
             showModal('Case not found.', 'Error');
             navigate('/admin');
@@ -231,7 +314,7 @@ export default function CaseFormPage({ params }) {
         });
     } else {
       setCaseName('');
-      setVisibleToUserIdsStr('');
+      setSelectedUserIds([]);
       setPublicVisible(true);
       setStatus('assigned');
       setOpensAtStr('');
@@ -240,6 +323,9 @@ export default function CaseFormPage({ params }) {
       setInvoiceMappings([initialMapping()]);
       setReferenceDocuments([initialReferenceDocument()]);
       setOriginalCaseData(null);
+      setAuditArea(DEFAULT_AUDIT_AREA);
+      setCaseGroupSelection('__none');
+      setCustomCaseGroupId('');
     }
   }, [isEditing, editingCaseId, navigate, showModal]);
 
@@ -946,14 +1032,78 @@ export default function CaseFormPage({ params }) {
       return;
     }
 
-    const visibleToUserIdsArray = publicVisible
-      ? []
-      : visibleToUserIdsStr.split(',').map((id) => id.trim()).filter((id) => id);
+    const parseAnswerValue = (value) => {
+      if (value === '' || value === null || value === undefined) return null;
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric : NaN;
+    };
+
+    const answerKeyIssues = [];
+    const isDevMode = process.env.NODE_ENV !== 'production';
+
+    disbursements.forEach((disbursement) => {
+      const answerKey = disbursement.answerKey || {};
+      const parsedValues = ANSWER_KEY_FIELDS.map((field) => parseAnswerValue(answerKey[field]));
+      const hasAnyEntry = parsedValues.some((value) => value !== null);
+
+      if (!hasAnyEntry) return;
+
+      const invalidIndex = parsedValues.findIndex((value) => value !== null && Number.isNaN(value));
+      if (invalidIndex >= 0) {
+        answerKeyIssues.push(
+          `Answer key for Payment ID ${disbursement.paymentId || 'unknown'} has a non-numeric value in the ${ANSWER_KEY_FIELDS[invalidIndex]} field.`
+        );
+        return;
+      }
+
+      const amountNumber = Number(disbursement.amount);
+      if (!Number.isFinite(amountNumber)) {
+        answerKeyIssues.push(
+          `Answer key for Payment ID ${disbursement.paymentId || 'unknown'} could not validate because the disbursement amount is not numeric.`
+        );
+        return;
+      }
+
+      const total = parsedValues.reduce((sum, value) => sum + (value ?? 0), 0);
+      if (Math.abs(total - amountNumber) > ANSWER_KEY_TOLERANCE) {
+        answerKeyIssues.push(
+          `Answer key totals (${total.toFixed(2)}) must equal the disbursement amount (${amountNumber.toFixed(2)}) for Payment ID ${
+            disbursement.paymentId || 'unknown'
+          }.`
+        );
+      } else if (isDevMode) {
+        console.debug('[case-form] answerKey validated', {
+          paymentId: disbursement.paymentId,
+          total,
+          amount: amountNumber,
+        });
+      }
+    });
+
+    if (answerKeyIssues.length > 0) {
+      showModal(answerKeyIssues.join('\n'), 'Answer Key Validation');
+      return;
+    }
+
+    const visibleToUserIdsArray = publicVisible ? [] : Array.from(new Set(selectedUserIds));
 
     if (!publicVisible && visibleToUserIdsArray.length === 0) {
       showModal('Private cases must list at least one User ID.', 'Validation Error');
       return;
     }
+
+    const trimmedCustomGroupId = customCaseGroupId.trim();
+    if (caseGroupSelection === '__custom' && !trimmedCustomGroupId) {
+      showModal('Enter a custom case group identifier or choose "No group".', 'Validation Error');
+      return;
+    }
+
+    const resolvedCaseGroupId =
+      caseGroupSelection === '__custom'
+        ? trimmedCustomGroupId
+        : caseGroupSelection === '__none'
+        ? null
+        : caseGroupSelection;
 
     const { timestamp: opensAtTs, error: opensError } = parseDateTimeInputValue(opensAtStr, 'Opens At');
     if (opensError) {
@@ -991,6 +1141,8 @@ export default function CaseFormPage({ params }) {
           dueAt: dueAtTs,
           createdBy: userId,
           _deleted: false,
+          auditArea,
+          caseGroupId: resolvedCaseGroupId,
         };
         currentCaseId = await createCase(tempCaseData);
         showModal(`Case structure created (ID: ${currentCaseId}). Uploading files... This may take a moment. Please do not navigate away.`, 'Processing', null);
@@ -1076,6 +1228,8 @@ export default function CaseFormPage({ params }) {
         dueAt: dueAtTs,
         createdBy: isNewCaseCreation || !originalCaseData?.createdBy ? userId : originalCaseData.createdBy,
         _deleted: originalCaseData?._deleted ?? false,
+        auditArea,
+        caseGroupId: resolvedCaseGroupId,
       };
 
       if (!isNewCaseCreation) {
@@ -1110,6 +1264,54 @@ export default function CaseFormPage({ params }) {
             <Input id="caseName" value={caseName} onChange={(e) => setCaseName(e.target.value)} placeholder="e.g., Q1 Unrecorded Liabilities Review" required />
           </div>
           <section className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="auditArea" className="block text-sm font-medium text-gray-700 mb-1">
+                  Audit Area
+                </label>
+                <Select
+                  id="auditArea"
+                  value={auditArea}
+                  onChange={(e) => setAuditArea(e.target.value)}
+                  options={auditAreaSelectOptions}
+                  className="mt-1"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Choose the focus area used when trainees filter or analyze cases.
+                </p>
+              </div>
+              <div>
+                <label htmlFor="caseGroupSelection" className="block text-sm font-medium text-gray-700 mb-1">
+                  Case Group (optional)
+                </label>
+                <Select
+                  id="caseGroupSelection"
+                  value={caseGroupSelection}
+                  onChange={(e) => setCaseGroupSelection(e.target.value)}
+                  options={caseGroupSelectOptions}
+                  className="mt-1"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Organize scenarios by cohort or curriculum. Leave as &ldquo;No group&rdquo; if not needed.
+                </p>
+              </div>
+            </div>
+            {caseGroupSelection === '__custom' ? (
+              <div>
+                <label htmlFor="customCaseGroupId" className="block text-sm font-medium text-gray-700 mb-1">
+                  Custom Group Identifier
+                </label>
+                <Input
+                  id="customCaseGroupId"
+                  value={customCaseGroupId}
+                  onChange={(e) => setCustomCaseGroupId(e.target.value)}
+                  placeholder="e.g., ap-advanced-spring"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Use a lowercase slug that matches your reporting conventions.
+                </p>
+              </div>
+            ) : null}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Audience</label>
               <div className="flex items-center space-x-3">
@@ -1131,19 +1333,31 @@ export default function CaseFormPage({ params }) {
 
             <div>
               <label htmlFor="visibleToUserIds" className="block text-sm font-medium text-gray-700 mb-1">
-                Visible to User IDs (comma-separated)
+                Visible to Specific Users
               </label>
-              <Textarea
+              <RosterMultiSelect
                 id="visibleToUserIds"
-                value={visibleToUserIdsStr}
-                onChange={(e) => setVisibleToUserIdsStr(e.target.value)}
-                placeholder="Enter comma-separated User IDs when the case is private."
-                disabled={publicVisible}
-                className={publicVisible ? 'bg-gray-100 cursor-not-allowed' : ''}
+                options={rosterOptions}
+                value={selectedUserIds}
+                onChange={setSelectedUserIds}
+                disabled={publicVisible || rosterLoading}
+                loading={rosterLoading}
+                placeholder="Search by name, email, or ID"
               />
-              <p className="text-xs text-gray-500 mt-1">
-                Provide at least one ID when the case is restricted. Leave blank when public.
-              </p>
+              {publicVisible ? (
+                <p className="text-xs text-gray-500 mt-1">
+                  This case is visible to all trainees. Disable the toggle above to limit access.
+                </p>
+              ) : (
+                <p className="text-xs text-gray-500 mt-1">
+                  Select one or more users who should see this case.
+                </p>
+              )}
+              {rosterError ? (
+                <p className="text-xs text-red-600 mt-1">
+                  {rosterError} You can still type a user ID and press Enter to add it manually.
+                </p>
+              ) : null}
             </div>
 
             <div>
@@ -1273,19 +1487,276 @@ export default function CaseFormPage({ params }) {
   );
 }
 
+const RosterMultiSelect = ({ id, options, value, onChange, disabled, loading, placeholder }) => {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (!containerRef.current) return;
+      if (!containerRef.current.contains(event.target)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (disabled) {
+      setOpen(false);
+    }
+  }, [disabled]);
+
+  const optionsMap = useMemo(() => {
+    const map = new Map();
+    options.forEach((option) => {
+      map.set(option.id, option);
+    });
+    return map;
+  }, [options]);
+
+  const valueSet = useMemo(() => new Set(value), [value]);
+
+  const normalizedSelected = useMemo(
+    () =>
+      value.map((selectedId) => {
+        const option = optionsMap.get(selectedId);
+        return {
+          id: selectedId,
+          label: option?.label || selectedId,
+        };
+      }),
+    [value, optionsMap]
+  );
+
+  const filteredOptions = useMemo(() => {
+    const available = options.filter((option) => !valueSet.has(option.id));
+    const trimmed = query.trim().toLowerCase();
+    if (!trimmed) {
+      return available.slice(0, 20);
+    }
+    return available.filter((option) => {
+      const label = option.label?.toLowerCase() || '';
+      const email = option.email?.toLowerCase() || '';
+      return label.includes(trimmed) || email.includes(trimmed) || option.id.toLowerCase().includes(trimmed);
+    });
+  }, [options, query, valueSet]);
+
+  const handleInputFocus = () => {
+    if (!disabled) {
+      setOpen(true);
+    }
+  };
+
+  const handleInputChange = (event) => {
+    if (disabled) return;
+    setQuery(event.target.value);
+    setOpen(true);
+  };
+
+  const addValue = (rawId) => {
+    const trimmed = typeof rawId === 'string' ? rawId.trim() : '';
+    if (!trimmed || valueSet.has(trimmed)) {
+      setQuery('');
+      setOpen(false);
+      return;
+    }
+    onChange([...value, trimmed]);
+    setQuery('');
+    setOpen(false);
+  };
+
+  const handleKeyDown = (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (filteredOptions.length > 0) {
+        const [first] = filteredOptions;
+        if (first) addValue(first.id);
+      } else {
+        addValue(query);
+      }
+    }
+    if (event.key === 'Backspace' && !query && value.length > 0) {
+      event.preventDefault();
+      const next = value.slice(0, -1);
+      onChange(next);
+    }
+  };
+
+  const removeSelected = (selectedId) => {
+    if (disabled) return;
+    onChange(value.filter((idValue) => idValue !== selectedId));
+  };
+
+  const selectOption = (option) => {
+    if (disabled) return;
+    addValue(option.id);
+  };
+
+  const dropdownId = id ? `${id}-options` : undefined;
+  const showDropdown = open && !disabled;
+
+  return (
+    <div className="relative" data-testid="roster-multi-select">
+      <div
+        ref={containerRef}
+        className={`flex flex-wrap items-center gap-2 border rounded-md px-2 py-2 bg-white text-sm ${
+          disabled ? 'bg-gray-100 cursor-not-allowed border-gray-200' : 'border-gray-300 focus-within:ring-2 focus-within:ring-blue-500'
+        }`}
+      >
+        {normalizedSelected.map((selected) => (
+          <span
+            key={selected.id}
+            className={`inline-flex items-center px-2 py-1 rounded-md text-xs font-medium ${
+              disabled ? 'bg-gray-200 text-gray-600' : 'bg-blue-100 text-blue-700'
+            }`}
+          >
+            {selected.label}
+            {!disabled && (
+              <button
+                type="button"
+                className="ml-1 text-blue-600 hover:text-blue-800 focus:outline-none"
+                onClick={() => removeSelected(selected.id)}
+                aria-label={`Remove ${selected.label}`}
+              >
+                ×
+              </button>
+            )}
+          </span>
+        ))}
+        <input
+          id={id}
+          type="text"
+          className={`flex-1 min-w-[140px] border-none focus:outline-none bg-transparent text-sm ${
+            disabled ? 'text-gray-500' : 'text-gray-700'
+          }`}
+          value={disabled ? '' : query}
+          onChange={handleInputChange}
+          onFocus={handleInputFocus}
+          onKeyDown={handleKeyDown}
+          placeholder={normalizedSelected.length === 0 ? placeholder : ''}
+          disabled={disabled}
+          role="combobox"
+          aria-expanded={showDropdown}
+          aria-haspopup="listbox"
+          aria-controls={dropdownId}
+          aria-label="Search roster"
+        />
+      </div>
+      {showDropdown ? (
+        <ul
+          id={dropdownId}
+          role="listbox"
+          className="absolute z-10 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-md shadow-lg max-h-48 overflow-auto"
+        >
+          {filteredOptions.length === 0 ? (
+            <li className="px-3 py-2 text-sm text-gray-500">No matches found.</li>
+          ) : (
+            filteredOptions.map((option) => (
+              <li key={option.id}>
+                <button
+                  type="button"
+                  role="option"
+                  aria-selected="false"
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-blue-50 focus:bg-blue-50 focus:outline-none"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => selectOption(option)}
+                >
+                  <span className="block text-gray-700">{option.label}</span>
+                  {option.email ? <span className="block text-xs text-gray-500">{option.email}</span> : null}
+                </button>
+              </li>
+            ))
+          )}
+        </ul>
+      ) : null}
+      {loading ? <p className="text-xs text-gray-500 mt-1">Loading roster…</p> : null}
+    </div>
+  );
+};
+
 const DisbursementItem = ({ item, index, onChange, onRemove }) => {
   const handleChange = (e) => {
     onChange(index, { ...item, [e.target.name]: e.target.value });
   };
+
+  const handleAnswerKeyChange = (field, rawValue) => {
+    const normalized = typeof rawValue === 'string' ? rawValue.trim() : rawValue;
+    const current = { ...(item.answerKey || {}) };
+
+    if (normalized === '' || normalized === null || normalized === undefined) {
+      delete current[field];
+    } else {
+      current[field] = normalized;
+    }
+
+    const updated = { ...item };
+    if (Object.keys(current).length > 0) {
+      updated.answerKey = current;
+    } else {
+      delete updated.answerKey;
+    }
+
+    onChange(index, updated);
+  };
+
+  const baseId = item._tempId || item.paymentId || `disbursement-${index}`;
+  const answerKeyFieldConfigs = [
+    { key: 'properlyIncluded', label: 'Properly Included' },
+    { key: 'properlyExcluded', label: 'Properly Excluded' },
+    { key: 'improperlyIncluded', label: 'Improperly Included' },
+    { key: 'improperlyExcluded', label: 'Improperly Excluded' },
+  ];
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-center p-3 border border-gray-200 rounded-md">
-      <Input name="paymentId" value={item.paymentId} onChange={handleChange} placeholder="Payment ID" required />
-      <Input name="payee" value={item.payee} onChange={handleChange} placeholder="Payee" required />
-      <Input name="amount" type="number" value={item.amount} onChange={handleChange} placeholder="Amount (e.g., 123.45)" required />
-      <Input name="paymentDate" type="date" value={item.paymentDate} onChange={handleChange} placeholder="Payment Date" required />
-      <Button onClick={() => onRemove(index)} variant="danger" className="h-10">
-        <Trash2 size={18} />
-      </Button>
+    <div className="p-3 border border-gray-200 rounded-md space-y-3">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-3 items-center">
+        <Input name="paymentId" value={item.paymentId} onChange={handleChange} placeholder="Payment ID" required />
+        <Input name="payee" value={item.payee} onChange={handleChange} placeholder="Payee" required />
+        <Input name="amount" type="number" value={item.amount} onChange={handleChange} placeholder="Amount (e.g., 123.45)" required />
+        <Input name="paymentDate" type="date" value={item.paymentDate} onChange={handleChange} placeholder="Payment Date" required />
+        <Button onClick={() => onRemove(index)} variant="danger" className="h-10">
+          <Trash2 size={18} />
+        </Button>
+      </div>
+
+      <div className="pt-2 border-t border-gray-100">
+        <p className="text-sm font-medium text-gray-700 mb-2">Answer Key (Correct Allocation) — optional</p>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+          {answerKeyFieldConfigs.map(({ key, label }) => (
+            <div key={key} className="flex flex-col text-sm">
+              <label className="mb-1 text-gray-700" htmlFor={`${baseId}-${key}`}>
+                {label}
+              </label>
+              <Input
+                id={`${baseId}-${key}`}
+                type="number"
+                step="0.01"
+                min="0"
+                value={item.answerKey?.[key] ?? ''}
+                onChange={(e) => handleAnswerKeyChange(key, e.target.value)}
+                placeholder="0.00"
+              />
+            </div>
+          ))}
+        </div>
+        <div className="mt-3">
+          <label className="block text-sm font-medium text-gray-700 mb-1" htmlFor={`${baseId}-explanation`}>
+            Explanation (shown on results)
+          </label>
+          <Textarea
+            id={`${baseId}-explanation`}
+            rows={2}
+            value={item.answerKey?.explanation ?? ''}
+            onChange={(e) => handleAnswerKeyChange('explanation', e.target.value)}
+            placeholder="Brief rationale for correct allocation and why alternatives are incorrect."
+          />
+        </div>
+      </div>
     </div>
   );
 };

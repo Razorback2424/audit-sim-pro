@@ -17,6 +17,7 @@ import {
   setDoc,
   onSnapshot
 } from 'firebase/firestore';
+import { getFunctions } from 'firebase/functions';
 import { getStorage } from 'firebase/storage'; // << MOVED IMPORT TO TOP
 import { XCircle, Loader2 } from 'lucide-react'; // << MOVED IMPORT TO TOP
 import { cacheRole, getCachedRole, clearRoleCache } from './services/roleService';
@@ -70,6 +71,7 @@ const appId = typeof __app_id !== 'undefined' ? __app_id : window.__app_id;
 const firebaseApp = initializeApp(firebaseConfig);
 const auth = getAuth(firebaseApp);
 const db = getFirestore(firebaseApp);
+const functionsInstance = getFunctions(firebaseApp);
 
 const resolveStorageBucketUrl = (rawBucket) => {
   if (!rawBucket || typeof rawBucket !== 'string') return null;
@@ -116,6 +118,7 @@ const FirestorePaths = {
   CASES_COLLECTION: () => `artifacts/${appId}/public/data/cases`,
   CASE_DOCUMENT: (caseId) => `artifacts/${appId}/public/data/cases/${caseId}`,
   USERS_COLLECTION: () => `artifacts/${appId}/users`,
+  USER_SUBMISSIONS_COLLECTION: (appIdValue, userId) => `artifacts/${appIdValue}/users/${userId}/caseSubmissions`,
   USER_CASE_SUBMISSION: (userId, caseId) => `artifacts/${appId}/users/${userId}/caseSubmissions/${caseId}`,
   ROLE_DOCUMENT: (userId) => `roles/${userId}`,
   STUDENT_PROGRESS_COLLECTION: (appId, uid) => `artifacts/${appId}/student_progress/${uid}/cases`,
@@ -616,6 +619,7 @@ export {
   firebaseApp,
   auth,
   db,
+  functionsInstance as functions,
   storage,
   appId,
   FirestorePaths,

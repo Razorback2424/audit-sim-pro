@@ -7,7 +7,7 @@ import {
   serverTimestamp,
   arrayUnion,
 } from 'firebase/firestore';
-import { db, FirestorePaths } from '../AppCore';
+import { db, FirestorePaths, appId as defaultAppId } from '../AppCore';
 
 export const saveSubmission = async (userId, caseId, data) => {
   const ref = doc(db, FirestorePaths.USER_CASE_SUBMISSION(userId, caseId));
@@ -42,5 +42,59 @@ export const fetchSubmissionsForCase = async (caseId) => {
       submissions.push({ id: submissionSnap.id, userId, ...submissionSnap.data() });
     }
   }
+  return submissions;
+};
+
+const normalizeAttemptList = (docData) => {
+  const attempts = Array.isArray(docData.attempts) ? docData.attempts : [];
+  if (attempts.length > 0) {
+    return attempts.map((attempt) => ({
+      ...attempt,
+      submittedAt: attempt.submittedAt || docData.submittedAt || null,
+      retrievedDocuments: Array.isArray(attempt.retrievedDocuments) ? attempt.retrievedDocuments : [],
+      selectedPaymentIds: Array.isArray(attempt.selectedPaymentIds) ? attempt.selectedPaymentIds : docData.selectedPaymentIds || [],
+      disbursementClassifications: attempt.disbursementClassifications || docData.disbursementClassifications || {},
+      expectedClassifications: attempt.expectedClassifications || docData.expectedClassifications || {},
+    }));
+  }
+
+  return [
+    {
+      submittedAt: docData.submittedAt || null,
+      retrievedDocuments: Array.isArray(docData.retrievedDocuments) ? docData.retrievedDocuments : [],
+      selectedPaymentIds: Array.isArray(docData.selectedPaymentIds) ? docData.selectedPaymentIds : [],
+      disbursementClassifications: docData.disbursementClassifications || {},
+      expectedClassifications: docData.expectedClassifications || {},
+      overallGrade: docData.overallGrade,
+    },
+  ];
+};
+
+export const listUserSubmissions = async ({ uid, appId = defaultAppId } = {}) => {
+  if (!uid) {
+    throw new Error('listUserSubmissions requires a uid.');
+  }
+  if (!appId) {
+    throw new Error('listUserSubmissions requires an appId.');
+  }
+  const submissionsRef = collection(db, FirestorePaths.USER_SUBMISSIONS_COLLECTION(appId, uid));
+  const snapshot = await getDocs(submissionsRef);
+
+  const submissions = snapshot.docs.map((docSnap) => {
+    const data = docSnap.data() || {};
+    return {
+      caseId: docSnap.id,
+      caseName: data.caseName || '',
+      submittedAt: data.submittedAt || null,
+      attempts: normalizeAttemptList(data),
+    };
+  });
+
+  submissions.sort((a, b) => {
+    const aTime = a.submittedAt?.toMillis ? a.submittedAt.toMillis() : 0;
+    const bTime = b.submittedAt?.toMillis ? b.submittedAt.toMillis() : 0;
+    return bTime - aTime;
+  });
+
   return submissions;
 };

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, ListChecks, BookOpen } from 'lucide-react';
 import { Button, useRoute, useModal, useAuth, appId } from '../AppCore';
 import { listStudentCases } from '../services/caseService';
@@ -51,6 +51,11 @@ export default function TraineeDashboardPage() {
   const { navigate } = useRoute();
   const { userId } = useAuth();
   const { showModal } = useModal();
+  const showModalRef = useRef(showModal);
+
+  useEffect(() => {
+    showModalRef.current = showModal;
+  }, [showModal]);
 
   /** @type {[CaseModel[], React.Dispatch<React.SetStateAction<CaseModel[]>>]} */
   const [cases, setCases] = useState([]);
@@ -95,28 +100,39 @@ export default function TraineeDashboardPage() {
           includeOpensAtGate: false,
         });
 
-        if (process.env.NODE_ENV !== 'production') {
-          console.info('[dashboard] fetch success', { count: result.items.length });
+        if (!result || !Array.isArray(result.items)) {
+          if (process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test') {
+            console.warn('[dashboard] unexpected listStudentCases payload', result);
+          }
         }
 
-        setCases((prev) => (append ? [...prev, ...result.items] : result.items));
-        setNextCursor(result.nextCursor || null);
+        const items = Array.isArray(result?.items) ? result.items : [];
+
+        if (process.env.NODE_ENV !== 'production') {
+          console.info('[dashboard] fetch success', { count: items.length });
+        }
+
+        setCases((prev) => (append ? [...prev, ...items] : items));
+        setNextCursor(result?.nextCursor || null);
         setError('');
       } catch (err) {
-        console.error('Error fetching cases for trainee:', err);
+        if (process.env.NODE_ENV !== 'test') {
+          console.error('Error fetching cases for trainee:', err);
+        }
         const message = err?.message || 'Unable to load cases.';
         setError(message);
         if (!append) {
           setCases([]);
           setNextCursor(null);
         }
-        showModal(message, 'Error');
+        const modal = showModalRef.current;
+        if (modal) modal(message, 'Error');
       } finally {
         setLoading(false);
         setInitialLoad(false);
       }
     },
-    [userId, sortBy, showModal]
+    [userId, sortBy]
   );
 
   useEffect(() => {
@@ -200,6 +216,13 @@ export default function TraineeDashboardPage() {
               <option value="due">Soonest due</option>
               <option value="title">Title A–Z</option>
             </select>
+            <Button
+              variant="secondary"
+              onClick={() => navigate('/trainee/submission-history')}
+              className="text-sm"
+            >
+              View Submission History
+            </Button>
           </div>
         </div>
 

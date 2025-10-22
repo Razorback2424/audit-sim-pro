@@ -1,6 +1,7 @@
 import { fetchCase, markCaseDeleted } from './caseService';
 import { doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
 import { FirestorePaths, db } from '../AppCore';
+import { DEFAULT_AUDIT_AREA } from '../models/caseConstants';
 
 jest.mock('firebase/firestore', () => ({
   doc: jest.fn(),
@@ -43,6 +44,8 @@ describe('caseService', () => {
       publicVisible: true,
       visibleToUserIds: [],
       referenceDocuments: [],
+      auditArea: DEFAULT_AUDIT_AREA,
+      caseGroupId: null,
     });
   });
 

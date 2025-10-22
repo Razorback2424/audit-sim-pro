@@ -20,6 +20,11 @@ import {
 import { db, FirestorePaths } from '../AppCore';
 import { getNow } from '../utils/dates';
 import { toCaseModel } from '../models/case';
+import {
+  AUDIT_AREA_VALUES,
+  CASE_GROUP_VALUES,
+  DEFAULT_AUDIT_AREA,
+} from '../models/caseConstants';
 
 const VALID_CASE_STATUSES = ['assigned', 'in_progress', 'submitted', 'archived', 'draft'];
 
@@ -35,6 +40,23 @@ const toTrimmedString = (value) => {
 const toOptionalString = (value) => {
   const trimmed = toTrimmedString(value);
   return trimmed === '' ? null : trimmed;
+};
+
+const normalizeAuditArea = (value) => {
+  const auditArea = toOptionalString(value);
+  if (auditArea && AUDIT_AREA_VALUES.includes(auditArea)) {
+    return auditArea;
+  }
+  return DEFAULT_AUDIT_AREA;
+};
+
+const normalizeCaseGroupId = (value) => {
+  const groupId = toOptionalString(value);
+  if (!groupId) return null;
+  if (CASE_GROUP_VALUES.length > 0 && !CASE_GROUP_VALUES.includes(groupId)) {
+    return null;
+  }
+  return groupId;
 };
 
 const normalizeInvoiceMappings = (mappings = []) => {
@@ -166,6 +188,30 @@ const normalizeDisbursement = (item, index, invoiceGroups) => {
     normalized.supportingDocuments = dedupedDocs;
   }
 
+  // Normalize optional answer key shape for correctness/explanations
+  if (isRecord(item.answerKey)) {
+    const ak = item.answerKey || {};
+    const toNumOrUndefined = (v) => {
+      if (v === '' || v === null || v === undefined) return undefined;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const answerKey = {};
+    const pi = toNumOrUndefined(ak.properlyIncluded);
+    const pe = toNumOrUndefined(ak.properlyExcluded);
+    const ii = toNumOrUndefined(ak.improperlyIncluded);
+    const ie = toNumOrUndefined(ak.improperlyExcluded);
+    if (pi !== undefined) answerKey.properlyIncluded = pi;
+    if (pe !== undefined) answerKey.properlyExcluded = pe;
+    if (ii !== undefined) answerKey.improperlyIncluded = ii;
+    if (ie !== undefined) answerKey.improperlyExcluded = ie;
+    const explanation = toOptionalString(ak.explanation);
+    if (explanation) answerKey.explanation = explanation;
+    if (Object.keys(answerKey).length > 0) {
+      normalized.answerKey = answerKey;
+    }
+  }
+
   return normalized;
 };
 
@@ -231,6 +277,9 @@ const sanitizeCaseWriteData = (rawData = {}, { isCreate = false } = {}) => {
     sanitized.status = 'assigned';
   }
 
+  sanitized.auditArea = normalizeAuditArea(sanitized.auditArea);
+  sanitized.caseGroupId = normalizeCaseGroupId(sanitized.caseGroupId);
+
   if ('opensAt' in sanitized) {
     sanitized.opensAt = sanitized.opensAt ?? null;
   } else if (isCreate) {
@@ -266,6 +315,19 @@ const buildCaseRepairPatch = (data = {}) => {
 
   if (typeof data.status !== 'string' || !VALID_CASE_STATUSES.includes(data.status)) {
     patch.status = 'assigned';
+  }
+
+  if (!data.auditArea || !AUDIT_AREA_VALUES.includes(toOptionalString(data.auditArea))) {
+    patch.auditArea = normalizeAuditArea(data.auditArea);
+  }
+
+  if (!('caseGroupId' in data)) {
+    patch.caseGroupId = null;
+  } else {
+    const normalizedGroup = normalizeCaseGroupId(data.caseGroupId);
+    if (normalizedGroup !== (toOptionalString(data.caseGroupId) || null)) {
+      patch.caseGroupId = normalizedGroup;
+    }
   }
 
   if (!('opensAt' in data)) {

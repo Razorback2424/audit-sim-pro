@@ -32,3 +32,68 @@ exports.onRoleChangeSetCustomClaim = functions.firestore
       return null;
     }
   });
+
+exports.listRosterOptions = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
+  }
+
+  const role = context.auth.token?.role;
+  if (role !== 'admin') {
+    const roleDoc = await admin.firestore().doc(`roles/${context.auth.uid}`).get();
+    const effectiveRole = roleDoc.exists ? roleDoc.data()?.role : null;
+    if (effectiveRole !== 'admin') {
+      throw new functions.https.HttpsError('permission-denied', 'Admin role required.');
+    }
+  }
+
+  const appId = data?.appId;
+  if (!appId || typeof appId !== 'string') {
+    throw new functions.https.HttpsError('invalid-argument', 'appId is required.');
+  }
+
+  const firestore = admin.firestore();
+  const rosterCollection = firestore.collection(`artifacts/${appId}/users`);
+  const rosterSnapshot = await rosterCollection.get();
+
+  const roster = [];
+
+  for (const userDoc of rosterSnapshot.docs) {
+    const userId = userDoc.id;
+    const userData = userDoc.data() || {};
+    let profileData = {};
+
+    try {
+      const profileRef = firestore.doc(`artifacts/${appId}/users/${userId}/userProfileData/profile`);
+      const profileSnap = await profileRef.get();
+      if (profileSnap.exists) {
+        profileData = profileSnap.data() || {};
+      }
+    } catch (err) {
+      console.error(`[listRosterOptions] Failed to load profile for ${userId}`, err);
+    }
+
+    const displayName =
+      profileData.displayName ||
+      profileData.fullName ||
+      userData.displayName ||
+      userData.fullName ||
+      null;
+    const email =
+      profileData.email ||
+      profileData.emailAddress ||
+      userData.email ||
+      userData.emailAddress ||
+      null;
+
+    roster.push({
+      id: userId,
+      displayName,
+      email,
+      label: displayName || email || userId,
+      role: userData.role || profileData.role || null,
+    });
+  }
+
+  return { roster };
+});

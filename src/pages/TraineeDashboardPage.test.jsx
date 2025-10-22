@@ -28,5 +28,6 @@ describe('TraineeDashboardPage', () => {
     render(<TraineeDashboardPage />);
     expect(await screen.findByText(/available audit cases/i)).toBeInTheDocument();
     expect(listStudentCases).toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /view submission history/i })).toBeInTheDocument();
   });
 });

@@ -2,13 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Button, useRoute, useModal } from '../AppCore';
 import { fetchCase } from '../services/caseService';
 import { fetchSubmission } from '../services/submissionService';
-
-const CLASSIFICATION_FIELDS = [
-  { key: 'properlyIncluded', label: 'Properly Included' },
-  { key: 'properlyExcluded', label: 'Properly Excluded' },
-  { key: 'improperlyIncluded', label: 'Improperly Included' },
-  { key: 'improperlyExcluded', label: 'Improperly Excluded' },
-];
+import { CLASSIFICATION_FIELDS } from '../constants/classificationFields';
 
 export default function AdminSubmissionDetailPage({ params }) {
   const { caseId, userId } = params;

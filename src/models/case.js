@@ -1,3 +1,5 @@
+import { DEFAULT_AUDIT_AREA } from './caseConstants';
+
 /**
  * @typedef {import('firebase/firestore').Timestamp} FirestoreTimestamp
  */
@@ -9,6 +11,13 @@
  * @property {string|number} amount
  * @property {string} paymentDate
  * @property {string|null} [expectedClassification]
+ * @property {{
+ *   properlyIncluded?: number,
+ *   properlyExcluded?: number,
+ *   improperlyIncluded?: number,
+ *   improperlyExcluded?: number,
+ *   explanation?: string,
+ * }} [answerKey]
  * @property {string|null} [storagePath]
  * @property {string|null} [downloadURL]
  * @property {string|null} [fileName]
@@ -42,6 +51,8 @@
  * @property {CaseDisbursement[]} [disbursements]
  * @property {Array<{ paymentId: string, storagePath: string|null, downloadURL: string|null, fileName: string|null, contentType: string|null }>} [invoiceMappings]
  * @property {CaseReferenceDocument[]} [referenceDocuments]
+ * @property {string} auditArea
+ * @property {string|null} [caseGroupId]
  */
 
 export {}; // eslint-disable-line
@@ -68,5 +79,12 @@ export const toCaseModel = (id, data) => {
     disbursements: Array.isArray(data?.disbursements) ? data.disbursements : [],
     invoiceMappings: Array.isArray(data?.invoiceMappings) ? data.invoiceMappings : [],
     referenceDocuments: Array.isArray(data?.referenceDocuments) ? data.referenceDocuments : [],
+    auditArea: typeof data?.auditArea === 'string' && data.auditArea.trim()
+      ? data.auditArea.trim()
+      : DEFAULT_AUDIT_AREA,
+    caseGroupId:
+      typeof data?.caseGroupId === 'string' && data.caseGroupId.trim()
+        ? data.caseGroupId.trim()
+        : null,
   };
 };

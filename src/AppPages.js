@@ -29,9 +29,11 @@ import AdminCaseSubmissionsPage from './pages/AdminCaseSubmissionsPage';
 import AdminSubmissionDetailPage from './pages/AdminSubmissionDetailPage';
 import AdminCaseOverviewPage from './pages/AdminCaseOverviewPage';
 import AdminCaseDataAuditPage from './pages/AdminCaseDataAuditPage';
+import AdminCaseProgressPage from './pages/AdminCaseProgressPage';
 import CaseFormPage from './pages/CaseFormPage';
 import TraineeDashboardPage from './pages/TraineeDashboardPage';
 import TraineeCaseViewPage from './pages/TraineeCaseViewPage';
+import TraineeSubmissionHistoryPage from './pages/TraineeSubmissionHistoryPage';
 import LoginPage from './pages/LoginPage';
 import RegistrationPage from './pages/RegistrationPage';
 
@@ -112,6 +114,7 @@ const adminRoutes = {
   '/admin/case-data-audit': <AdminCaseDataAuditPage />,
   '/admin/user-management': <AdminUserManagementPage />,
   '/admin/case-submissions/:caseId': (params) => <AdminCaseSubmissionsPage params={params} />,
+  '/admin/case-progress/:caseId': (params) => <AdminCaseProgressPage params={params} />,
   '/admin/submission-detail/:caseId/:userId': (params) => <AdminSubmissionDetailPage params={params} />,
 };
 
@@ -122,6 +125,8 @@ const traineeRoutes = {
   '': <TraineeDashboardPage />,
   '/cases/:caseId': (params) => <TraineeCaseViewPage params={params} />,
   '/trainee/case/:caseId': (params) => <TraineeCaseViewPage params={params} />,
+  '/trainee/submission-history': <TraineeSubmissionHistoryPage />,
+  '/trainee/history': <TraineeSubmissionHistoryPage />,
 };
 
 // --- Main App Component ---

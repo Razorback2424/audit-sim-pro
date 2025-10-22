@@ -5,7 +5,9 @@ import { storage, Button, Input, useRoute, useAuth, useModal, appId } from '../A
 import { subscribeToCase } from '../services/caseService';
 import { saveSubmission } from '../services/submissionService';
 import { saveProgress, subscribeProgressForCases } from '../services/progressService';
-import { Send, FileText, Eye, Loader2, ExternalLink, Download } from 'lucide-react';
+import { Send, Loader2, ExternalLink, Download, CheckCircle2, XCircle, Info } from 'lucide-react';
+import SubmissionSummary from '../components/SubmissionSummary';
+import { CLASSIFICATION_FIELDS, createEmptyClassification } from '../constants/classificationFields';
 
 const FLOW_STEPS = Object.freeze({
   SELECTION: 'selection',
@@ -26,13 +28,6 @@ const STEP_DESCRIPTIONS = {
   [FLOW_STEPS.TESTING]: 'Allocate the amounts across each classification and review documents.',
   [FLOW_STEPS.RESULTS]: 'See a recap of your responses.',
 };
-
-const CLASSIFICATION_FIELDS = [
-  { key: 'properlyIncluded', label: 'Properly Included' },
-  { key: 'properlyExcluded', label: 'Properly Excluded' },
-  { key: 'improperlyIncluded', label: 'Improperly Included' },
-  { key: 'improperlyExcluded', label: 'Improperly Excluded' },
-];
 
 const isInlinePreviewable = (contentType, fileNameOrPath) => {
   const normalizedType = typeof contentType === 'string' ? contentType.toLowerCase() : '';
@@ -156,13 +151,7 @@ export default function TraineeCaseViewPage({ params }) {
   const classificationRef = useRef(classificationAmounts);
   const isLockedRef = useRef(false);
 
-  const createEmptyAllocation = useCallback(() => {
-    const template = {};
-    CLASSIFICATION_FIELDS.forEach(({ key }) => {
-      template[key] = '';
-    });
-    return template;
-  }, []);
+  const createEmptyAllocation = useCallback(() => createEmptyClassification(), []);
 
   const parseAmount = useCallback((value) => {
     if (value === '' || value === null || value === undefined) return 0;
@@ -1290,10 +1279,30 @@ export default function TraineeCaseViewPage({ params }) {
   };
 
   const renderResultsStep = () => {
-    const summaryDocuments = selectedDisbursementDetails.map((disbursement) => ({
-      disbursement,
+    const summaryItems = selectedDisbursementDetails.map((disbursement) => ({
+      paymentId: disbursement.paymentId,
+      metadata: disbursement,
+      classification: classificationAmounts[disbursement.paymentId] || createEmptyAllocation(),
       documents: collectSupportingDocuments(disbursement),
     }));
+
+    const tolerance = 0.01;
+    const toNumber = (v) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? n : 0;
+    };
+    const evaluate = (trainee, answerKey) => {
+      const result = {};
+      let allCorrect = true;
+      CLASSIFICATION_FIELDS.forEach(({ key }) => {
+        const userVal = toNumber(trainee?.[key] ?? 0);
+        const correctVal = toNumber(answerKey?.[key] ?? 0);
+        const isCorrect = Math.abs(userVal - correctVal) <= tolerance;
+        result[key] = { user: userVal, correct: correctVal, isCorrect };
+        if (!isCorrect) allCorrect = false;
+      });
+      return { fields: result, overallCorrect: allCorrect };
+    };
 
     return (
       <div className="space-y-6">
@@ -1305,94 +1314,102 @@ export default function TraineeCaseViewPage({ params }) {
         </div>
 
         <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
-          <h2 className="text-xl font-semibold text-gray-800 mb-4">Selected Disbursements</h2>
-          {summaryDocuments.length === 0 ? (
+          <h2 className="text-xl font-semibold text-gray-800 mb-4">Results & Feedback</h2>
+          {selectedDisbursementDetails.length === 0 ? (
             <p className="text-sm text-gray-500">No disbursements were recorded in your submission.</p>
           ) : (
             <ul className="space-y-4">
-              {summaryDocuments.map(({ disbursement, documents }) => {
-                const allocation = classificationAmounts[disbursement.paymentId] || createEmptyAllocation();
-                const parsedValues = CLASSIFICATION_FIELDS.map(({ key }) => {
-                  const value = parseAmount(allocation[key]);
-                  return Number.isFinite(value) ? value : 0;
-                });
-                const totalEntered = parsedValues.reduce((sum, value) => sum + value, 0);
+              {selectedDisbursementDetails.map((d) => {
+                const trainee = classificationAmounts[d.paymentId] || createEmptyAllocation();
+                const answerKey = d.answerKey || {};
+                const hasNumericAnswer = CLASSIFICATION_FIELDS.some(({ key }) => typeof answerKey[key] === 'number');
+                const hasExplanation = typeof answerKey.explanation === 'string' && answerKey.explanation.trim().length > 0;
+                const evaln = hasNumericAnswer ? evaluate(trainee, answerKey) : null;
+
+                if (evaln && !evaln.overallCorrect && process.env.NODE_ENV !== 'production') {
+                  console.debug('[trainee-results] allocation mismatch', {
+                    paymentId: d.paymentId,
+                    fields: evaln.fields,
+                  });
+                }
+
+                let statusBadge = (
+                  <span
+                    className="inline-flex items-center text-gray-600 bg-gray-50 border border-gray-200 rounded-md px-2 py-1 text-sm"
+                    title="No answer key configured by admin"
+                  >
+                    No Answer Key
+                  </span>
+                );
+
+                if (hasNumericAnswer && evaln) {
+                  statusBadge = evaln.overallCorrect ? (
+                    <span className="inline-flex items-center text-green-700 bg-green-50 border border-green-200 rounded-md px-2 py-1 text-sm">
+                      <CheckCircle2 size={16} className="mr-1" /> Correct
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1 text-sm">
+                      <XCircle size={16} className="mr-1" /> Needs Review
+                    </span>
+                  );
+                } else if (!hasNumericAnswer && hasExplanation) {
+                  statusBadge = (
+                    <span className="inline-flex items-center text-blue-700 bg-blue-50 border border-blue-200 rounded-md px-2 py-1 text-sm">
+                      <Info size={16} className="mr-1" /> Instructor Note
+                    </span>
+                  );
+                }
 
                 return (
-                  <li key={disbursement.paymentId} className="border border-gray-200 rounded-md p-4">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-gray-700">
-                      <span>
-                        <strong className="font-medium">ID:</strong> {disbursement.paymentId}
-                      </span>
-                      <span>
-                        <strong className="font-medium">Payee:</strong> {disbursement.payee}
-                      </span>
-                      <span>
-                        <strong className="font-medium">Amount:</strong> {currencyFormatter.format(Number(disbursement.amount) || 0)}
-                      </span>
-                      <span>
-                        <strong className="font-medium">Date:</strong> {disbursement.paymentDate}
-                      </span>
-                      <span>
-                        <strong className="font-medium">Expected classification:</strong>{' '}
-                        {disbursement.expectedClassification || 'Not provided'}
-                      </span>
+                  <li key={`eval-${d.paymentId}`} className="border border-gray-200 rounded-md p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="text-sm text-gray-700">
+                        <div><strong className="font-medium">ID:</strong> {d.paymentId}</div>
+                        <div><strong className="font-medium">Payee:</strong> {d.payee}</div>
+                        <div><strong className="font-medium">Amount:</strong> {currencyFormatter.format(Number(d.amount) || 0)}</div>
+                      </div>
+                      <div className="flex items-center gap-2">{statusBadge}</div>
                     </div>
 
-                    <div className="mt-3 overflow-x-auto">
-                      <table className="min-w-full text-sm text-left text-gray-700 border border-gray-200 rounded-md">
-                        <thead className="bg-gray-100">
-                          <tr>
-                            {CLASSIFICATION_FIELDS.map(({ label }) => (
-                              <th key={label} className="px-3 py-2 font-semibold text-gray-600">
-                                {label}
-                              </th>
-                            ))}
-                            <th className="px-3 py-2 font-semibold text-gray-600">Total Entered</th>
-                          </tr>
-                        </thead>
-                      <tbody>
-                        <tr>
-                          {CLASSIFICATION_FIELDS.map(({ label }, index) => (
-                            <td key={label} className="px-3 py-2">
-                              {currencyFormatter.format(parsedValues[index])}
-                            </td>
-                          ))}
-                          <td className="px-3 py-2">
-                            {currencyFormatter.format(totalEntered)}
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-                    </div>
-                    {documents.length > 0 ? (
-                      <div className="mt-4 space-y-2">
-                        <p className="text-sm font-medium text-gray-600">Supporting Documents</p>
-                        <ul className="space-y-2">
-                          {documents.map((doc, docIndex) => (
-                            <li
-                              key={`${disbursement.paymentId || 'doc'}-${docIndex}`}
-                              className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-700"
-                            >
-                              <span className="flex items-center">
-                                <FileText size={16} className="text-blue-500 mr-2 flex-shrink-0" /> {doc.fileName}
-                              </span>
-                              {(doc.storagePath || doc.downloadURL) && (
-                                <Button
-                                  onClick={() => handleViewDocument(doc)}
-                                  variant="secondary"
-                                  className="text-xs px-2 py-1"
-                                >
-                                  <Eye size={14} className="inline mr-1" /> View Document
-                                </Button>
-                              )}
-                            </li>
-                          ))}
-                        </ul>
+                    {hasNumericAnswer && evaln ? (
+                      <div className="mt-3 overflow-x-auto">
+                        <table className="min-w-full text-sm text-left text-gray-700 border border-gray-200 rounded-md">
+                          <thead className="bg-gray-100">
+                            <tr>
+                              <th className="px-3 py-2 font-semibold text-gray-600">Classification</th>
+                              <th className="px-3 py-2 font-semibold text-gray-600">Your Entry</th>
+                              <th className="px-3 py-2 font-semibold text-gray-600">Correct Answer</th>
+                              <th className="px-3 py-2 font-semibold text-gray-600">Result</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {CLASSIFICATION_FIELDS.map(({ key, label }) => {
+                              const f = evaln.fields[key];
+                              return (
+                                <tr key={`${d.paymentId}-${key}`} className="border-t">
+                                  <td className="px-3 py-2">{label}</td>
+                                  <td className="px-3 py-2">{currencyFormatter.format(f.user)}</td>
+                                  <td className="px-3 py-2">{currencyFormatter.format(f.correct)}</td>
+                                  <td className="px-3 py-2">
+                                    {f.isCorrect ? (
+                                      <span className="inline-flex items-center text-green-700"><CheckCircle2 size={16} className="mr-1" /> Match</span>
+                                    ) : (
+                                      <span className="inline-flex items-center text-amber-700"><XCircle size={16} className="mr-1" /> Mismatch</span>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
                       </div>
-                    ) : (
-                      <p className="mt-3 text-sm text-gray-500">No supporting documents were available.</p>
-                    )}
+                    ) : null}
+
+                    {hasExplanation ? (
+                      <div className="mt-3 border border-blue-100 bg-blue-50 text-blue-900 rounded-md px-3 py-2 text-sm">
+                        <strong className="font-semibold">Explanation:</strong> {answerKey.explanation}
+                      </div>
+                    ) : null}
                   </li>
                 );
               })}
@@ -1400,9 +1417,21 @@ export default function TraineeCaseViewPage({ params }) {
           )}
         </div>
 
+        <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
+          <h2 className="text-xl font-semibold text-gray-800 mb-4">Selected Disbursements</h2>
+          <SubmissionSummary
+            items={summaryItems}
+            onViewDocument={handleViewDocument}
+            emptyMessage="No disbursements were recorded in your submission."
+          />
+        </div>
+
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <Button variant="secondary" onClick={() => navigate('/trainee')}>
             Back to Cases
+          </Button>
+          <Button variant="secondary" onClick={() => navigate('/trainee/submission-history')}>
+            View Submission History
           </Button>
         </div>
       </div>

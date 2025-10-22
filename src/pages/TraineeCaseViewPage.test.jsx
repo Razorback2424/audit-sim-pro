@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import TraineeCaseViewPage from './TraineeCaseViewPage';
 import { subscribeToCase } from '../services/caseService';
@@ -45,6 +45,12 @@ jest.mock('../AppCore', () => {
 });
 
 describe('TraineeCaseViewPage', () => {
+  let consoleErrorSpy;
+  const flushAsync = () =>
+    act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
   const renderCase = (casePayload) => {
     subscribeToCase.mockImplementation((_id, cb) => {
       cb(casePayload);
@@ -69,7 +75,8 @@ describe('TraineeCaseViewPage', () => {
     subscribeProgressForCases.mockReset();
     saveSubmission.mockReset();
     saveProgress.mockReset();
-   saveProgress.mockResolvedValue();
+    saveProgress.mockResolvedValue();
+    consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     getDownloadURL.mockReset();
     subscribeProgressForCases.mockImplementation((_params, onNext) => {
       if (typeof onNext === 'function') {
@@ -81,6 +88,7 @@ describe('TraineeCaseViewPage', () => {
 
   afterEach(() => {
     jest.clearAllMocks();
+    consoleErrorSpy.mockRestore();
   });
 
   test('navigates to classification and exposes allocation inputs', async () => {
@@ -92,6 +100,7 @@ describe('TraineeCaseViewPage', () => {
     });
 
     await advanceToClassification();
+    await flushAsync();
     const [properlyIncluded] = await screen.findAllByLabelText(/Properly Included/i);
     const [improperlyExcluded] = await screen.findAllByLabelText(/Improperly Excluded/i);
     expect(properlyIncluded).toBeEnabled();
@@ -114,6 +123,7 @@ describe('TraineeCaseViewPage', () => {
     });
 
     await advanceToClassification();
+    await flushAsync();
     await waitFor(() => expect(getDownloadURL).toHaveBeenCalledTimes(1));
     expect(screen.getByRole('button', { name: /open in new tab/i })).toBeInTheDocument();
   });
@@ -134,6 +144,7 @@ describe('TraineeCaseViewPage', () => {
     });
 
     await advanceToClassification();
+    await flushAsync();
     expect(getDownloadURL).not.toHaveBeenCalled();
     expect(screen.getByText(/Now viewing: invoice\.pdf/i)).toBeInTheDocument();
   });
@@ -159,6 +170,7 @@ describe('TraineeCaseViewPage', () => {
     await waitFor(() => {
       expect(screen.queryByText(/Step 2 — Classify Results/i)).not.toBeInTheDocument();
     });
+    await flushAsync();
     await waitFor(() => {
       expect(mockModal.showModal).toHaveBeenCalled();
     });
@@ -180,7 +192,9 @@ describe('TraineeCaseViewPage', () => {
     });
 
     await advanceToClassification();
+    await flushAsync();
     await waitFor(() => expect(screen.getByText(/Document is missing from storage./i)).toBeInTheDocument());
+    expect(consoleErrorSpy).toHaveBeenCalledWith('Error loading evidence document:', expect.objectContaining({ code: 'storage/object-not-found' }));
   });
 
   test.skip('renders reference download banner with buttons', async () => {
