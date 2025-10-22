@@ -1676,7 +1676,7 @@ function StepIntro({ title, items = [], helper }) {
 const ChecklistItem = ({
   label,
   isReady,
-  details,
+  detail,
   readyText = 'Ready',
   unreadyText = 'Incomplete',
 }) => {
@@ -1685,19 +1685,23 @@ const ChecklistItem = ({
 
   return (
     <div className="rounded-lg border border-gray-200 bg-white p-3 shadow-sm">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-3">
           <Icon size={20} className={colorClass} />
-          <span className="text-sm font-medium text-gray-800">{label}</span>
+          <div>
+            <span className="text-sm font-medium text-gray-800">{label}</span>
+            {!isReady && detail ? (
+              <p className="mt-1 text-xs text-amber-600">{detail}</p>
+            ) : null}
+          </div>
         </div>
         <span className={`text-sm font-semibold ${colorClass}`}>{isReady ? readyText : unreadyText}</span>
       </div>
-      {details ? <p className="mt-2 text-xs text-gray-600">{details}</p> : null}
     </div>
   );
 };
 
-function ReviewStep({ summaryData, reviewChecklist }) {
+function ReviewStep({ summaryData, reviewChecklist = [] }) {
   const formatDateTime = (value) => {
     if (!value) return 'Not set';
     const date = new Date(value);
@@ -1738,16 +1742,18 @@ function ReviewStep({ summaryData, reviewChecklist }) {
             </p>
           </div>
         </div>
-        <div className="mt-4 space-y-3">
-          {reviewChecklist.map((item) => (
-            <ChecklistItem
-              key={item.id}
-              label={item.label}
-              isReady={item.isReady}
-              details={item.details}
-            />
-          ))}
-        </div>
+        {Array.isArray(reviewChecklist) && reviewChecklist.length > 0 ? (
+          <div className="mt-4 space-y-3">
+            {reviewChecklist.map((item) => (
+              <ChecklistItem
+                key={item.id}
+                label={item.label}
+                isReady={item.isReady}
+                detail={!item.isReady ? item.detail : undefined}
+              />
+            ))}
+          </div>
+        ) : null}
       </div>
 
       <div className="rounded-2xl border border-gray-200 bg-gray-50 p-6 shadow-sm">
@@ -2494,7 +2500,7 @@ export default function CaseFormPage({ params }) {
       id: 'case-name',
       label: 'Case name provided',
       isReady: trimmedCaseName.length > 0,
-      details:
+      detail:
         trimmedCaseName.length > 0
           ? `Using “${trimmedCaseName}”.`
           : 'Enter a descriptive case name trainees will recognize.',
@@ -2531,7 +2537,7 @@ export default function CaseFormPage({ params }) {
       id: 'disbursement-fields',
       label: 'Disbursement details complete',
       isReady: disbursementFieldIssues.length === 0,
-      details:
+      detail:
         disbursementFieldIssues.length === 0
           ? `All ${disbursementList.length} disbursement${
               disbursementList.length === 1 ? '' : 's'
@@ -2554,7 +2560,7 @@ export default function CaseFormPage({ params }) {
       id: 'answer-key',
       label: 'Answer keys ready',
       isReady: disbursementList.length > 0 && incompleteAnswerKeys.length === 0,
-      details:
+      detail:
         disbursementList.length === 0
           ? 'Add disbursements to build corresponding answer keys.'
           : incompleteAnswerKeys.length === 0
@@ -2570,7 +2576,7 @@ export default function CaseFormPage({ params }) {
       id: 'audience',
       label: 'Audience visibility configured',
       isReady: privateAudienceReady,
-      details: audience.publicVisible
+      detail: audience.publicVisible
         ? 'Case is visible to all trainees.'
         : uniqueSelectedUserIds.length > 0
         ? `Private case with ${uniqueSelectedUserIds.length} authorized user${
@@ -2607,7 +2613,7 @@ export default function CaseFormPage({ params }) {
       id: 'reference-documents',
       label: 'Reference materials complete',
       isReady: referenceIssues.length === 0,
-      details:
+      detail:
         referenceIssues.length === 0
           ? referenceDocs.some(
               (doc) =>
@@ -2662,7 +2668,7 @@ export default function CaseFormPage({ params }) {
       id: 'schedule',
       label: 'Schedule validated',
       isReady: scheduleReady,
-      details: scheduleDetails,
+      detail: scheduleDetails,
     });
 
     return entries;
