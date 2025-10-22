@@ -2,22 +2,25 @@ import React from 'react';
 import { render, screen } from '@testing-library/react';
 import AdminDashboardPage from './AdminDashboardPage';
 import {
-  subscribeToCases,
+  fetchCasesPage,
   subscribeToAdminCaseSummary,
   subscribeToAdminCaseAlerts,
   subscribeToRecentCaseActivity,
+  DEFAULT_CASE_SORT,
 } from '../services/caseService';
 import { subscribeToRecentSubmissionActivity } from '../services/submissionService';
 
 const appCoreMocks = {};
 
 jest.mock('../services/caseService', () => ({
-  subscribeToCases: jest.fn(),
+  fetchCasesPage: jest.fn(),
   subscribeToAdminCaseSummary: jest.fn(),
   subscribeToAdminCaseAlerts: jest.fn(),
   subscribeToRecentCaseActivity: jest.fn(),
   markCaseDeleted: jest.fn(),
   repairLegacyCases: jest.fn(),
+  CASE_SORT_CHOICES: [{ value: 'updated_desc', label: 'Recently updated' }],
+  DEFAULT_CASE_SORT: 'updated_desc',
 }));
 
 jest.mock('../services/submissionService', () => ({
@@ -28,15 +31,29 @@ jest.mock('../AppCore', () => {
   const React = require('react');
   const navigateMock = jest.fn();
   const showModalMock = jest.fn();
+  const setQueryMock = jest.fn();
   appCoreMocks.navigateMock = navigateMock;
   appCoreMocks.showModalMock = showModalMock;
+  appCoreMocks.setQueryMock = setQueryMock;
   return {
     Button: React.forwardRef(({ children, onClick, className = '', ...props }, ref) => (
       <button ref={ref} onClick={onClick} className={className} {...props}>
         {children}
       </button>
     )),
-    useRoute: () => ({ navigate: navigateMock }),
+    Input: React.forwardRef(({ onChange, ...props }, ref) => <input ref={ref} onChange={onChange} {...props} />),
+    Select: React.forwardRef(({ onChange, children, ...props }, ref) => (
+      <select ref={ref} onChange={onChange} {...props}>
+        {children}
+      </select>
+    )),
+    useRoute: () => ({
+      navigate: navigateMock,
+      setQuery: setQueryMock,
+      query: {},
+      route: '/',
+      path: '/',
+    }),
     useModal: () => ({ showModal: showModalMock }),
     useUser: () => ({ role: 'admin', loadingRole: false }),
   };
@@ -44,16 +61,28 @@ jest.mock('../AppCore', () => {
 
 let mockNavigate;
 let mockShowModal;
+let mockSetQuery;
 
 beforeEach(() => {
   jest.clearAllMocks();
   mockNavigate = appCoreMocks.navigateMock;
   mockShowModal = appCoreMocks.showModalMock;
+  mockSetQuery = appCoreMocks.setQueryMock;
   mockNavigate?.mockReset();
   mockShowModal?.mockReset();
-  subscribeToCases.mockImplementation((cb) => {
-    setTimeout(() => cb([]), 0);
-    return jest.fn();
+  mockSetQuery?.mockReset();
+  fetchCasesPage.mockResolvedValue({
+    items: [],
+    total: 0,
+    page: 1,
+    requestedPage: 1,
+    pageSize: 12,
+    hasNextPage: false,
+    hasPreviousPage: false,
+    sort: DEFAULT_CASE_SORT,
+    search: '',
+    statusFilters: [],
+    visibilityFilters: [],
   });
   subscribeToAdminCaseSummary.mockImplementation((cb) => {
     cb({ activeCases: 0, totalDisbursements: 0, totalMappings: 0, privateAudiences: 0 });
