@@ -1687,7 +1687,7 @@ const normalizeChecklistDetail = (detail) => {
     const re = /Answer key incomplete for disbursement\s*#(\d+)[^()]*\(([^)]+)\)\.?/gi;
     let m;
     while ((m = re.exec(text)) !== null) {
-      items.push(`Disbursement #${m[1]} (${m[2]})`);
+      items.push(`Answer key incomplete for disbursement #${m[1]} (${m[2]})`);
     }
     if (items.length > 0) return items;
     // Fallback: split by sentences/newlines
