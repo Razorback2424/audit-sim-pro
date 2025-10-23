@@ -271,6 +271,16 @@ export default function AdminDashboardPage() {
   ]);
 
   useEffect(() => {
+    if (loadingRole) {
+      return;
+    }
+
+    if (role !== 'admin') {
+      setLoadingSummary(false);
+      return;
+    }
+
+    setLoadingSummary(true);
     const unsubscribe = subscribeToAdminCaseSummary(
       (data) => {
         setDashboardSummary(data);
@@ -287,9 +297,19 @@ export default function AdminDashboardPage() {
         unsubscribe();
       }
     };
-  }, [showModal]);
+  }, [showModal, role, loadingRole]);
 
   useEffect(() => {
+    if (loadingRole) {
+      return;
+    }
+
+    if (role !== 'admin') {
+      setLoadingAlerts(false);
+      return;
+    }
+
+    setLoadingAlerts(true);
     const unsubscribe = subscribeToAdminCaseAlerts(
       (data) => {
         setAlerts(data);
@@ -306,7 +326,7 @@ export default function AdminDashboardPage() {
         unsubscribe();
       }
     };
-  }, [showModal]);
+  }, [showModal, role, loadingRole]);
 
   useEffect(() => {
     if (loadingRole || role !== 'admin') {
