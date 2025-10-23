@@ -309,6 +309,10 @@ export default function AdminDashboardPage() {
   }, [showModal]);
 
   useEffect(() => {
+    if (loadingRole || role !== 'admin') {
+      return;
+    }
+
     setLoadingActivity(true);
     console.info('[AdminDashboard] Loading recent activity');
     let caseActivity = [];
@@ -387,7 +391,7 @@ export default function AdminDashboardPage() {
         unsubscribeSubmissions();
       }
     };
-  }, [showModal]);
+  }, [showModal, role, loadingRole]);
 
   const handleRepairCases = async () => {
     if (repairingCases) return;
