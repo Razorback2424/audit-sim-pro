@@ -310,6 +310,7 @@ export default function AdminDashboardPage() {
 
   useEffect(() => {
     setLoadingActivity(true);
+    console.info('[AdminDashboard] Loading recent activity');
     let caseActivity = [];
     let submissionActivity = [];
 
@@ -321,12 +322,20 @@ export default function AdminDashboardPage() {
           return bTime - aTime;
         })
         .slice(0, 10);
+      console.debug('[AdminDashboard] Combined activity updated', {
+        caseActivityCount: caseActivity.length,
+        submissionActivityCount: submissionActivity.length,
+        combinedCount: combined.length,
+      });
       setRecentActivity(combined);
       setLoadingActivity(false);
     };
 
     const handleError = (error) => {
-      console.error('Error loading recent activity:', error);
+      console.error('[AdminDashboard] Error loading recent activity', {
+        code: error?.code,
+        message: error?.message,
+      });
       showModal('Error loading recent activity: ' + (error?.message || 'Please try again.'), 'Error');
       setLoadingActivity(false);
     };
@@ -340,6 +349,9 @@ export default function AdminDashboardPage() {
               ? item.timestamp
               : item.timestamp?.toMillis?.() ?? item.timestamp ?? null,
         }));
+        console.debug('[AdminDashboard] Received case activity snapshot', {
+          count: caseActivity.length,
+        });
         updateActivity();
       },
       handleError,
@@ -357,6 +369,9 @@ export default function AdminDashboardPage() {
             item.submittedAt?.toMillis?.() ??
             (item.submittedAt instanceof Date ? item.submittedAt.getTime() : null),
         }));
+        console.debug('[AdminDashboard] Received submission activity snapshot', {
+          count: submissionActivity.length,
+        });
         updateActivity();
       },
       handleError,
@@ -364,6 +379,7 @@ export default function AdminDashboardPage() {
     );
 
     return () => {
+      console.info('[AdminDashboard] Cleaning up recent activity subscriptions');
       if (typeof unsubscribeCases === 'function') {
         unsubscribeCases();
       }

@@ -109,28 +109,55 @@ export const subscribeToRecentSubmissionActivity = (
   onError,
   { appId = defaultAppId, limit: limitCount = 5 } = {}
 ) => {
+  console.info('[SubmissionService] Subscribing to recent submission activity', {
+    appId,
+    limitCount,
+  });
   const groupRef = collectionGroup(db, 'caseSubmissions');
   const q = query(groupRef, orderBy('submittedAt', 'desc'), limitConstraint(limitCount * 3));
   return onSnapshot(
     q,
     (snapshot) => {
+      console.info('[SubmissionService] Snapshot received for recent submission activity', {
+        totalDocs: snapshot.size,
+        limitCount,
+      });
       const filteredDocs = snapshot.docs.filter((docSnap) =>
         docSnap.ref.path.includes(`/artifacts/${appId}/users/`)
       );
+      if (filteredDocs.length !== snapshot.docs.length) {
+        console.info('[SubmissionService] Filtered submissions by app scope', {
+          totalDocs: snapshot.docs.length,
+          filteredDocs: filteredDocs.length,
+        });
+      }
       const entries = filteredDocs.slice(0, limitCount).map((docSnap) => {
         const data = docSnap.data() || {};
         const parent = docSnap.ref.parent?.parent;
         const submittedAt = data.submittedAt ?? null;
+        const userId = parent?.id || data.userId || null;
+        const sanitizedUserId = typeof userId === 'string' ? `${userId.slice(0, 6)}…` : null;
+        console.debug('[SubmissionService] Preparing submission activity entry', {
+          docPath: docSnap.ref.path,
+          hasSubmittedAt: Boolean(submittedAt),
+          sanitizedUserId,
+        });
         return {
           caseId: docSnap.id,
           caseName: data.caseName || '',
-          userId: parent?.id || data.userId || null,
+          userId,
           submittedAt,
           attempts: normalizeAttemptList(data),
         };
       });
       onData(entries);
     },
-    onError
+    (error) => {
+      console.error('[SubmissionService] Recent submission activity snapshot error', {
+        code: error?.code,
+        message: error?.message,
+      });
+      onError?.(error);
+    }
   );
 };
