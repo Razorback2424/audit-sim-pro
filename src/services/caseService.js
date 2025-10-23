@@ -17,7 +17,6 @@ import {
   writeBatch,
   Timestamp,
   getCountFromServer,
-  offset,
 } from 'firebase/firestore';
 import { db, FirestorePaths } from '../AppCore';
 import { getNow } from '../utils/dates';
@@ -556,15 +555,25 @@ export const fetchCasesPage = async ({
   const effectivePage = Math.min(desiredPage, maxPage);
   const offsetValue = total === 0 ? 0 : (effectivePage - 1) * pageSize;
 
-  const constraints = [...filters, ...order];
-  if (offsetValue > 0) {
-    constraints.push(offset(offsetValue));
-  }
-  constraints.push(limit(pageSize));
+  const baseConstraints = [...filters, ...order];
 
   let items = [];
   if (total > 0) {
-    const snapshot = await getDocs(query(casesCollection, ...constraints));
+    const paginationConstraints = [...baseConstraints];
+
+    if (offsetValue > 0) {
+      const cursorSnapshot = await getDocs(
+        query(casesCollection, ...baseConstraints, limit(offsetValue))
+      );
+      const cursorDocs = cursorSnapshot.docs;
+      if (cursorDocs.length > 0) {
+        paginationConstraints.push(startAfter(cursorDocs[cursorDocs.length - 1]));
+      }
+    }
+
+    paginationConstraints.push(limit(pageSize));
+
+    const snapshot = await getDocs(query(casesCollection, ...paginationConstraints));
     items = snapshot.docs.map((docSnap) => toNormalizedCaseModel(docSnap.id, docSnap.data()));
   }
 
