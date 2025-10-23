@@ -11,6 +11,8 @@ import {
   orderBy,
   limit as limitConstraint,
   onSnapshot,
+  Timestamp,
+  where,
 } from 'firebase/firestore';
 import { db, FirestorePaths, appId as defaultAppId } from '../AppCore';
 
@@ -104,6 +106,65 @@ export const listUserSubmissions = async ({ uid, appId = defaultAppId } = {}) =>
   return submissions;
 };
 
+const toTimestampOrNull = (value) => {
+  if (!value || typeof value !== 'object') {
+    return null;
+  }
+
+  if (value instanceof Timestamp) {
+    return value;
+  }
+
+  const { seconds, nanoseconds } = value;
+  if (typeof seconds === 'number' && typeof nanoseconds === 'number') {
+    try {
+      return new Timestamp(seconds, nanoseconds);
+    } catch (error) {
+      console.warn('[SubmissionService] Failed to construct Timestamp from value', {
+        error: error?.message,
+      });
+    }
+  }
+
+  return null;
+};
+
+const coerceSubmittedAtFromAttempts = (attempts) => {
+  if (!Array.isArray(attempts) || attempts.length === 0) {
+    return null;
+  }
+
+  let latest = null;
+  attempts.forEach((attempt) => {
+    const coerced = toTimestampOrNull(attempt?.submittedAt);
+    if (!coerced) {
+      return;
+    }
+    if (!latest) {
+      latest = coerced;
+      return;
+    }
+    if (coerced.toMillis() > latest.toMillis()) {
+      latest = coerced;
+    }
+  });
+
+  return latest;
+};
+
+export const coerceSubmittedAt = (data = {}) => {
+  if (!data || typeof data !== 'object') {
+    return null;
+  }
+
+  const directTimestamp = toTimestampOrNull(data.submittedAt);
+  if (directTimestamp) {
+    return directTimestamp;
+  }
+
+  return coerceSubmittedAtFromAttempts(data.attempts);
+};
+
 export const subscribeToRecentSubmissionActivity = (
   onData,
   onError,
@@ -114,50 +175,113 @@ export const subscribeToRecentSubmissionActivity = (
     limitCount,
   });
   const groupRef = collectionGroup(db, 'caseSubmissions');
-  const q = query(groupRef, orderBy('submittedAt', 'desc'), limitConstraint(limitCount * 3));
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      console.info('[SubmissionService] Snapshot received for recent submission activity', {
-        totalDocs: snapshot.size,
-        limitCount,
+  const fallbackErrorCodes = new Set(['failed-precondition', 'invalid-argument']);
+
+  const buildEntries = (docs, { preferCoercedTimestamp = false } = {}) => {
+    const filteredDocs = docs.filter((docSnap) =>
+      docSnap.ref.path.includes(`/artifacts/${appId}/users/`)
+    );
+
+    if (filteredDocs.length !== docs.length) {
+      console.info('[SubmissionService] Filtered submissions by app scope', {
+        totalDocs: docs.length,
+        filteredDocs: filteredDocs.length,
       });
-      const filteredDocs = snapshot.docs.filter((docSnap) =>
-        docSnap.ref.path.includes(`/artifacts/${appId}/users/`)
-      );
-      if (filteredDocs.length !== snapshot.docs.length) {
-        console.info('[SubmissionService] Filtered submissions by app scope', {
-          totalDocs: snapshot.docs.length,
-          filteredDocs: filteredDocs.length,
-        });
-      }
-      const entries = filteredDocs.slice(0, limitCount).map((docSnap) => {
-        const data = docSnap.data() || {};
-        const parent = docSnap.ref.parent?.parent;
-        const submittedAt = data.submittedAt ?? null;
-        const userId = parent?.id || data.userId || null;
-        const sanitizedUserId = typeof userId === 'string' ? `${userId.slice(0, 6)}…` : null;
-        console.debug('[SubmissionService] Preparing submission activity entry', {
-          docPath: docSnap.ref.path,
-          hasSubmittedAt: Boolean(submittedAt),
-          sanitizedUserId,
-        });
-        return {
-          caseId: docSnap.id,
-          caseName: data.caseName || '',
-          userId,
-          submittedAt,
-          attempts: normalizeAttemptList(data),
-        };
-      });
-      onData(entries);
-    },
-    (error) => {
-      console.error('[SubmissionService] Recent submission activity snapshot error', {
-        code: error?.code,
-        message: error?.message,
-      });
-      onError?.(error);
     }
+
+    const mapped = filteredDocs.map((docSnap) => {
+      const data = docSnap.data() || {};
+      const parent = docSnap.ref.parent?.parent;
+      const coercedSubmittedAt = coerceSubmittedAt(data);
+      const submittedAt = preferCoercedTimestamp
+        ? coercedSubmittedAt
+        : data.submittedAt ?? coercedSubmittedAt ?? null;
+      const userId = parent?.id || data.userId || null;
+      const sanitizedUserId = typeof userId === 'string' ? `${userId.slice(0, 6)}…` : null;
+      console.debug('[SubmissionService] Preparing submission activity entry', {
+        docPath: docSnap.ref.path,
+        hasSubmittedAt: Boolean(submittedAt),
+        sanitizedUserId,
+      });
+      return {
+        caseId: docSnap.id,
+        caseName: data.caseName || '',
+        userId,
+        submittedAt,
+        attempts: normalizeAttemptList(data),
+        _coercedSubmittedAt: coercedSubmittedAt,
+      };
+    });
+
+    if (!preferCoercedTimestamp) {
+      return mapped;
+    }
+
+    return mapped
+      .filter((entry) => entry._coercedSubmittedAt)
+      .sort((a, b) => {
+        const aTime = a._coercedSubmittedAt.toMillis();
+        const bTime = b._coercedSubmittedAt.toMillis();
+        return bTime - aTime;
+      });
+  };
+
+  const handleSnapshot = (snapshot, options) => {
+    console.info('[SubmissionService] Snapshot received for recent submission activity', {
+      totalDocs: snapshot.size,
+      limitCount,
+    });
+
+    const entries = buildEntries(snapshot.docs, options)
+      .slice(0, limitCount)
+      .map(({ _coercedSubmittedAt, ...entry }) => entry);
+
+    onData(entries);
+  };
+
+  let activeUnsubscribe = null;
+
+  const subscribe = (queryRef, { preferCoercedTimestamp = false, isFallback = false } = {}) => {
+    if (typeof activeUnsubscribe === 'function') {
+      activeUnsubscribe();
+    }
+
+    activeUnsubscribe = onSnapshot(
+      queryRef,
+      (snapshot) => handleSnapshot(snapshot, { preferCoercedTimestamp }),
+      (error) => {
+        if (!isFallback && fallbackErrorCodes.has(error?.code)) {
+          console.warn('[SubmissionService] Falling back to client-side timestamp sorting', {
+            code: error?.code,
+            message: error?.message,
+          });
+          onError?.(error);
+          const fallbackQuery = query(groupRef, limitConstraint(limitCount * 5));
+          subscribe(fallbackQuery, { preferCoercedTimestamp: true, isFallback: true });
+          return;
+        }
+
+        console.error('[SubmissionService] Recent submission activity snapshot error', {
+          code: error?.code,
+          message: error?.message,
+        });
+        onError?.(error);
+      }
+    );
+  };
+
+  const primaryQuery = query(
+    groupRef,
+    where('submittedAt', '!=', null),
+    orderBy('submittedAt', 'desc'),
+    limitConstraint(limitCount * 3)
   );
+
+  subscribe(primaryQuery);
+
+  return () => {
+    if (typeof activeUnsubscribe === 'function') {
+      activeUnsubscribe();
+    }
+  };
 };
