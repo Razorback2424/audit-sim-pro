@@ -271,12 +271,10 @@ export default function AdminDashboardPage() {
   ]);
 
   useEffect(() => {
-    if (loadingRole) {
-      return;
-    }
-
-    if (role !== 'admin') {
-      setLoadingSummary(false);
+    if (loadingRole || role !== 'admin') {
+      if (!loadingRole) {
+        setLoadingSummary(false);
+      }
       return;
     }
 
@@ -300,12 +298,10 @@ export default function AdminDashboardPage() {
   }, [showModal, role, loadingRole]);
 
   useEffect(() => {
-    if (loadingRole) {
-      return;
-    }
-
-    if (role !== 'admin') {
-      setLoadingAlerts(false);
+    if (loadingRole || role !== 'admin') {
+      if (!loadingRole) {
+        setLoadingAlerts(false);
+      }
       return;
     }
 
