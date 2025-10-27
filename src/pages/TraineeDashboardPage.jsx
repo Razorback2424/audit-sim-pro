@@ -171,6 +171,17 @@ export default function TraineeDashboardPage() {
     }));
   }, [cases, progress]);
 
+  const isCaseCompleted = useCallback((caseData) => {
+    const state = (caseData?.progress?.state || '').toUpperCase();
+    const pct = Number(caseData?.progress?.percentComplete || 0);
+    // Treat SUBMITTED/COMPLETED as done; also hide anything that is 100% complete.
+    return state === 'SUBMITTED' || state === 'COMPLETED' || pct >= 100;
+  }, []);
+
+  const visibleCases = useMemo(() => {
+    return casesWithProgress.filter((c) => !isCaseCompleted(c));
+  }, [casesWithProgress, isCaseCompleted]);
+
   const now = useMemo(() => getNow().date, []);
   if (!userId && initialLoad) {
     return <div className="p-4 text-center">Authenticating user, please wait...</div>;
@@ -221,7 +232,7 @@ export default function TraineeDashboardPage() {
               onClick={() => navigate('/trainee/submission-history')}
               className="text-sm"
             >
-              View Submission History
+              View Completed Cases
             </Button>
           </div>
         </div>
@@ -237,7 +248,7 @@ export default function TraineeDashboardPage() {
             <Loader2 size={32} className="animate-spin text-gray-500 mx-auto mb-3" />
             <p className="text-gray-600">Loading available cases…</p>
           </div>
-        ) : cases.length === 0 ? (
+        ) : visibleCases.length === 0 ? (
           <div className="text-center py-10 bg-white rounded-lg shadow">
             <ListChecks size={48} className="mx-auto text-gray-400 mb-4" />
             <p className="text-gray-600 text-xl">No cases currently assigned or available to you.</p>
@@ -245,7 +256,7 @@ export default function TraineeDashboardPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {casesWithProgress.map((caseData) => {
+            {visibleCases.map((caseData) => {
               const { isOpen, message } = getOpenState(caseData);
               return (
                 <div key={caseData.id} className="bg-white p-6 rounded-lg shadow-md hover:shadow-lg transition-shadow flex flex-col justify-between">

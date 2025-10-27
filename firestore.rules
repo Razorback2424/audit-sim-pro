@@ -192,7 +192,7 @@ service cloud.firestore {
     }
 
     match /{path=**}/caseSubmissions/{caseId} {
-      allow read: if request.auth != null && (isAdmin() || isSubmissionOwner(path));
+      allow read: if request.auth != null && isAdmin();
       allow write: if request.auth != null && isSubmissionOwner(path) && isTrainee();
     }
 

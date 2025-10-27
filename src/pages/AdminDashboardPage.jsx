@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   ChevronRight,
   AlertCircle,
+  AlertTriangle,
   Inbox,
 } from 'lucide-react';
 import { Button, Input, Select, useRoute, useModal, useUser } from '../AppCore';
@@ -147,6 +148,17 @@ export default function AdminDashboardPage() {
     }
   });
   const isAdmin = role === 'admin';
+  const alertsByCaseId = useMemo(() => {
+    const map = new Map();
+    alerts.forEach((alert) => {
+      if (!alert?.caseId) return;
+      if (!map.has(alert.caseId)) {
+        map.set(alert.caseId, []);
+      }
+      map.get(alert.caseId).push(alert);
+    });
+    return map;
+  }, [alerts]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -612,12 +624,29 @@ export default function AdminDashboardPage() {
         const audienceLabel = getAudienceLabel(caseData);
         const visibilityBadgeClass =
           caseData.publicVisible === false ? 'bg-purple-100 text-purple-700' : 'bg-emerald-100 text-emerald-700';
+        const caseAlerts = alertsByCaseId.get(caseData.id) || [];
+        const hasAlerts = caseAlerts.length > 0;
 
         return (
-          <div key={caseData.id} className="bg-white rounded-lg shadow border border-gray-100 p-5 flex flex-col h-full">
+          <div
+            key={caseData.id}
+            className={`rounded-lg border p-5 flex flex-col h-full transition-shadow ${
+              hasAlerts ? 'border-amber-300 bg-amber-50 shadow-md' : 'border-gray-100 bg-white shadow'
+            }`}
+          >
             <div className="flex-1 space-y-4">
               <div>
-                <h3 className="text-lg font-semibold text-blue-700">{caseData.caseName || 'Untitled case'}</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg font-semibold text-blue-700">
+                    {caseData.caseName || 'Untitled case'}
+                  </h3>
+                  {hasAlerts && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                      <AlertTriangle size={12} />
+                      {caseAlerts.length}
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-gray-500 mt-1 break-all">ID: {caseData.id}</p>
               </div>
               <div className="flex flex-wrap gap-2 text-xs font-medium">
@@ -688,10 +717,23 @@ export default function AdminDashboardPage() {
             const statusLabel = getStatusLabel(caseData.status);
             const audienceLabel = getAudienceLabel(caseData);
             const updatedLabel = formatDateLabel(caseData.updatedAt || caseData.createdAt);
+            const caseAlerts = alertsByCaseId.get(caseData.id) || [];
+            const hasAlerts = caseAlerts.length > 0;
             return (
-              <tr key={caseData.id} className="hover:bg-gray-50">
+              <tr
+                key={caseData.id}
+                className={`transition-colors ${hasAlerts ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-gray-50'}`}
+              >
                 <td className="px-4 py-3">
-                  <div className="font-semibold text-gray-900">{caseData.caseName || 'Untitled case'}</div>
+                  <div className="flex items-center gap-2 font-semibold text-gray-900">
+                    <span>{caseData.caseName || 'Untitled case'}</span>
+                    {hasAlerts && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                        <AlertTriangle size={12} />
+                        {caseAlerts.length}
+                      </span>
+                    )}
+                  </div>
                   <div className="text-xs text-gray-500 break-all">ID: {caseData.id}</div>
                 </td>
                 <td className="px-4 py-3">

@@ -1,13 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { Timestamp } from 'firebase/firestore';
-import { storage, Button, Input, useRoute, useAuth, useModal, appId } from '../AppCore';
+import { storage, Button, Input, Select, useRoute, useAuth, useModal, appId } from '../AppCore';
 import { subscribeToCase } from '../services/caseService';
 import { saveSubmission } from '../services/submissionService';
 import { saveProgress, subscribeProgressForCases } from '../services/progressService';
 import { Send, Loader2, ExternalLink, Download, CheckCircle2, XCircle, Info } from 'lucide-react';
-import SubmissionSummary from '../components/SubmissionSummary';
-import { CLASSIFICATION_FIELDS, createEmptyClassification } from '../constants/classificationFields';
+import { CLASSIFICATION_FIELDS } from '../constants/classificationFields';
 
 const FLOW_STEPS = Object.freeze({
   SELECTION: 'selection',
@@ -69,19 +68,101 @@ const isSameSelectionMap = (currentMap, nextMap) => {
   return currentKeys.every((key) => !!nextMap[key]);
 };
 
+const CLASSIFICATION_KEY_SET = new Set(CLASSIFICATION_FIELDS.map(({ key }) => key));
+
+const createEmptySplitValues = () => {
+  const splits = {};
+  CLASSIFICATION_FIELDS.forEach(({ key }) => {
+    splits[key] = '';
+  });
+  return splits;
+};
+
+const buildEmptyAllocationState = () => ({
+  mode: 'single',
+  singleClassification: '',
+  splitValues: createEmptySplitValues(),
+});
+
+const toValidClassificationKey = (value) =>
+  typeof value === 'string' && CLASSIFICATION_KEY_SET.has(value) ? value : '';
+
+const normalizeAllocationShape = (rawAllocation) => {
+  if (!rawAllocation || typeof rawAllocation !== 'object') {
+    return buildEmptyAllocationState();
+  }
+
+  // Legacy payloads stored just a classification totals object.
+  const legacyDetected = CLASSIFICATION_FIELDS.some(({ key }) => rawAllocation[key] !== undefined);
+  if (legacyDetected && !rawAllocation.mode) {
+    const legacy = buildEmptyAllocationState();
+    const nonZeroKeys = [];
+
+    CLASSIFICATION_FIELDS.forEach(({ key }) => {
+      const value = rawAllocation[key];
+      const asString = value === undefined || value === null || value === '' ? '' : String(value);
+      legacy.splitValues[key] = asString;
+      const numericValue = Number(asString);
+      if (Number.isFinite(numericValue) && Math.abs(numericValue) > 0) {
+        nonZeroKeys.push(key);
+      }
+    });
+
+    if (nonZeroKeys.length <= 1) {
+      legacy.mode = 'single';
+      legacy.singleClassification = nonZeroKeys[0] ?? '';
+      legacy.splitValues = createEmptySplitValues();
+    } else {
+      legacy.mode = 'split';
+    }
+
+    return legacy;
+  }
+
+  const normalized = buildEmptyAllocationState();
+  normalized.mode = rawAllocation.mode === 'split' ? 'split' : 'single';
+  normalized.singleClassification = toValidClassificationKey(rawAllocation.singleClassification);
+
+  CLASSIFICATION_FIELDS.forEach(({ key }) => {
+    const value =
+      (rawAllocation.splitValues && rawAllocation.splitValues[key] !== undefined
+        ? rawAllocation.splitValues[key]
+        : rawAllocation[key]) ?? '';
+    normalized.splitValues[key] = value === null ? '' : String(value);
+  });
+
+  const hasMeaningfulSplit = CLASSIFICATION_FIELDS.some(({ key }) => {
+    const rawValue = normalized.splitValues[key];
+    if (rawValue === '' || rawValue === null || rawValue === undefined) return false;
+    const numeric = Number(rawValue);
+    return Number.isFinite(numeric) && Math.abs(numeric) > 0;
+  });
+
+  if (normalized.mode === 'split' && !hasMeaningfulSplit) {
+    const fallbackClassification = toValidClassificationKey(normalized.singleClassification);
+    normalized.mode = 'single';
+    normalized.singleClassification = fallbackClassification;
+    normalized.splitValues = createEmptySplitValues();
+  }
+
+  return normalized;
+};
+
+const allocationsAreEqual = (left, right) => {
+  const a = normalizeAllocationShape(left);
+  const b = normalizeAllocationShape(right);
+
+  if (a.mode !== b.mode) return false;
+  if ((a.singleClassification || '') !== (b.singleClassification || '')) return false;
+
+  return CLASSIFICATION_FIELDS.every(({ key }) => (a.splitValues[key] ?? '') === (b.splitValues[key] ?? ''));
+};
+
 const isSameClassificationMap = (currentMap, nextMap) => {
   const currentKeys = Object.keys(currentMap);
   const nextKeys = Object.keys(nextMap);
   if (currentKeys.length !== nextKeys.length) return false;
-  return currentKeys.every((key) => {
-    const currentAllocation = currentMap[key] || {};
-    const nextAllocation = nextMap[key] || {};
-    return CLASSIFICATION_FIELDS.every(({ key: fieldKey }) => {
-      const currentValue = currentAllocation[fieldKey] ?? '';
-      const nextValue = nextAllocation[fieldKey] ?? '';
-      return currentValue === nextValue;
-    });
-  });
+  return currentKeys.every((key) => allocationsAreEqual(currentMap[key], nextMap[key]));
 };
 
 const collectSupportingDocuments = (disbursement) => {
@@ -151,7 +232,7 @@ export default function TraineeCaseViewPage({ params }) {
   const classificationRef = useRef(classificationAmounts);
   const isLockedRef = useRef(false);
 
-  const createEmptyAllocation = useCallback(() => createEmptyClassification(), []);
+  const createEmptyAllocation = useCallback(() => buildEmptyAllocationState(), []);
 
   const normalizeAllocationInput = useCallback((rawValue) => {
     if (rawValue === null || rawValue === undefined) return '';
@@ -192,20 +273,57 @@ export default function TraineeCaseViewPage({ params }) {
     [normalizeAllocationInput]
   );
 
+  const computeAllocationTotals = useCallback(
+    (disbursement, allocation) => {
+      const normalized = normalizeAllocationShape(allocation);
+      const totals = {};
+      CLASSIFICATION_FIELDS.forEach(({ key }) => {
+        totals[key] = 0;
+      });
+
+      const amountNumber = Number(disbursement?.amount);
+      if (!Number.isFinite(amountNumber)) {
+        return totals;
+      }
+
+      if (normalized.mode === 'split') {
+        CLASSIFICATION_FIELDS.forEach(({ key }) => {
+          const value = parseAmount(normalized.splitValues[key]);
+          totals[key] = Number.isFinite(value) ? value : 0;
+        });
+        return totals;
+      }
+
+      const classification = normalized.singleClassification;
+      if (classification && CLASSIFICATION_KEY_SET.has(classification)) {
+        totals[classification] = amountNumber;
+      }
+      return totals;
+    },
+    [parseAmount]
+  );
+
   const isAllocationComplete = useCallback(
     (disbursement, allocation) => {
       if (!allocation) return false;
+      const normalized = normalizeAllocationShape(allocation);
       const amountNumber = Number(disbursement?.amount);
       if (!Number.isFinite(amountNumber)) return false;
-      let sum = 0;
-      for (const { key } of CLASSIFICATION_FIELDS) {
-        const value = parseAmount(allocation[key]);
-        if (!Number.isFinite(value) || value < 0) {
-          return false;
+
+      if (normalized.mode === 'split') {
+        let sum = 0;
+        for (const { key } of CLASSIFICATION_FIELDS) {
+          const value = parseAmount(normalized.splitValues[key]);
+          if (!Number.isFinite(value) || value < 0) {
+            return false;
+          }
+          sum += value;
         }
-        sum += value;
+        return Math.abs(sum - amountNumber) <= 0.01;
       }
-      return Math.abs(sum - amountNumber) <= 0.01;
+
+      const classification = normalized.singleClassification;
+      return Boolean(classification && CLASSIFICATION_KEY_SET.has(classification));
     },
     [parseAmount]
   );
@@ -304,9 +422,13 @@ export default function TraineeCaseViewPage({ params }) {
           setSelectedDisbursements(nextSelection);
         }
 
-        const nextClassifications = entry.draft?.classificationDraft || {};
-        if (!isSameClassificationMap(classificationRef.current, nextClassifications)) {
-          setClassificationAmounts(nextClassifications);
+        const rawClassifications = entry.draft?.classificationDraft || {};
+        const normalizedClassifications = Object.keys(rawClassifications).reduce((acc, key) => {
+          acc[key] = normalizeAllocationShape(rawClassifications[key]);
+          return acc;
+        }, {});
+        if (!isSameClassificationMap(classificationRef.current, normalizedClassifications)) {
+          setClassificationAmounts(normalizedClassifications);
         }
 
         const shouldLock = entry.state === 'submitted' || nextStep === FLOW_STEPS.RESULTS;
@@ -720,16 +842,65 @@ export default function TraineeCaseViewPage({ params }) {
     }
   };
 
-  const handleAllocationChange = (paymentId, fieldKey, rawValue) => {
+  const updateAllocation = useCallback(
+    (paymentId, updater) => {
+      setClassificationAmounts((prev) => {
+        const next = { ...prev };
+        const current = normalizeAllocationShape(next[paymentId]);
+        const updated = normalizeAllocationShape(updater(current));
+        next[paymentId] = updated;
+        return next;
+      });
+    },
+    [setClassificationAmounts]
+  );
+
+  const handleSingleClassificationChange = (paymentId, classification) => {
+    if (isLocked) return;
+    const normalizedValue = CLASSIFICATION_KEY_SET.has(classification) ? classification : '';
+    updateAllocation(paymentId, (current) => ({
+      ...current,
+      mode: 'single',
+      singleClassification: normalizedValue,
+    }));
+  };
+
+  const handleSplitToggle = (paymentId, checked, disbursement) => {
+    if (isLocked) return;
+    if (checked) {
+      updateAllocation(paymentId, (current) => {
+        const totals = computeAllocationTotals(disbursement, current);
+        const splitValues = createEmptySplitValues();
+        CLASSIFICATION_FIELDS.forEach(({ key }) => {
+          const value = totals[key];
+          splitValues[key] = Number.isFinite(value) && value !== 0 ? value.toString() : '';
+        });
+        return {
+          ...current,
+          mode: 'split',
+          splitValues,
+        };
+      });
+    } else {
+      updateAllocation(paymentId, (current) => ({
+        ...current,
+        mode: 'single',
+        splitValues: createEmptySplitValues(),
+      }));
+    }
+  };
+
+  const handleSplitAmountChange = (paymentId, fieldKey, rawValue) => {
     if (isLocked) return;
     const sanitized = rawValue === '' ? '' : normalizeAllocationInput(rawValue);
-    setClassificationAmounts((prev) => {
-      const next = { ...prev };
-      const allocation = { ...(next[paymentId] || createEmptyAllocation()) };
-      allocation[fieldKey] = sanitized;
-      next[paymentId] = allocation;
-      return next;
-    });
+    updateAllocation(paymentId, (current) => ({
+      ...current,
+      mode: 'split',
+      splitValues: {
+        ...current.splitValues,
+        [fieldKey]: sanitized,
+      },
+    }));
   };
 
   const goToTestingStep = () => {
@@ -771,9 +942,11 @@ export default function TraineeCaseViewPage({ params }) {
         invalidAllocations.push(disbursement.paymentId);
         return;
       }
+      const totals = computeAllocationTotals(disbursement, allocation);
       const entry = {};
       CLASSIFICATION_FIELDS.forEach(({ key }) => {
-        entry[key] = parseAmount(allocation[key]);
+        const value = totals[key];
+        entry[key] = Number.isFinite(value) ? value : 0;
       });
       allocationPayload[disbursement.paymentId] = entry;
     });
@@ -1239,16 +1412,23 @@ export default function TraineeCaseViewPage({ params }) {
               <h3 className="text-xl font-semibold text-gray-800 mb-4">Allocate Each Disbursement</h3>
               <div className="space-y-4">
                 {selectedDisbursementDetails.map((d) => {
-                  const allocation = classificationAmounts[d.paymentId] || createEmptyAllocation();
+                  const allocation = normalizeAllocationShape(
+                    classificationAmounts[d.paymentId] || createEmptyAllocation()
+                  );
+                  const isSplit = allocation.mode === 'split';
+                  const totals = computeAllocationTotals(d, allocation);
                   const totalEntered = CLASSIFICATION_FIELDS.reduce((sum, { key }) => {
-                    const value = parseAmount(allocation[key]);
+                    const value = totals[key];
                     return sum + (Number.isFinite(value) ? value : 0);
                   }, 0);
                   const amountNumber = Number(d.amount) || 0;
                   const totalsMatch = Math.abs(totalEntered - amountNumber) <= 0.01;
+                  const classificationLabel =
+                    CLASSIFICATION_FIELDS.find(({ key }) => key === allocation.singleClassification)?.label ||
+                    'Select classification';
 
                   return (
-                    <div key={d.paymentId} className="border border-gray-200 rounded-md p-4 space-y-4">
+                    <div key={d.paymentId} className={`rounded-md p-4 space-y-4 border ${isSplit ? 'border-blue-200 bg-blue-50/30' : 'border-gray-200 bg-white'}`}>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm text-gray-700">
                         <span>
                           <strong className="font-medium">ID:</strong> {d.paymentId}
@@ -1268,27 +1448,77 @@ export default function TraineeCaseViewPage({ params }) {
                           </span>
                         ) : null}
                       </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-                        {CLASSIFICATION_FIELDS.map(({ key, label }) => (
-                          <label key={key} className="flex flex-col text-sm text-gray-700">
-                            <span className="font-medium mb-1">{label}</span>
-                            <Input
-                              type="text"
-                              inputMode="decimal"
-                              pattern="[0-9.,]*"
-                              value={allocation[key] ?? ''}
-                              onChange={(e) => handleAllocationChange(d.paymentId, key, e.target.value)}
-                              disabled={isLocked}
-                            />
+                      <div className="space-y-3">
+                        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                          <label className="flex-1 text-sm font-medium text-gray-700">
+                            <span className="mb-1 block">Classification</span>
+                            <Select
+                              value={allocation.singleClassification}
+                              onChange={(event) =>
+                                handleSingleClassificationChange(d.paymentId, event.target.value)
+                              }
+                              disabled={isSplit || isLocked}
+                              className="w-full"
+                            >
+                              <option value="">Select classification</option>
+                              {CLASSIFICATION_FIELDS.map(({ key, label }) => (
+                                <option key={key} value={key}>
+                                  {label}
+                                </option>
+                              ))}
+                            </Select>
                           </label>
-                        ))}
+                          <label className="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
+                            <input
+                              type="checkbox"
+                              className="rounded border-blue-300 text-blue-600 focus:ring-blue-500"
+                              checked={isSplit}
+                              disabled={isLocked}
+                              onChange={(event) =>
+                                handleSplitToggle(d.paymentId, event.target.checked, d)
+                              }
+                            />
+                            Split across classifications
+                          </label>
+                        </div>
+
+                        {isSplit ? (
+                          <div className="rounded-md border border-gray-200 bg-white p-3 space-y-3">
+                            <p className="text-xs text-gray-500">
+                              Enter the amount allocated to each classification. Totals must equal the disbursement amount.
+                            </p>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                              {CLASSIFICATION_FIELDS.map(({ key, label }) => (
+                                <label key={key} className="flex flex-col text-sm text-gray-700">
+                                  <span className="font-medium mb-1">{label}</span>
+                                  <Input
+                                    type="text"
+                                    inputMode="decimal"
+                                    pattern="[0-9.,]*"
+                                    value={allocation.splitValues[key] ?? ''}
+                                    onChange={(event) =>
+                                      handleSplitAmountChange(d.paymentId, key, event.target.value)
+                                    }
+                                    disabled={isLocked}
+                                  />
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-sm text-gray-600">
+                            {allocation.singleClassification
+                              ? `Entire amount allocated to ${classificationLabel}.`
+                              : 'Select a classification to assign the full amount.'}
+                          </div>
+                        )}
                       </div>
                       <div className="text-xs text-gray-500">
                         Entered total: <strong>{currencyFormatter.format(totalEntered)}</strong>{' '}
-                        {!totalsMatch ? (
-                          <span className="text-amber-600">(Must equal {currencyFormatter.format(amountNumber)})</span>
-                        ) : (
+                        {totalsMatch ? (
                           <span className="text-green-600">(Balanced)</span>
+                        ) : (
+                          <span className="text-amber-600">(Must equal {currencyFormatter.format(amountNumber)})</span>
                         )}
                       </div>
                     </div>
@@ -1312,13 +1542,6 @@ export default function TraineeCaseViewPage({ params }) {
   };
 
   const renderResultsStep = () => {
-    const summaryItems = selectedDisbursementDetails.map((disbursement) => ({
-      paymentId: disbursement.paymentId,
-      metadata: disbursement,
-      classification: classificationAmounts[disbursement.paymentId] || createEmptyAllocation(),
-      documents: collectSupportingDocuments(disbursement),
-    }));
-
     const tolerance = 0.01;
     const toNumber = (v) => {
       const n = Number(v);
@@ -1337,6 +1560,21 @@ export default function TraineeCaseViewPage({ params }) {
       return { fields: result, overallCorrect: allCorrect };
     };
 
+    const formatClassificationLabel = (key) =>
+      CLASSIFICATION_FIELDS.find((field) => field.key === key)?.label || key || 'Not specified';
+
+    const findTopClassification = (allocationTotals = {}) => {
+      const entries = CLASSIFICATION_FIELDS.map(({ key }) => ({ key, value: toNumber(allocationTotals[key]) }));
+      const primary = entries.find((entry) => entry.value > 0);
+      return primary ? primary.key : '';
+    };
+
+    const answerKeyIsSplit = (disbursement) => {
+      if (disbursement?.answerKeyMode === 'split') return true;
+      const keyTotals = CLASSIFICATION_FIELDS.map(({ key }) => toNumber(disbursement?.answerKey?.[key] ?? 0));
+      return keyTotals.filter((value) => Math.abs(value) > 0.009).length > 1;
+    };
+
     return (
       <div className="space-y-6">
         <div className="bg-white border border-gray-200 rounded-lg shadow-xl p-6">
@@ -1353,11 +1591,13 @@ export default function TraineeCaseViewPage({ params }) {
           ) : (
             <ul className="space-y-4">
               {selectedDisbursementDetails.map((d) => {
-                const trainee = classificationAmounts[d.paymentId] || createEmptyAllocation();
+                const traineeTotals = computeAllocationTotals(d, classificationAmounts[d.paymentId]);
                 const answerKey = d.answerKey || {};
                 const hasNumericAnswer = CLASSIFICATION_FIELDS.some(({ key }) => typeof answerKey[key] === 'number');
-                const hasExplanation = typeof answerKey.explanation === 'string' && answerKey.explanation.trim().length > 0;
-                const evaln = hasNumericAnswer ? evaluate(trainee, answerKey) : null;
+                const hasExplanation =
+                  typeof answerKey.explanation === 'string' && answerKey.explanation.trim().length > 0;
+                const evaln = hasNumericAnswer ? evaluate(traineeTotals, answerKey) : null;
+                const splitConfigured = answerKeyIsSplit(d);
 
                 if (evaln && !evaln.overallCorrect && process.env.NODE_ENV !== 'production') {
                   console.debug('[trainee-results] allocation mismatch', {
@@ -1393,10 +1633,17 @@ export default function TraineeCaseViewPage({ params }) {
                   );
                 }
 
+                const selectedKey = findTopClassification(traineeTotals);
+                const selectedLabel = formatClassificationLabel(selectedKey);
+                const correctKey = findTopClassification(answerKey);
+                const correctLabel = formatClassificationLabel(correctKey);
+
+                const showExplanation = hasExplanation && evaln && !evaln.overallCorrect;
+
                 return (
                   <li key={`eval-${d.paymentId}`} className="border border-gray-200 rounded-md p-4">
                     <div className="flex items-start justify-between gap-3">
-                      <div className="text-sm text-gray-700">
+                      <div className="text-sm text-gray-700 space-y-1">
                         <div><strong className="font-medium">ID:</strong> {d.paymentId}</div>
                         <div><strong className="font-medium">Payee:</strong> {d.payee}</div>
                         <div><strong className="font-medium">Amount:</strong> {currencyFormatter.format(Number(d.amount) || 0)}</div>
@@ -1405,40 +1652,56 @@ export default function TraineeCaseViewPage({ params }) {
                     </div>
 
                     {hasNumericAnswer && evaln ? (
-                      <div className="mt-3 overflow-x-auto">
-                        <table className="min-w-full text-sm text-left text-gray-700 border border-gray-200 rounded-md">
-                          <thead className="bg-gray-100">
-                            <tr>
-                              <th className="px-3 py-2 font-semibold text-gray-600">Classification</th>
-                              <th className="px-3 py-2 font-semibold text-gray-600">Your Entry</th>
-                              <th className="px-3 py-2 font-semibold text-gray-600">Correct Answer</th>
-                              <th className="px-3 py-2 font-semibold text-gray-600">Result</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {CLASSIFICATION_FIELDS.map(({ key, label }) => {
-                              const f = evaln.fields[key];
-                              return (
-                                <tr key={`${d.paymentId}-${key}`} className="border-t">
-                                  <td className="px-3 py-2">{label}</td>
-                                  <td className="px-3 py-2">{currencyFormatter.format(f.user)}</td>
-                                  <td className="px-3 py-2">{currencyFormatter.format(f.correct)}</td>
-                                  <td className="px-3 py-2">
-                                    {f.isCorrect ? (
-                                      <span className="inline-flex items-center text-green-700"><CheckCircle2 size={16} className="mr-1" /> Match</span>
-                                    ) : (
-                                      <span className="inline-flex items-center text-amber-700"><XCircle size={16} className="mr-1" /> Mismatch</span>
-                                    )}
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
+                      splitConfigured ? (
+                        <div className="mt-3 overflow-x-auto">
+                          <table className="min-w-full text-sm text-left text-gray-700 border border-gray-200 rounded-md">
+                            <thead className="bg-gray-100">
+                              <tr>
+                                <th className="px-3 py-2 font-semibold text-gray-600">Classification</th>
+                                <th className="px-3 py-2 font-semibold text-gray-600">Your Entry</th>
+                                <th className="px-3 py-2 font-semibold text-gray-600">Correct Answer</th>
+                                <th className="px-3 py-2 font-semibold text-gray-600">Result</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {CLASSIFICATION_FIELDS.map(({ key, label }) => {
+                                const fieldEval = evaln.fields[key];
+                                return (
+                                  <tr key={`${d.paymentId}-${key}`} className="border-t">
+                                    <td className="px-3 py-2">{label}</td>
+                                    <td className="px-3 py-2">{currencyFormatter.format(fieldEval.user)}</td>
+                                    <td className="px-3 py-2">{currencyFormatter.format(fieldEval.correct)}</td>
+                                    <td className="px-3 py-2">
+                                      {fieldEval.isCorrect ? (
+                                        <span className="inline-flex items-center text-green-700"><CheckCircle2 size={16} className="mr-1" /> Match</span>
+                                      ) : (
+                                        <span className="inline-flex items-center text-amber-700"><XCircle size={16} className="mr-1" /> Mismatch</span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : (
+                        <div className="mt-3 rounded-md border border-gray-100 bg-gray-50 px-3 py-3 text-sm text-gray-700 space-y-1">
+                          <p>
+                            <strong>Your selection:</strong> {selectedLabel}
+                          </p>
+                          <p>
+                            <strong>Correct classification:</strong> {correctLabel}
+                          </p>
+                          {evaln.overallCorrect ? (
+                            <p className="text-green-600">Great job—your classification matches the answer key.</p>
+                          ) : (
+                            <p className="text-amber-700">Review the guidance below to understand the expected classification.</p>
+                          )}
+                        </div>
+                      )
                     ) : null}
 
-                    {hasExplanation ? (
+                    {showExplanation ? (
                       <div className="mt-3 border border-blue-100 bg-blue-50 text-blue-900 rounded-md px-3 py-2 text-sm">
                         <strong className="font-semibold">Explanation:</strong> {answerKey.explanation}
                       </div>
@@ -1448,15 +1711,6 @@ export default function TraineeCaseViewPage({ params }) {
               })}
             </ul>
           )}
-        </div>
-
-        <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
-          <h2 className="text-xl font-semibold text-gray-800 mb-4">Selected Disbursements</h2>
-          <SubmissionSummary
-            items={summaryItems}
-            onViewDocument={handleViewDocument}
-            emptyMessage="No disbursements were recorded in your submission."
-          />
         </div>
 
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">

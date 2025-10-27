@@ -1,9 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ref as storageRef, getDownloadURL } from 'firebase/storage';
-import { Button, useRoute, useAuth, useModal, appId, storage } from '../AppCore';
+import { Button, useRoute, useAuth, useModal, appId } from '../AppCore';
 import { listUserSubmissions } from '../services/submissionService';
 import { fetchCase } from '../services/caseService';
-import SubmissionSummary from '../components/SubmissionSummary';
 
 const formatTimestamp = (value) => {
   if (!value) return 'N/A';
@@ -20,25 +18,46 @@ const formatTimestamp = (value) => {
   return 'N/A';
 };
 
-const buildSummaryItems = (attempt, caseData) => {
-  const disbursementMap = new Map(
-    (caseData?.disbursements || []).map((disbursement) => [disbursement.paymentId, disbursement])
-  );
-  const selectedIds = Array.isArray(attempt.selectedPaymentIds) ? attempt.selectedPaymentIds : [];
-  const docs = Array.isArray(attempt.retrievedDocuments) ? attempt.retrievedDocuments : [];
 
-  const items = selectedIds.map((paymentId) => {
-    const metadata = disbursementMap.get(paymentId) || { paymentId };
-    const classification =
-      (attempt.disbursementClassifications && attempt.disbursementClassifications[paymentId]) || {};
-    const documents = docs.filter((doc) => doc.paymentId === paymentId);
-    return { paymentId, metadata, classification, documents };
-  });
+const formatPercent = (value) => {
+  if (value === undefined || value === null || value === '') return '—';
+  const num = Number(value);
+  if (Number.isNaN(num)) return String(value);
+  // If value looks like 0-1, treat as fraction; otherwise treat as percentage already
+  const pct = num <= 1 ? num * 100 : num;
+  return `${Math.round(pct)}%`;
+};
 
-  return {
-    items,
-    generalDocuments: docs.filter((doc) => !doc.paymentId),
-  };
+const getLatestAttempt = (attempts = []) => {
+  if (!Array.isArray(attempts) || attempts.length === 0) return null;
+  // Prefer the attempt with the latest submittedAt timestamp
+  const withDates = attempts
+    .map((a) => ({ a, t: (typeof a.submittedAt?.toDate === 'function' ? a.submittedAt.toDate() : a.submittedAt) || null }))
+    .map(({ a, t }) => ({ a, ts: t instanceof Date ? t.getTime() : (t ? new Date(t).getTime() : 0) }));
+  const latest = withDates.reduce((best, cur) => (cur.ts > best.ts ? cur : best), withDates[0]);
+  return latest.a || attempts[attempts.length - 1];
+};
+
+const extractGrade = (attempt = {}) => {
+  if (!attempt || typeof attempt !== 'object') return undefined;
+  const candidates = [
+    attempt.overallGrade,
+    attempt.grade,
+    attempt.gradePercent,
+    attempt.percent,
+    attempt.percentCorrect,
+    attempt.score,
+    attempt.accuracy,
+    attempt.metrics?.overallPct,
+    attempt.metrics?.grade,
+    attempt.results?.gradePct,
+    attempt.results?.percentCorrect,
+  ];
+  for (const v of candidates) {
+    if (v === 0) return 0; // allow 0%
+    if (v !== undefined && v !== null && v !== '') return v;
+  }
+  return undefined;
 };
 
 export default function TraineeSubmissionHistoryPage() {
@@ -126,15 +145,15 @@ export default function TraineeSubmissionHistoryPage() {
   }, [history]);
 
   if (loading) {
-    return <div className="p-6 text-center">Loading submission history...</div>;
+    return <div className="p-6 text-center">Loading completed cases...</div>;
   }
 
   if (!hasHistory) {
     return (
       <div className="p-6 bg-gray-50 min-h-screen">
         <div className="max-w-3xl mx-auto text-center space-y-4 bg-white border border-gray-200 rounded-lg shadow-sm p-8">
-          <h1 className="text-2xl font-semibold text-gray-800">Submission History</h1>
-          <p className="text-gray-600">You have not submitted any cases yet. Start a case to view your history here.</p>
+          <h1 className="text-2xl font-semibold text-gray-800">Completed Cases</h1>
+          <p className="text-gray-600">You haven't completed any cases yet. Start a case to see it here.</p>
           <Button variant="primary" onClick={() => navigate('/trainee')}>
             Browse Cases
           </Button>
@@ -148,9 +167,9 @@ export default function TraineeSubmissionHistoryPage() {
       <div className="max-w-4xl mx-auto space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold text-gray-800">Submission History</h1>
+            <h1 className="text-3xl font-bold text-gray-800">Completed Cases</h1>
             <p className="text-sm text-gray-500">
-              Review your previous attempts, including supporting documents and classification amounts.
+              A quick summary of the cases you've completed.
             </p>
           </div>
           <Button variant="secondary" onClick={() => navigate('/trainee')}>
@@ -160,61 +179,44 @@ export default function TraineeSubmissionHistoryPage() {
 
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
 
-        {entries.map((entry) => (
-          <div key={entry.caseId} className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-4">
-            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-              <div>
-                <h2 className="text-xl font-semibold text-gray-800">{entry.caseData?.caseName || entry.caseName || entry.caseId}</h2>
-                <p className="text-sm text-gray-500">Case ID: {entry.caseId}</p>
-              </div>
-              <Button variant="secondary" onClick={() => navigate(`/trainee/case/${entry.caseId}`)}>
-                View Case
-              </Button>
-            </div>
-
-            {entry.attempts.map((attempt, index) => {
-              const { items, generalDocuments } = buildSummaryItems(attempt, entry.caseData);
-              return (
-                <div key={index} className="border border-gray-200 rounded-lg p-4 space-y-4">
-                  <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                    <h3 className="font-semibold text-gray-700">Attempt {index + 1}</h3>
-                    <p className="text-sm text-gray-500">
-                      Submitted: {formatTimestamp(attempt.submittedAt)}
-                    </p>
+        {entries
+          .filter((entry) => Array.isArray(entry.attempts) && entry.attempts.length > 0)
+          .map((entry) => {
+            const latestAttempt = getLatestAttempt(entry.attempts);
+            const completedDate = latestAttempt ? formatTimestamp(latestAttempt.submittedAt) : 'N/A';
+            const latestGrade = latestAttempt ? formatPercent(extractGrade(latestAttempt)) : '—';
+            const timesCompleted = entry.attempts.length;
+            return (
+              <div key={entry.caseId} className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
+                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                  <div>
+                    <h2 className="text-xl font-semibold text-gray-800">{entry.caseData?.caseName || entry.caseName || entry.caseId}</h2>
+                    <p className="text-sm text-gray-500">Case ID: {entry.caseId}</p>
                   </div>
-                  {attempt.overallGrade !== undefined ? (
-                    <p className="text-sm text-gray-600">Grade: {attempt.overallGrade}</p>
-                  ) : null}
-                  <SubmissionSummary
-                    items={items}
-                    extraDocuments={generalDocuments}
-                    onViewDocument={async (doc) => {
-                      if (!doc || (!doc.storagePath && !doc.downloadURL)) {
-                        const modal = showModalRef.current;
-                        if (modal) modal('Document path or URL is missing. Cannot view.', 'Error');
-                        return;
-                      }
-                      if (doc.downloadURL) {
-                        window.open(doc.downloadURL, '_blank');
-                        return;
-                      }
-                      try {
-                        const fileRef = storageRef(storage, doc.storagePath);
-                        const url = await getDownloadURL(fileRef);
-                        window.open(url, '_blank');
-                      } catch (err) {
-                        console.error('Error loading document URL:', err);
-                        const modal = showModalRef.current;
-                        if (modal) modal('Could not retrieve the document URL.', 'Error');
-                      }
-                    }}
-                    emptyMessage="No disbursements were recorded in this attempt."
-                  />
+                  <div className="flex items-center gap-2">
+                    <Button variant="primary" onClick={() => navigate(`/trainee/case/${entry.caseId}?retake=true`)}>
+                      Retake Case
+                    </Button>
+                  </div>
                 </div>
-              );
-            })}
-          </div>
-        ))}
+
+                <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+                  <div className="bg-gray-50 rounded-md p-3 border border-gray-100">
+                    <p className="text-gray-500">Completed Date</p>
+                    <p className="font-medium text-gray-800">{completedDate}</p>
+                  </div>
+                  <div className="bg-gray-50 rounded-md p-3 border border-gray-100">
+                    <p className="text-gray-500">Times Completed</p>
+                    <p className="font-medium text-gray-800">{timesCompleted}</p>
+                  </div>
+                  <div className="bg-gray-50 rounded-md p-3 border border-gray-100">
+                    <p className="text-gray-500">Latest Grade</p>
+                    <p className="font-medium text-gray-800">{latestGrade}</p>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
       </div>
     </div>
   );

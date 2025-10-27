@@ -344,7 +344,8 @@ const toNormalizedCaseModel = (id, raw = {}) => {
 };
 
 const buildAdminCasesQueryParts = ({ searchTerm, statusFilters, visibilityFilters, sortKey }) => {
-  const filters = [where('_deleted', '==', false)];
+  const deletedFilter = where('_deleted', '==', false);
+  const filters = [deletedFilter];
 
   if (statusFilters.length === 1) {
     filters.push(where('status', '==', statusFilters[0]));
@@ -372,7 +373,7 @@ const buildAdminCasesQueryParts = ({ searchTerm, statusFilters, visibilityFilter
     });
   }
 
-  return { filters, order };
+  return { filters, order, deletedFilter };
 };
 
 const toTimestampOrNull = (value) => {
@@ -542,12 +543,14 @@ export const fetchCasesPage = async ({
   const parsedLimit = Number.parseInt(limitInput, 10);
   const pageSize = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 100) : 12;
 
-  const { filters, order } = buildAdminCasesQueryParts({
+  const { filters, order, deletedFilter } = buildAdminCasesQueryParts({
     searchTerm,
     statusFilters,
     visibilityFilters,
     sortKey,
   });
+
+  console.log('[caseService] Query parts:', { filters, order });
 
   const countSnapshot = await getCountFromServer(query(casesCollection, ...filters));
   const total = countSnapshot.data().count ?? 0;
@@ -576,6 +579,32 @@ export const fetchCasesPage = async ({
     const snapshot = await getDocs(query(casesCollection, ...paginationConstraints));
     items = snapshot.docs.map((docSnap) => toNormalizedCaseModel(docSnap.id, docSnap.data()));
   }
+
+  if (total === 0 && deletedFilter) {
+    try {
+      const filtersWithoutDeleted = filters.filter((constraint) => constraint !== deletedFilter);
+      const fallbackSnapshot = await getDocs(
+        query(casesCollection, ...filtersWithoutDeleted, ...order, limit(5))
+      );
+      const fallbackItems = fallbackSnapshot.docs.map((docSnap) =>
+        toNormalizedCaseModel(docSnap.id, docSnap.data())
+      );
+      const candidatesMissingDeletedFlag = fallbackItems
+        .filter((item) => item._deleted !== false)
+        .map((item) => item.id);
+
+      if (fallbackItems.length > 0) {
+        console.warn('[caseService] No cases returned with _deleted == false filter, but fallback query located candidates', {
+          fallbackCount: fallbackItems.length,
+          candidatesMissingDeletedFlag,
+        });
+      }
+    } catch (debugError) {
+      console.warn('[caseService] Failed fallback inspection after empty case query', debugError);
+    }
+  }
+
+  console.log('[caseService] Returning:', { total, items });
 
   return {
     items,
@@ -671,6 +700,8 @@ const computeDisbursementAlerts = (caseData) => {
   const disbursements = Array.isArray(caseData.disbursements) ? caseData.disbursements : [];
   if (disbursements.length === 0) return alerts;
 
+  const caseId = caseData?.id;
+  const caseName = caseData?.caseName || caseData?.title || 'Untitled case';
   const mappedPayments = new Set(
     (Array.isArray(caseData.invoiceMappings) ? caseData.invoiceMappings : [])
       .map((mapping) => mapping?.paymentId)
@@ -686,6 +717,8 @@ const computeDisbursementAlerts = (caseData) => {
     if (!hasAnswerKey) {
       alerts.push({
         id: `${caseData.id}-missing-ak-${paymentId}`,
+        caseId,
+        caseName,
         type: 'Answer key',
         message: `Missing answer key for ${paymentId}.`,
         context: caseData.caseName,
@@ -696,6 +729,8 @@ const computeDisbursementAlerts = (caseData) => {
     if (!isMapped && !hasSupportingDocs) {
       alerts.push({
         id: `${caseData.id}-unmapped-${paymentId}`,
+        caseId,
+        caseName,
         type: 'Mapping',
         message: `Unmapped disbursement ${paymentId}.`,
         context: caseData.caseName,
