@@ -25,6 +25,7 @@ import {
   AUDIT_AREA_VALUES,
   CASE_GROUP_VALUES,
   DEFAULT_AUDIT_AREA,
+  DEFAULT_ITEM_TYPE,
 } from '../models/caseConstants';
 
 const VALID_CASE_STATUSES = ['assigned', 'in_progress', 'submitted', 'archived', 'draft'];
@@ -176,10 +177,14 @@ const normalizeInvoiceMappings = (mappings = []) => {
   const cleaned = [];
   mappings.forEach((item) => {
     if (!isRecord(item)) return;
-    const paymentId = toOptionalString(item.paymentId);
-    if (!paymentId) return;
+    const itemId =
+      toOptionalString(item.paymentId) ||
+      toOptionalString(item.auditItemId) ||
+      toOptionalString(item.id);
+    if (!itemId) return;
     cleaned.push({
-      paymentId,
+      paymentId: itemId,
+      auditItemId: itemId,
       storagePath: toOptionalString(item.storagePath),
       fileName: toOptionalString(item.fileName),
       downloadURL: toOptionalString(item.downloadURL),
@@ -224,20 +229,29 @@ const groupInvoiceMappings = (mappings = []) => {
   return groups;
 };
 
-const normalizeDisbursement = (item, index, invoiceGroups) => {
+const normalizeAuditItem = (item, index, invoiceGroups) => {
   if (!isRecord(item)) return null;
-  const fallbackId = `disbursement-${index + 1}`;
-  const paymentId = toOptionalString(item.paymentId) || fallbackId;
-  const invoices = paymentId ? invoiceGroups.get(paymentId) || [] : [];
+  const fallbackId = `item-${index + 1}`;
+  const resolvedId = toOptionalString(item.id) || toOptionalString(item.paymentId) || fallbackId;
+  const invoices = resolvedId ? invoiceGroups.get(resolvedId) || [] : [];
   const [primaryInvoice, ...restInvoices] = invoices;
 
   const normalized = {
-    paymentId,
+    id: resolvedId,
+    paymentId: resolvedId,
+    type: toOptionalString(item.type) || DEFAULT_ITEM_TYPE,
     payee: toTrimmedString(item.payee),
     amount: typeof item.amount === 'number' ? item.amount : toTrimmedString(item.amount),
     paymentDate: toTrimmedString(item.paymentDate),
     expectedClassification: toOptionalString(item.expectedClassification),
   };
+
+  const title = toOptionalString(item.title) || normalized.payee || `Item ${index + 1}`;
+  if (title) normalized.title = title;
+
+  if (normalized.amount !== undefined && normalized.amount !== null && normalized.amount !== '') {
+    normalized.value = normalized.amount;
+  }
 
   const description = toOptionalString(item.description);
   if (description) normalized.description = description;
@@ -327,12 +341,12 @@ const normalizeDisbursement = (item, index, invoiceGroups) => {
   return normalized;
 };
 
-const normalizeDisbursements = (disbursements = [], invoiceMappings = []) => {
-  const list = Array.isArray(disbursements) ? disbursements : [];
+const normalizeAuditItems = (items = [], invoiceMappings = []) => {
+  const list = Array.isArray(items) ? items : [];
   const invoiceGroups = groupInvoiceMappings(normalizeInvoiceMappings(invoiceMappings));
   const normalizedList = [];
   list.forEach((item, index) => {
-    const normalized = normalizeDisbursement(item, index, invoiceGroups);
+    const normalized = normalizeAuditItem(item, index, invoiceGroups);
     if (normalized) {
       normalizedList.push(normalized);
     }
@@ -341,10 +355,15 @@ const normalizeDisbursements = (disbursements = [], invoiceMappings = []) => {
 };
 
 const toNormalizedCaseModel = (id, raw = {}) => {
+  const normalizedAuditItems = normalizeAuditItems(
+    raw?.auditItems ?? raw?.disbursements,
+    raw?.invoiceMappings
+  );
   const normalized = {
     ...raw,
     invoiceMappings: normalizeInvoiceMappings(raw?.invoiceMappings),
-    disbursements: normalizeDisbursements(raw?.disbursements, raw?.invoiceMappings),
+    auditItems: normalizedAuditItems,
+    disbursements: normalizedAuditItems,
     referenceDocuments: normalizeReferenceDocuments(raw?.referenceDocuments),
   };
   return toCaseModel(id, normalized);
@@ -411,7 +430,12 @@ const sanitizeCaseWriteData = (rawData = {}, { isCreate = false } = {}) => {
   const sanitized = { ...data };
 
   sanitized.invoiceMappings = normalizeInvoiceMappings(sanitized.invoiceMappings);
-  sanitized.disbursements = normalizeDisbursements(sanitized.disbursements, sanitized.invoiceMappings);
+  const normalizedItems = normalizeAuditItems(
+    sanitized.auditItems ?? sanitized.disbursements,
+    sanitized.invoiceMappings
+  );
+  sanitized.auditItems = normalizedItems;
+  delete sanitized.disbursements;
   sanitized.referenceDocuments = normalizeReferenceDocuments(sanitized.referenceDocuments);
 
   if (typeof sanitized.publicVisible !== 'boolean') {
@@ -543,6 +567,7 @@ export const fetchCasesPage = async ({
   sort = DEFAULT_CASE_SORT,
   page = 1,
   limit: limitInput = 12,
+  orgId = null,
 } = {}) => {
   const casesCollection = collection(db, FirestorePaths.CASES_COLLECTION());
   const searchTerm = normalizeSearchValue(search);
@@ -563,6 +588,10 @@ export const fetchCasesPage = async ({
     auditAreaFilter,
     sortKey,
   });
+
+  if (orgId) {
+    filters.push(where('orgId', '==', orgId));
+  }
 
   console.log('[caseService] Query parts:', { filters, order });
 

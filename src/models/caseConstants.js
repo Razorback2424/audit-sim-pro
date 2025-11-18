@@ -46,3 +46,11 @@ export const getCaseGroupLabel = (value) => {
   if (!value) return '—';
   return CASE_GROUP_LABELS[value] || humanizeToken(value);
 };
+
+export const AUDIT_ITEM_TYPES = Object.freeze({
+  TRANSACTION: 'transaction',
+  INVENTORY_COUNT: 'inventory_count',
+  PAYROLL_RECORD: 'payroll_record',
+});
+
+export const DEFAULT_ITEM_TYPE = AUDIT_ITEM_TYPES.TRANSACTION;

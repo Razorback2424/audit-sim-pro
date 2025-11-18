@@ -1,17 +1,28 @@
-import React, { useEffect } from 'react';
-import { useUser, useRoute } from '../AppCore';
+import React from 'react';
+import { Navigate, Outlet, useLocation } from 'react-router-dom';
+import { Loader2 } from 'lucide-react';
+import { useAuth, useUser } from '../AppCore';
 
-export default function RoleRoute({ allowed = [], children }) {
+export default function RoleRoute({ allowed = [] }) {
   const { role, loadingRole } = useUser();
-  const { navigate } = useRoute();
+  const { loadingAuth } = useAuth();
+  const location = useLocation();
 
-  useEffect(() => {
-    if (!loadingRole && role && !allowed.includes(role)) {
-      navigate('/unauthorized');
-    }
-  }, [loadingRole, role, allowed, navigate]);
+  if (loadingAuth || loadingRole) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <Loader2 className="animate-spin text-blue-600" size={32} />
+      </div>
+    );
+  }
 
-  if (loadingRole) return <div>Loading...</div>;
-  if (!role || !allowed.includes(role)) return null;
-  return <>{children}</>;
+  if (!role) {
+    return <Navigate to="/select-role" state={{ from: location }} replace />;
+  }
+
+  if (!allowed.includes(role)) {
+    return <Navigate to="/unauthorized" replace />;
+  }
+
+  return <Outlet />;
 }

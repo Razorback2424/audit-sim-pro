@@ -1,13 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { Timestamp } from 'firebase/firestore';
-import { storage, Button, Input, Select, useRoute, useAuth, useModal, appId } from '../AppCore';
+import { storage, Button, useRoute, useAuth, useModal, appId } from '../AppCore';
 import { subscribeToCase } from '../services/caseService';
-import { saveSubmission } from '../services/submissionService';
+import { saveSubmission, subscribeToSubmission } from '../services/submissionService';
 import { saveProgress, subscribeProgressForCases } from '../services/progressService';
 import { Send, Loader2, ExternalLink, Download, CheckCircle2, XCircle, Info } from 'lucide-react';
 import { getClassificationFields, getFlowCopy } from '../constants/classificationFields';
 import { DEFAULT_AUDIT_AREA } from '../models/caseConstants';
+import { currencyFormatter } from '../utils/formatters';
+import AuditItemCardFactory from '../components/trainee/AuditItemCardFactory';
 
 const FLOW_STEPS = Object.freeze({
   SELECTION: 'selection',
@@ -15,7 +17,7 @@ const FLOW_STEPS = Object.freeze({
   RESULTS: 'results',
 });
 
-const STEP_SEQUENCE = [FLOW_STEPS.SELECTION, FLOW_STEPS.TESTING, FLOW_STEPS.RESULTS];
+const DEFAULT_WORKFLOW = [FLOW_STEPS.SELECTION, FLOW_STEPS.TESTING, FLOW_STEPS.RESULTS];
 
 const isInlinePreviewable = (contentType, fileNameOrPath) => {
   const normalizedType = typeof contentType === 'string' ? contentType.toLowerCase() : '';
@@ -199,8 +201,36 @@ const collectSupportingDocuments = (disbursement) => {
     });
 };
 
-const currencyFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 const DEFAULT_FLOW_COPY_STATE = getFlowCopy(DEFAULT_AUDIT_AREA);
+
+const useSubmission = (caseId, userId) => {
+  const [submission, setSubmission] = useState(null);
+
+  useEffect(() => {
+    if (!caseId || !userId) {
+      setSubmission(null);
+      return undefined;
+    }
+    const unsubscribe = subscribeToSubmission(
+      userId,
+      caseId,
+      (doc) => {
+        setSubmission(doc);
+      },
+      (error) => {
+        console.error('[TraineeCaseView] Failed to load submission document', error);
+        setSubmission(null);
+      }
+    );
+    return () => {
+      if (typeof unsubscribe === 'function') {
+        unsubscribe();
+      }
+    };
+  }, [caseId, userId]);
+
+  return submission;
+};
 
 export default function TraineeCaseViewPage({ params }) {
   const { caseId } = params;
@@ -208,9 +238,11 @@ export default function TraineeCaseViewPage({ params }) {
   const { userId } = useAuth();
   const { showModal, hideModal } = useModal();
 
+  const submission = useSubmission(caseId, userId);
+
   const [caseData, setCaseData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [activeStep, setActiveStep] = useState(FLOW_STEPS.SELECTION);
+  const [activeStep, setActiveStep] = useState(null);
   const [selectedDisbursements, setSelectedDisbursements] = useState({});
   const [classificationAmounts, setClassificationAmounts] = useState({});
   const [isLocked, setIsLocked] = useState(false);
@@ -266,9 +298,23 @@ export default function TraineeCaseViewPage({ params }) {
     [classificationFields, classificationKeySet]
   );
 
+  const workflow = useMemo(() => {
+    if (Array.isArray(caseData?.workflow) && caseData.workflow.length > 0) {
+      return caseData.workflow;
+    }
+    return DEFAULT_WORKFLOW;
+  }, [caseData]);
+  const firstWorkflowStep = useMemo(() => workflow[0] ?? FLOW_STEPS.SELECTION, [workflow]);
+  const resultsWorkflowStep = useMemo(() => {
+    if (workflow.includes(FLOW_STEPS.RESULTS)) {
+      return FLOW_STEPS.RESULTS;
+    }
+    return workflow[workflow.length - 1] ?? FLOW_STEPS.RESULTS;
+  }, [workflow]);
+
   const lastResolvedEvidenceRef = useRef({ evidenceId: null, storagePath: null, url: null, inlineNotSupported: false });
   const progressSaveTimeoutRef = useRef(null);
-  const activeStepRef = useRef(FLOW_STEPS.SELECTION);
+  const activeStepRef = useRef(null);
   const selectionRef = useRef(selectedDisbursements);
   const classificationRef = useRef(classificationAmounts);
   const isLockedRef = useRef(false);
@@ -370,6 +416,17 @@ export default function TraineeCaseViewPage({ params }) {
   );
 
   useEffect(() => {
+    if (workflow.length > 0) {
+      setActiveStep((prev) => {
+        if (prev && workflow.includes(prev)) {
+          return prev;
+        }
+        return firstWorkflowStep;
+      });
+    }
+  }, [workflow, firstWorkflowStep]);
+
+  useEffect(() => {
     activeStepRef.current = activeStep;
   }, [activeStep]);
 
@@ -399,7 +456,8 @@ export default function TraineeCaseViewPage({ params }) {
     retakeHandledRef.current = true;
     setIsRetakeResetting(true);
     setIsLocked(false);
-    setActiveStep(FLOW_STEPS.SELECTION);
+    const initialWorkflowStep = firstWorkflowStep;
+    setActiveStep(initialWorkflowStep);
     setSelectedDisbursements({});
     setClassificationAmounts({});
 
@@ -416,7 +474,7 @@ export default function TraineeCaseViewPage({ params }) {
           patch: {
             percentComplete: 0,
             state: 'not_started',
-            step: FLOW_STEPS.SELECTION,
+            step: initialWorkflowStep,
             draft: {
               selectedPaymentIds: [],
               classificationDraft: {},
@@ -437,7 +495,7 @@ export default function TraineeCaseViewPage({ params }) {
     };
 
     resetProgress();
-  }, [caseId, userId, query, setQuery, showModal]);
+  }, [caseId, userId, query, setQuery, showModal, firstWorkflowStep]);
 
   useEffect(() => {
     if (!caseId || !userId) {
@@ -505,8 +563,8 @@ export default function TraineeCaseViewPage({ params }) {
         const entry = progressMap.get(caseId);
         if (!entry) return;
 
-        const nextStep = STEP_SEQUENCE.includes(entry.step) ? entry.step : FLOW_STEPS.SELECTION;
-        if (activeStepRef.current !== nextStep) {
+        const nextStep = workflow.includes(entry.step) ? entry.step : firstWorkflowStep;
+        if (nextStep && activeStepRef.current !== nextStep) {
           setActiveStep(nextStep);
         }
 
@@ -527,7 +585,7 @@ export default function TraineeCaseViewPage({ params }) {
           setClassificationAmounts(normalizedClassifications);
         }
 
-        const shouldLock = entry.state === 'submitted' || nextStep === FLOW_STEPS.RESULTS;
+        const shouldLock = entry.state === 'submitted' || nextStep === resultsWorkflowStep;
         if (isLockedRef.current !== shouldLock) {
           setIsLocked(shouldLock);
         }
@@ -538,7 +596,16 @@ export default function TraineeCaseViewPage({ params }) {
     );
 
     return () => unsubscribe();
-  }, [caseId, userId, isSameClassificationMap, normalizeAllocationShape, isSameSelectionMap]);
+  }, [
+    caseId,
+    userId,
+    isSameClassificationMap,
+    normalizeAllocationShape,
+    isSameSelectionMap,
+    workflow,
+    firstWorkflowStep,
+    resultsWorkflowStep,
+  ]);
 
   const disbursementList = useMemo(
     () => (Array.isArray(caseData?.disbursements) ? caseData.disbursements : []),
@@ -897,7 +964,7 @@ export default function TraineeCaseViewPage({ params }) {
   );
 
   useEffect(() => {
-    if (!caseData || !userId || isLocked || activeStep === FLOW_STEPS.RESULTS) return;
+    if (!caseData || !userId || isLocked || activeStep === resultsWorkflowStep) return;
     enqueueProgressSave();
   }, [caseData, userId, isLocked, activeStep, enqueueProgressSave]);
 
@@ -1023,7 +1090,10 @@ export default function TraineeCaseViewPage({ params }) {
       });
       return next;
     });
-    setActiveStep(FLOW_STEPS.TESTING);
+    const targetStep = workflow.includes(FLOW_STEPS.TESTING)
+      ? FLOW_STEPS.TESTING
+      : workflow[1] ?? resultsWorkflowStep;
+    setActiveStep(targetStep);
   };
 
   const handleSubmitTesting = async () => {
@@ -1096,7 +1166,7 @@ export default function TraineeCaseViewPage({ params }) {
         patch: {
           percentComplete: 100,
           state: 'submitted',
-          step: FLOW_STEPS.RESULTS,
+          step: resultsWorkflowStep,
           draft: {
             selectedPaymentIds: selectedIds,
             classificationDraft: classificationAmounts,
@@ -1105,7 +1175,7 @@ export default function TraineeCaseViewPage({ params }) {
       });
 
       setIsLocked(true);
-      setActiveStep(FLOW_STEPS.RESULTS);
+      setActiveStep(resultsWorkflowStep);
     } catch (error) {
       console.error('Error saving submission:', error);
       showModal('Error saving submission: ' + error.message, 'Error');
@@ -1157,12 +1227,13 @@ export default function TraineeCaseViewPage({ params }) {
 
   if (loading) return <div className="p-4 text-center">Loading case details...</div>;
   if (!caseData) return <div className="p-4 text-center">Case not found or you may not have access. Redirecting...</div>;
+  if (!activeStep) return <div className="p-4 text-center">Preparing workflow...</div>;
 
-  const stepIndex = STEP_SEQUENCE.indexOf(activeStep);
+  const stepIndex = workflow.indexOf(activeStep);
 
   const renderStepper = () => (
     <ol className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between bg-white rounded-lg shadow px-4 py-4">
-      {STEP_SEQUENCE.map((stepKey, idx) => {
+      {workflow.map((stepKey, idx) => {
         const isCompleted = stepIndex > idx;
         const isActive = stepIndex === idx;
         const label =
@@ -1497,7 +1568,7 @@ export default function TraineeCaseViewPage({ params }) {
           <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 text-sm text-gray-600">
             You do not have any disbursements selected. Return to the selection step to add them before testing.
             <div className="mt-4">
-              <Button variant="secondary" onClick={() => setActiveStep(FLOW_STEPS.SELECTION)}>
+              <Button variant="secondary" onClick={() => setActiveStep(firstWorkflowStep)}>
                 Back to Selection
               </Button>
             </div>
@@ -1513,124 +1584,41 @@ export default function TraineeCaseViewPage({ params }) {
             <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
               <h3 className="text-xl font-semibold text-gray-800 mb-4">Allocate Each Disbursement</h3>
               <div className="space-y-4">
-                {selectedDisbursementDetails.map((d) => {
+                {selectedDisbursementDetails.map((item) => {
                   const allocation = normalizeAllocationShape(
-                    classificationAmounts[d.paymentId] || createEmptyAllocation()
+                    classificationAmounts[item.paymentId] || createEmptyAllocation()
                   );
-                  const isSplit = allocation.mode === 'split';
-                  const totals = computeAllocationTotals(d, allocation);
+                  const totals = computeAllocationTotals(item, allocation);
                   const totalEntered = classificationFields.reduce((sum, { key }) => {
                     const value = totals[key];
                     return sum + (Number.isFinite(value) ? value : 0);
                   }, 0);
-                  const amountNumber = Number(d.amount) || 0;
+                  const amountNumber = Number(item.amount) || 0;
                   const totalsMatch = Math.abs(totalEntered - amountNumber) <= 0.01;
-                  const classificationLabel =
-                    classificationFields.find(({ key }) => key === allocation.singleClassification)?.label ||
-                    'Select classification';
+                  const itemId = item.id || item.paymentId;
 
                   return (
-                    <div key={d.paymentId} className={`rounded-md p-4 space-y-4 border ${isSplit ? 'border-blue-200 bg-blue-50/30' : 'border-gray-200 bg-white'}`}>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm text-gray-700">
-                        <span>
-                          <strong className="font-medium">ID:</strong> {d.paymentId}
-                        </span>
-                        <span>
-                          <strong className="font-medium">Payee:</strong> {d.payee}
-                        </span>
-                        <span>
-                          <strong className="font-medium">Amount:</strong> {currencyFormatter.format(amountNumber)}
-                        </span>
-                        <span>
-                          <strong className="font-medium">Date:</strong> {d.paymentDate}
-                        </span>
-                        {d.expectedClassification ? (
-                          <span className="text-xs text-gray-500 col-span-full">
-                            Expected classification: {d.expectedClassification}
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="space-y-3">
-                        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                          <label className="flex-1 text-sm font-medium text-gray-700">
-                            <span className="mb-1 block">Classification</span>
-                            <Select
-                              value={allocation.singleClassification}
-                              onChange={(event) =>
-                                handleSingleClassificationChange(d.paymentId, event.target.value)
-                              }
-                              disabled={isSplit || isLocked}
-                              className="w-full"
-                            >
-                              <option value="">Select classification</option>
-                              {classificationFields.map(({ key, label }) => (
-                                <option key={key} value={key}>
-                                  {label}
-                                </option>
-                              ))}
-                            </Select>
-                          </label>
-                          <label className="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
-                            <input
-                              type="checkbox"
-                              className="rounded border-blue-300 text-blue-600 focus:ring-blue-500"
-                              checked={isSplit}
-                              disabled={isLocked}
-                              onChange={(event) =>
-                                handleSplitToggle(d.paymentId, event.target.checked, d)
-                              }
-                            />
-                            Split across classifications
-                          </label>
-                        </div>
-
-                        {isSplit ? (
-                          <div className="rounded-md border border-gray-200 bg-white p-3 space-y-3">
-                            <p className="text-xs text-gray-500">
-                              {splitAllocationHint}
-                            </p>
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-                              {classificationFields.map(({ key, label }) => (
-                                <label key={key} className="flex flex-col text-sm text-gray-700">
-                                  <span className="font-medium mb-1">{label}</span>
-                                  <Input
-                                    type="text"
-                                    inputMode="decimal"
-                                    pattern="[0-9.,]*"
-                                    value={allocation.splitValues[key] ?? ''}
-                                    onChange={(event) =>
-                                      handleSplitAmountChange(d.paymentId, key, event.target.value)
-                                    }
-                                    disabled={isLocked}
-                                  />
-                                </label>
-                              ))}
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-sm text-gray-600">
-                            {allocation.singleClassification
-                              ? `Entire amount allocated to ${classificationLabel}.`
-                              : singleAllocationHint}
-                          </div>
-                        )}
-                      </div>
-                      <div className="text-xs text-gray-500">
-                        Entered total: <strong>{currencyFormatter.format(totalEntered)}</strong>{' '}
-                        {totalsMatch ? (
-                          <span className="text-green-600">(Balanced)</span>
-                        ) : (
-                          <span className="text-amber-600">(Must equal {currencyFormatter.format(amountNumber)})</span>
-                        )}
-                      </div>
-                    </div>
+                    <AuditItemCardFactory
+                      key={itemId}
+                      item={{ ...item, id: itemId }}
+                      allocation={allocation}
+                      classificationFields={classificationFields}
+                      splitAllocationHint={splitAllocationHint}
+                      singleAllocationHint={singleAllocationHint}
+                      isLocked={isLocked}
+                      onSplitToggle={handleSplitToggle}
+                      onClassificationChange={handleSingleClassificationChange}
+                      onSplitAmountChange={handleSplitAmountChange}
+                      totalEntered={totalEntered}
+                      totalsMatch={totalsMatch}
+                    />
                   );
                 })}
               </div>
             </div>
 
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-2">
-              <Button variant="secondary" onClick={() => setActiveStep(FLOW_STEPS.SELECTION)} disabled={isLocked}>
+              <Button variant="secondary" onClick={() => setActiveStep(firstWorkflowStep)} disabled={isLocked}>
                 Back to Selection
               </Button>
               <Button onClick={handleSubmitTesting} disabled={!allClassified || isLocked}>
@@ -1644,37 +1632,163 @@ export default function TraineeCaseViewPage({ params }) {
   };
 
   const renderResultsStep = () => {
-    const tolerance = 0.01;
-    const toNumber = (v) => {
-      const n = Number(v);
-      return Number.isFinite(n) ? n : 0;
-    };
-    const evaluate = (trainee, answerKey) => {
-      const result = {};
-      let allCorrect = true;
-      classificationFields.forEach(({ key }) => {
-        const userVal = toNumber(trainee?.[key] ?? 0);
-        const correctVal = toNumber(answerKey?.[key] ?? 0);
-        const isCorrect = Math.abs(userVal - correctVal) <= tolerance;
-        result[key] = { user: userVal, correct: correctVal, isCorrect };
-        if (!isCorrect) allCorrect = false;
-      });
-      return { fields: result, overallCorrect: allCorrect };
-    };
-
     const formatClassificationLabel = (key) =>
       classificationFields.find((field) => field.key === key)?.label || key || 'Not specified';
 
-    const findTopClassification = (allocationTotals = {}) => {
-      const entries = classificationFields.map(({ key }) => ({ key, value: toNumber(allocationTotals[key]) }));
-      const primary = entries.find((entry) => entry.value > 0);
-      return primary ? primary.key : '';
-    };
-
     const answerKeyIsSplit = (disbursement) => {
       if (disbursement?.answerKeyMode === 'split') return true;
-      const keyTotals = classificationFields.map(({ key }) => toNumber(disbursement?.answerKey?.[key] ?? 0));
+      const keyTotals = classificationFields.map(({ key }) => Number(disbursement?.answerKey?.[key] ?? 0));
       return keyTotals.filter((value) => Math.abs(value) > 0.009).length > 1;
+    };
+
+    const formatTimestamp = (ts) => {
+      if (!ts) return null;
+      if (typeof ts.toDate === 'function') {
+        return ts.toDate().toLocaleString();
+      }
+      if (typeof ts.seconds === 'number') {
+        return new Date(ts.seconds * 1000).toLocaleString();
+      }
+      return null;
+    };
+
+    const gradeValue = typeof submission?.grade === 'number' ? submission.grade : null;
+    const gradeDisplay = gradeValue !== null ? gradeValue.toFixed(1) : null;
+    const gradedAtText = formatTimestamp(submission?.gradedAt);
+    const gradingDetails = submission?.gradingDetails || {};
+    const gradeReady = gradeDisplay !== null;
+
+    const renderDisbursementResults = () => {
+      if (!submission) {
+        return <p className="text-sm text-gray-500">Retrieving your submission details...</p>;
+      }
+      if (!gradeReady) {
+        return (
+          <p className="text-sm text-gray-500">
+            Grading is in progress. This usually takes a few seconds—feel free to refresh shortly.
+          </p>
+        );
+      }
+      if (selectedDisbursementDetails.length === 0) {
+        return <p className="text-sm text-gray-500">No disbursements were recorded in your submission.</p>;
+      }
+      return (
+        <ul className="space-y-4">
+          {selectedDisbursementDetails.map((d) => {
+            const detail = gradingDetails[d.paymentId];
+            const answerKey = d.answerKey || {};
+            const splitConfigured = detail?.splitMode ?? answerKeyIsSplit(d);
+            const explanation = detail?.explanation || answerKey.explanation;
+            const showExplanation = typeof explanation === 'string' && explanation.trim().length > 0;
+            const selectedLabel = formatClassificationLabel(detail?.userClassification);
+            const correctLabel = formatClassificationLabel(detail?.correctClassification);
+            const statusBadge = detail ? (
+              detail.isCorrect ? (
+                <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold bg-green-100 text-green-700">
+                  <CheckCircle2 size={16} className="mr-1" /> Correct
+                </span>
+              ) : (
+                <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold bg-amber-100 text-amber-700">
+                  <XCircle size={16} className="mr-1" /> Needs Review
+                </span>
+              )
+            ) : (
+              <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold bg-amber-50 text-amber-700">
+                <Info size={16} className="mr-1" /> Awaiting grade
+              </span>
+            );
+
+            const renderDetailContent = () => {
+              if (!detail) {
+                return (
+                  <p className="mt-3 text-sm text-gray-500">
+                    Grading details are not available for this disbursement yet.
+                  </p>
+                );
+              }
+              if (splitConfigured) {
+                return (
+                  <div className="mt-3 overflow-x-auto">
+                    <table className="min-w-full text-sm text-left text-gray-700 border border-gray-200 rounded-md">
+                      <thead className="bg-gray-100">
+                        <tr>
+                          <th className="px-3 py-2 font-semibold text-gray-600">Classification</th>
+                          <th className="px-3 py-2 font-semibold text-gray-600">Your Entry</th>
+                          <th className="px-3 py-2 font-semibold text-gray-600">Correct Answer</th>
+                          <th className="px-3 py-2 font-semibold text-gray-600">Result</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {classificationFields.map(({ key, label }) => {
+                          const fieldEval = detail.fields?.[key] || { user: 0, correct: 0, isCorrect: true };
+                          return (
+                            <tr key={`${d.paymentId}-${key}`} className="border-t">
+                              <td className="px-3 py-2">{label}</td>
+                              <td className="px-3 py-2">{currencyFormatter.format(fieldEval.user)}</td>
+                              <td className="px-3 py-2">{currencyFormatter.format(fieldEval.correct)}</td>
+                              <td className="px-3 py-2">
+                                {fieldEval.isCorrect ? (
+                                  <span className="inline-flex items-center text-green-700">
+                                    <CheckCircle2 size={16} className="mr-1" /> Match
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center text-amber-700">
+                                    <XCircle size={16} className="mr-1" /> Mismatch
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              }
+              return (
+                <div className="mt-3 rounded-md border border-gray-100 bg-gray-50 px-3 py-3 text-sm text-gray-700 space-y-1">
+                  <p>
+                    <strong>Your selection:</strong> {selectedLabel}
+                  </p>
+                  <p>
+                    <strong>Correct classification:</strong> {correctLabel}
+                  </p>
+                  {detail.isCorrect ? (
+                    <p className="text-green-600">Great job—your classification matches the answer key.</p>
+                  ) : (
+                    <p className="text-amber-700">Review the guidance below to understand the expected classification.</p>
+                  )}
+                </div>
+              );
+            };
+
+            return (
+              <li key={d.paymentId} className="border border-gray-200 rounded-lg p-4 bg-white shadow-sm">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="text-sm text-gray-600">
+                    <div>
+                      <strong className="font-medium">ID:</strong> {d.paymentId}
+                    </div>
+                    <div>
+                      <strong className="font-medium">Payee:</strong> {d.payee}
+                    </div>
+                    <div>
+                      <strong className="font-medium">Amount:</strong> {currencyFormatter.format(Number(d.amount) || 0)}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">{statusBadge}</div>
+                </div>
+                {renderDetailContent()}
+                {showExplanation ? (
+                  <div className="mt-3 border border-blue-100 bg-blue-50 text-blue-900 rounded-md px-3 py-2 text-sm">
+                    <strong className="font-semibold">Explanation:</strong> {explanation}
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      );
     };
 
     return (
@@ -1687,132 +1801,22 @@ export default function TraineeCaseViewPage({ params }) {
         </div>
 
         <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
-          <h2 className="text-xl font-semibold text-gray-800 mb-4">Results & Feedback</h2>
-          {selectedDisbursementDetails.length === 0 ? (
-            <p className="text-sm text-gray-500">No disbursements were recorded in your submission.</p>
+          <h2 className="text-xl font-semibold text-gray-800 mb-2">Final Grade</h2>
+          {gradeReady ? (
+            <div>
+              <p className="text-4xl font-extrabold text-gray-900">{gradeDisplay}%</p>
+              {gradedAtText ? (
+                <p className="text-xs text-gray-500 mt-1">Graded on {gradedAtText}</p>
+              ) : null}
+            </div>
           ) : (
-            <ul className="space-y-4">
-              {selectedDisbursementDetails.map((d) => {
-                const traineeTotals = computeAllocationTotals(d, classificationAmounts[d.paymentId]);
-                const answerKey = d.answerKey || {};
-                const hasNumericAnswer = classificationFields.some(({ key }) => typeof answerKey[key] === 'number');
-                const hasExplanation =
-                  typeof answerKey.explanation === 'string' && answerKey.explanation.trim().length > 0;
-                const evaln = hasNumericAnswer ? evaluate(traineeTotals, answerKey) : null;
-                const splitConfigured = answerKeyIsSplit(d);
-
-                if (evaln && !evaln.overallCorrect && process.env.NODE_ENV !== 'production') {
-                  console.debug('[trainee-results] allocation mismatch', {
-                    paymentId: d.paymentId,
-                    fields: evaln.fields,
-                  });
-                }
-
-                let statusBadge = (
-                  <span
-                    className="inline-flex items-center text-gray-600 bg-gray-50 border border-gray-200 rounded-md px-2 py-1 text-sm"
-                    title="No answer key configured by admin"
-                  >
-                    No Answer Key
-                  </span>
-                );
-
-                if (hasNumericAnswer && evaln) {
-                  statusBadge = evaln.overallCorrect ? (
-                    <span className="inline-flex items-center text-green-700 bg-green-50 border border-green-200 rounded-md px-2 py-1 text-sm">
-                      <CheckCircle2 size={16} className="mr-1" /> Correct
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1 text-sm">
-                      <XCircle size={16} className="mr-1" /> Needs Review
-                    </span>
-                  );
-                } else if (!hasNumericAnswer && hasExplanation) {
-                  statusBadge = (
-                    <span className="inline-flex items-center text-blue-700 bg-blue-50 border border-blue-200 rounded-md px-2 py-1 text-sm">
-                      <Info size={16} className="mr-1" /> Instructor Note
-                    </span>
-                  );
-                }
-
-                const selectedKey = findTopClassification(traineeTotals);
-                const selectedLabel = formatClassificationLabel(selectedKey);
-                const correctKey = findTopClassification(answerKey);
-                const correctLabel = formatClassificationLabel(correctKey);
-
-                const showExplanation = hasExplanation && evaln && !evaln.overallCorrect;
-
-                return (
-                  <li key={`eval-${d.paymentId}`} className="border border-gray-200 rounded-md p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="text-sm text-gray-700 space-y-1">
-                        <div><strong className="font-medium">ID:</strong> {d.paymentId}</div>
-                        <div><strong className="font-medium">Payee:</strong> {d.payee}</div>
-                        <div><strong className="font-medium">Amount:</strong> {currencyFormatter.format(Number(d.amount) || 0)}</div>
-                      </div>
-                      <div className="flex items-center gap-2">{statusBadge}</div>
-                    </div>
-
-                    {hasNumericAnswer && evaln ? (
-                      splitConfigured ? (
-                        <div className="mt-3 overflow-x-auto">
-                          <table className="min-w-full text-sm text-left text-gray-700 border border-gray-200 rounded-md">
-                            <thead className="bg-gray-100">
-                              <tr>
-                                <th className="px-3 py-2 font-semibold text-gray-600">Classification</th>
-                                <th className="px-3 py-2 font-semibold text-gray-600">Your Entry</th>
-                                <th className="px-3 py-2 font-semibold text-gray-600">Correct Answer</th>
-                                <th className="px-3 py-2 font-semibold text-gray-600">Result</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {classificationFields.map(({ key, label }) => {
-                                const fieldEval = evaln.fields[key];
-                                return (
-                                  <tr key={`${d.paymentId}-${key}`} className="border-t">
-                                    <td className="px-3 py-2">{label}</td>
-                                    <td className="px-3 py-2">{currencyFormatter.format(fieldEval.user)}</td>
-                                    <td className="px-3 py-2">{currencyFormatter.format(fieldEval.correct)}</td>
-                                    <td className="px-3 py-2">
-                                      {fieldEval.isCorrect ? (
-                                        <span className="inline-flex items-center text-green-700"><CheckCircle2 size={16} className="mr-1" /> Match</span>
-                                      ) : (
-                                        <span className="inline-flex items-center text-amber-700"><XCircle size={16} className="mr-1" /> Mismatch</span>
-                                      )}
-                                    </td>
-                                  </tr>
-                                );
-                              })}
-                            </tbody>
-                          </table>
-                        </div>
-                      ) : (
-                        <div className="mt-3 rounded-md border border-gray-100 bg-gray-50 px-3 py-3 text-sm text-gray-700 space-y-1">
-                          <p>
-                            <strong>Your selection:</strong> {selectedLabel}
-                          </p>
-                          <p>
-                            <strong>Correct classification:</strong> {correctLabel}
-                          </p>
-                          {evaln.overallCorrect ? (
-                            <p className="text-green-600">Great job—your classification matches the answer key.</p>
-                          ) : (
-                            <p className="text-amber-700">Review the guidance below to understand the expected classification.</p>
-                          )}
-                        </div>
-                      )
-                    ) : null}
-
-                    {showExplanation ? (
-                      <div className="mt-3 border border-blue-100 bg-blue-50 text-blue-900 rounded-md px-3 py-2 text-sm">
-                        <strong className="font-semibold">Explanation:</strong> {answerKey.explanation}
-                      </div>
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ul>
+            <p className="text-sm text-gray-500">Grading in progress… please check back shortly.</p>
           )}
+        </div>
+
+        <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
+          <h2 className="text-xl font-semibold text-gray-800 mb-4">Results & Feedback</h2>
+          {renderDisbursementResults()}
         </div>
 
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">

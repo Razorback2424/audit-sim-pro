@@ -2,7 +2,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import TraineeCaseViewPage from './TraineeCaseViewPage';
 import { subscribeToCase } from '../services/caseService';
-import { saveSubmission } from '../services/submissionService';
+import { saveSubmission, subscribeToSubmission } from '../services/submissionService';
 import { saveProgress, subscribeProgressForCases } from '../services/progressService';
 import { getDownloadURL } from 'firebase/storage';
 
@@ -31,6 +31,7 @@ jest.mock('../services/caseService', () => ({
 
 jest.mock('../services/submissionService', () => ({
   saveSubmission: jest.fn(),
+  subscribeToSubmission: jest.fn(() => jest.fn()),
 }));
 
 jest.mock('../services/progressService', () => ({
@@ -103,6 +104,7 @@ describe('TraineeCaseViewPage', () => {
     subscribeToCase.mockReset();
     subscribeProgressForCases.mockReset();
     saveSubmission.mockReset();
+    subscribeToSubmission.mockReset();
     saveProgress.mockReset();
     saveProgress.mockResolvedValue();
     consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
@@ -110,6 +112,12 @@ describe('TraineeCaseViewPage', () => {
     subscribeProgressForCases.mockImplementation((_params, onNext) => {
       if (typeof onNext === 'function') {
         onNext(new Map());
+      }
+      return jest.fn();
+    });
+    subscribeToSubmission.mockImplementation((_userId, _caseId, onData) => {
+      if (typeof onData === 'function') {
+        onData(null);
       }
       return jest.fn();
     });

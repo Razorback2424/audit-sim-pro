@@ -1,4 +1,4 @@
-import { DEFAULT_AUDIT_AREA } from './caseConstants';
+import { DEFAULT_AUDIT_AREA, DEFAULT_ITEM_TYPE } from './caseConstants';
 
 /**
  * @typedef {import('firebase/firestore').Timestamp} FirestoreTimestamp
@@ -64,6 +64,27 @@ export {}; // eslint-disable-line
  * @returns {CaseModel}
  */
 export const toCaseModel = (id, data) => {
+  const rawItems = Array.isArray(data?.auditItems)
+    ? data.auditItems
+    : Array.isArray(data?.disbursements)
+    ? data.disbursements
+    : [];
+
+  const auditItems = rawItems
+    .map((item, index) => {
+      if (!item || typeof item !== 'object') return null;
+      const normalized = { ...item };
+      const fallbackId = `item-${index + 1}`;
+      const inferredId = normalized.id || normalized.paymentId || fallbackId;
+      normalized.id = inferredId;
+      if (!normalized.paymentId) {
+        normalized.paymentId = inferredId;
+      }
+      normalized.type = normalized.type || DEFAULT_ITEM_TYPE;
+      return normalized;
+    })
+    .filter(Boolean);
+
   return {
     id,
     ...data,
@@ -76,7 +97,8 @@ export const toCaseModel = (id, data) => {
     status: data?.status,
     createdAt: data?.createdAt,
     updatedAt: data?.updatedAt,
-    disbursements: Array.isArray(data?.disbursements) ? data.disbursements : [],
+    auditItems,
+    disbursements: auditItems,
     invoiceMappings: Array.isArray(data?.invoiceMappings) ? data.invoiceMappings : [],
     referenceDocuments: Array.isArray(data?.referenceDocuments) ? data.referenceDocuments : [],
     auditArea: typeof data?.auditArea === 'string' && data.auditArea.trim()
@@ -86,5 +108,9 @@ export const toCaseModel = (id, data) => {
       typeof data?.caseGroupId === 'string' && data.caseGroupId.trim()
         ? data.caseGroupId.trim()
         : null,
+    workflow:
+      Array.isArray(data?.workflow) && data.workflow.length > 0
+        ? data.workflow
+        : ['selection', 'testing', 'results'],
   };
 };

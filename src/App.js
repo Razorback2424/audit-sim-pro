@@ -1,6 +1,97 @@
-// Keep legacy default export pointing to the real App component
-export { default } from './AppPages';
+import React from 'react';
+import { Routes, Route, Navigate, useParams } from 'react-router-dom';
+import { Loader2 } from 'lucide-react';
+import { useUser } from './AppCore';
+import RequireAuth from './routes/RequireAuth';
+import RoleRoute from './routes/RoleRoute';
+import AppLayout from './components/layout/AppLayout';
+import LoginPage from './pages/LoginPage';
+import RegistrationPage from './pages/RegistrationPage';
+import RoleSelectionPage from './pages/RoleSelectionPage';
+import UnauthorizedPage from './pages/UnauthorizedPage';
+import AdminDashboardPage from './pages/AdminDashboardPage';
+import AdminUserManagementPage from './pages/AdminUserManagementPage';
+import AdminCaseSubmissionsPage from './pages/AdminCaseSubmissionsPage';
+import AdminSubmissionDetailPage from './pages/AdminSubmissionDetailPage';
+import AdminCaseOverviewPage from './pages/AdminCaseOverviewPage';
+import AdminCaseDataAuditPage from './pages/AdminCaseDataAuditPage';
+import AdminCaseProgressPage from './pages/AdminCaseProgressPage';
+import CaseFormPage from './pages/CaseFormPage';
+import TraineeDashboardPage from './pages/TraineeDashboardPage';
+import TraineeCaseViewPage from './pages/TraineeCaseViewPage';
+import TraineeSubmissionHistoryPage from './pages/TraineeSubmissionHistoryPage';
+import InstructorDashboardPage from './pages/InstructorDashboardPage';
+import { ROLES } from './constants/roles';
 
-// Re-export split modules so old imports keep working
-export * from './AppCore';
-export * from './AppPages';
+const WithParams = (Component) =>
+  function Wrapper() {
+    const params = useParams();
+    return <Component params={params} />;
+  };
+
+const CaseFormRoute = WithParams(CaseFormPage);
+const AdminCaseOverviewRoute = WithParams(AdminCaseOverviewPage);
+const AdminCaseSubmissionsRoute = WithParams(AdminCaseSubmissionsPage);
+const AdminCaseProgressRoute = WithParams(AdminCaseProgressPage);
+const AdminSubmissionDetailRoute = WithParams(AdminSubmissionDetailPage);
+const TraineeCaseRoute = WithParams(TraineeCaseViewPage);
+
+const HomeRedirect = () => {
+  const { role, loadingRole } = useUser();
+  if (loadingRole) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <Loader2 className="animate-spin text-blue-600" size={32} />
+      </div>
+    );
+  }
+  if (role === ROLES.ADMIN) return <Navigate to="/admin" replace />;
+  if (role === ROLES.INSTRUCTOR) return <Navigate to="/instructor" replace />;
+  if (role === ROLES.TRAINEE) return <Navigate to="/trainee" replace />;
+  return <Navigate to="/select-role" replace />;
+};
+
+export default function App() {
+  return (
+    <Routes>
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegistrationPage />} />
+      <Route path="/unauthorized" element={<UnauthorizedPage />} />
+
+      <Route element={<RequireAuth />}>
+        <Route path="/select-role" element={<RoleSelectionPage />} />
+
+        <Route element={<AppLayout />}>
+          <Route element={<RoleRoute allowed={[ROLES.ADMIN]} />}>
+            <Route path="/admin" element={<AdminDashboardPage />} />
+            <Route path="/admin/dashboard" element={<AdminDashboardPage />} />
+            <Route path="/admin/create-case" element={<CaseFormRoute />} />
+            <Route path="/admin/edit-case/:caseId" element={<CaseFormRoute />} />
+            <Route path="/admin/case-overview/:caseId" element={<AdminCaseOverviewRoute />} />
+            <Route path="/admin/case-data-audit" element={<AdminCaseDataAuditPage />} />
+            <Route path="/admin/user-management" element={<AdminUserManagementPage />} />
+            <Route path="/admin/case-submissions/:caseId" element={<AdminCaseSubmissionsRoute />} />
+            <Route path="/admin/case-progress/:caseId" element={<AdminCaseProgressRoute />} />
+            <Route path="/admin/submission-detail/:caseId/:userId" element={<AdminSubmissionDetailRoute />} />
+          </Route>
+
+          <Route element={<RoleRoute allowed={[ROLES.INSTRUCTOR]} />}>
+            <Route path="/instructor" element={<InstructorDashboardPage />} />
+          </Route>
+
+          <Route element={<RoleRoute allowed={[ROLES.TRAINEE]} />}>
+            <Route path="/trainee" element={<TraineeDashboardPage />} />
+            <Route path="/trainee/dashboard" element={<TraineeDashboardPage />} />
+            <Route path="/trainee/case/:caseId" element={<TraineeCaseRoute />} />
+            <Route path="/cases/:caseId" element={<TraineeCaseRoute />} />
+            <Route path="/trainee/submission-history" element={<TraineeSubmissionHistoryPage />} />
+            <Route path="/trainee/history" element={<TraineeSubmissionHistoryPage />} />
+          </Route>
+        </Route>
+      </Route>
+
+      <Route path="/" element={<HomeRedirect />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}

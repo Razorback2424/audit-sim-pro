@@ -1,11 +1,122 @@
 // functions/index.js
 const functions = require('firebase-functions');
+const { onDocumentWritten } = require('firebase-functions/v2/firestore');
 const admin = require('firebase-admin');
 
 // Initialize Firebase Admin SDK
 // This is typically done automatically when deploying to Cloud Functions.
 // For local testing, you might need: admin.initializeApp({ credential: admin.credential.applicationDefault() });
 admin.initializeApp();
+
+const ANSWER_TOLERANCE = 0.01;
+
+const toNumber = (value) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : 0;
+};
+
+const stableStringify = (value) => {
+  if (value === undefined) {
+    return 'undefined';
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringify(entry)).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(value);
+};
+
+const normalizeSelection = (list) => {
+  if (!Array.isArray(list)) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      list
+        .filter((value) => typeof value === 'string')
+        .map((value) => value.trim())
+        .filter(Boolean)
+    )
+  ).sort();
+};
+
+const findPrimaryClassification = (totals = {}) => {
+  const sorted = Object.entries(totals)
+    .map(([key, value]) => ({ key, value: toNumber(value) }))
+    .sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+  const primary = sorted.find((entry) => Math.abs(entry.value) > ANSWER_TOLERANCE);
+  return primary ? primary.key : '';
+};
+
+const detectSplitMode = (disbursement, totals) => {
+  if (disbursement?.answerKeyMode === 'split') {
+    return true;
+  }
+  const nonZero = Object.values(totals).filter((value) => Math.abs(value) > ANSWER_TOLERANCE);
+  return nonZero.length > 1;
+};
+
+const buildGradingDetail = (disbursement, userAllocations = {}) => {
+  const answerKey = disbursement?.answerKey || {};
+  const classificationKeys = Array.from(
+    new Set(
+      Object.keys(answerKey)
+        .concat(Object.keys(userAllocations))
+        .filter((key) => key !== 'explanation')
+    )
+  );
+
+  if (
+    classificationKeys.length === 0 &&
+    typeof disbursement?.answerKeySingleClassification === 'string'
+  ) {
+    classificationKeys.push(disbursement.answerKeySingleClassification);
+  }
+
+  const userTotals = classificationKeys.reduce((acc, key) => {
+    acc[key] = toNumber(userAllocations[key]);
+    return acc;
+  }, {});
+
+  const answerTotals = classificationKeys.reduce((acc, key) => {
+    acc[key] = toNumber(answerKey[key]);
+    return acc;
+  }, {});
+
+  let overallCorrect = true;
+  const fields = {};
+  classificationKeys.forEach((key) => {
+    const userVal = userTotals[key] || 0;
+    const correctVal = answerTotals[key] || 0;
+    const isCorrect = Math.abs(userVal - correctVal) <= ANSWER_TOLERANCE;
+    fields[key] = { user: userVal, correct: correctVal, isCorrect };
+    if (!isCorrect) {
+      overallCorrect = false;
+    }
+  });
+
+  const splitMode = detectSplitMode(disbursement, answerTotals);
+  const userClassification = findPrimaryClassification(userTotals);
+  const correctClassification = findPrimaryClassification(answerTotals);
+
+  return {
+    paymentId: disbursement?.paymentId,
+    isCorrect: overallCorrect,
+    splitMode,
+    fields,
+    userClassification,
+    correctClassification,
+    explanation:
+      typeof answerKey.explanation === 'string' && answerKey.explanation.trim().length > 0
+        ? answerKey.explanation
+        : null,
+  };
+};
 
 // This function will trigger whenever a document in the 'roles' collection is created or updated.
 exports.onRoleChangeSetCustomClaim = functions.firestore
@@ -22,10 +133,11 @@ exports.onRoleChangeSetCustomClaim = functions.firestore
     }
 
     const role = roleData.role;
+    const orgId = roleData.orgId || null;
 
     try {
-      await admin.auth().setCustomUserClaims(userId, { role: role });
-      console.log(`Custom claim 'role' set to '${role}' for user ${userId}`);
+      await admin.auth().setCustomUserClaims(userId, { role, orgId });
+      console.log(`Custom claims set for user ${userId}`, { role, orgId });
       return null;
     } catch (error) {
       console.error(`Error setting custom claim for user ${userId}:`, error);
@@ -38,13 +150,11 @@ exports.listRosterOptions = functions.https.onCall(async (data, context) => {
     throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
   }
 
-  const role = context.auth.token?.role;
-  if (role !== 'admin') {
-    const roleDoc = await admin.firestore().doc(`roles/${context.auth.uid}`).get();
-    const effectiveRole = roleDoc.exists ? roleDoc.data()?.role : null;
-    if (effectiveRole !== 'admin') {
-      throw new functions.https.HttpsError('permission-denied', 'Admin role required.');
-    }
+  const requesterRole = context.auth.token?.role;
+  const requesterOrgId = context.auth.token?.orgId ?? null;
+
+  if (requesterRole !== 'admin' && requesterRole !== 'instructor') {
+    throw new functions.https.HttpsError('permission-denied', 'Insufficient permissions.');
   }
 
   const appId = data?.appId;
@@ -53,8 +163,16 @@ exports.listRosterOptions = functions.https.onCall(async (data, context) => {
   }
 
   const firestore = admin.firestore();
-  const rosterCollection = firestore.collection(`artifacts/${appId}/users`);
-  const rosterSnapshot = await rosterCollection.get();
+  let rosterQuery = firestore.collection(`artifacts/${appId}/users`);
+
+  if (requesterRole === 'instructor') {
+    if (!requesterOrgId) {
+      throw new functions.https.HttpsError('failed-precondition', 'Instructor has no Org ID.');
+    }
+    rosterQuery = rosterQuery.where('orgId', '==', requesterOrgId);
+  }
+
+  const rosterSnapshot = await rosterQuery.get();
 
   const roster = [];
 
@@ -92,8 +210,97 @@ exports.listRosterOptions = functions.https.onCall(async (data, context) => {
       email,
       label: displayName || email || userId,
       role: userData.role || profileData.role || null,
+      orgId: userData.orgId || profileData.orgId || null,
     });
   }
 
   return { roster };
 });
+
+exports.gradeSubmission = onDocumentWritten(
+  'artifacts/{appId}/users/{userId}/caseSubmissions/{caseId}',
+  async (event) => {
+    if (!event?.data?.after?.exists) {
+      return null;
+    }
+
+    const submission = event.data.after.data();
+    if (!submission || !submission.submittedAt) {
+      return null;
+    }
+
+    const beforeData = event.data.before?.exists ? event.data.before.data() : null;
+    const beforeClassifications = beforeData?.disbursementClassifications || {};
+    const afterClassifications = submission.disbursementClassifications || {};
+    const classificationsChanged =
+      stableStringify(beforeClassifications) !== stableStringify(afterClassifications);
+
+    const beforeSelection = normalizeSelection(beforeData?.selectedPaymentIds || []);
+    const afterSelection = normalizeSelection(submission.selectedPaymentIds || []);
+    const selectionChanged =
+      stableStringify(beforeSelection) !== stableStringify(afterSelection);
+
+    if (!classificationsChanged && !selectionChanged && submission.grade != null && submission.gradedAt) {
+      return null;
+    }
+
+    const firestore = admin.firestore();
+    const caseSnapshot = await firestore
+      .doc(`artifacts/${event.params.appId}/public/data/cases/${event.params.caseId}`)
+      .get();
+
+    if (!caseSnapshot.exists) {
+      console.warn(
+        `[gradeSubmission] Case ${event.params.caseId} not found under app ${event.params.appId}.`
+      );
+      return null;
+    }
+
+    const caseData = caseSnapshot.data() || {};
+    const disbursementList = Array.isArray(caseData.disbursements)
+      ? caseData.disbursements
+      : [];
+
+    const disbursementMap = new Map();
+    disbursementList.forEach((item) => {
+      if (item && item.paymentId) {
+        disbursementMap.set(item.paymentId, item);
+      }
+    });
+
+    const selectedIds =
+      afterSelection.length > 0
+        ? afterSelection
+        : Object.keys(afterClassifications).filter(Boolean);
+
+    let correctCount = 0;
+    let totalCount = 0;
+    const gradingDetails = {};
+
+    selectedIds.forEach((paymentId) => {
+      const disbursement = disbursementMap.get(paymentId);
+      if (!disbursement) {
+        return;
+      }
+      const userAllocations = afterClassifications[paymentId] || {};
+      const detail = buildGradingDetail(disbursement, userAllocations);
+      gradingDetails[paymentId] = detail;
+      totalCount += 1;
+      if (detail.isCorrect) {
+        correctCount += 1;
+      }
+    });
+
+    const score = totalCount > 0 ? (correctCount / totalCount) * 100 : 0;
+    const roundedScore = Math.round(score * 100) / 100;
+
+    return event.data.after.ref.set(
+      {
+        grade: roundedScore,
+        gradedAt: admin.firestore.FieldValue.serverTimestamp(),
+        gradingDetails,
+      },
+      { merge: true }
+    );
+  }
+);

@@ -31,6 +31,30 @@ export const saveSubmission = async (userId, caseId, data) => {
   );
 };
 
+export const subscribeToSubmission = (userId, caseId, onData, onError) => {
+  if (!userId || !caseId) {
+    if (typeof onData === 'function') {
+      onData(null);
+    }
+    return () => {};
+  }
+  const ref = doc(db, FirestorePaths.USER_CASE_SUBMISSION(userId, caseId));
+  return onSnapshot(
+    ref,
+    (snapshot) => {
+      if (typeof onData === 'function') {
+        onData(snapshot.exists() ? { id: snapshot.id, ...snapshot.data() } : null);
+      }
+    },
+    (error) => {
+      console.error('[SubmissionService] Failed to subscribe to submission', error);
+      if (typeof onError === 'function') {
+        onError(error);
+      }
+    }
+  );
+};
+
 export const fetchSubmission = async (userId, caseId) => {
   const ref = doc(db, FirestorePaths.USER_CASE_SUBMISSION(userId, caseId));
   const snap = await getDoc(ref);

@@ -1,5 +1,5 @@
 import { fetchUsersWithProfiles, fetchUserProfile, setUserRole, upsertUserProfile } from './userService';
-import { collection, getDocs, doc, getDoc, setDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 
 jest.mock('firebase/firestore', () => ({
@@ -8,6 +8,7 @@ jest.mock('firebase/firestore', () => ({
   doc: jest.fn(),
   getDoc: jest.fn(),
   setDoc: jest.fn(),
+  serverTimestamp: jest.fn(() => 'ts'),
 }));
 
 jest.mock('firebase/functions', () => ({

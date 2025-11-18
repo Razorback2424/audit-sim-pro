@@ -1,6 +1,6 @@
 import { collection, getDocs, doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { db, FirestorePaths, functions, appId } from '../AppCore';
+import { db, FirestorePaths, functions, appId, auth } from '../AppCore';
 
 const isPermissionError = (error) => {
   const code = error?.code || error?.message;
@@ -9,6 +9,12 @@ const isPermissionError = (error) => {
     String(code).includes('permission-denied') ||
     String(code).includes('Missing or insufficient permissions')
   );
+};
+
+export const getCurrentUserOrgId = async () => {
+  if (!auth?.currentUser) return null;
+  const token = await auth.currentUser.getIdTokenResult();
+  return token?.claims?.orgId ?? null;
 };
 
 const mapUserRecord = (userId, userDocData = {}, profileData = {}, profileExists = false) => {
@@ -66,7 +72,12 @@ const fetchUsersViaCallable = async () => {
   return roster.map((entry) =>
     mapUserRecord(
       entry.id,
-      { role: entry.role ?? null, displayName: entry.displayName ?? null, email: entry.email ?? null },
+      {
+        role: entry.role ?? null,
+        displayName: entry.displayName ?? null,
+        email: entry.email ?? null,
+        orgId: entry.orgId ?? null,
+      },
       {},
       true
     )
@@ -110,9 +121,35 @@ export const setUserRole = async (userId, role) => {
   return role;
 };
 
-export const upsertUserProfile = async (userId, data) => {
-  const ref = doc(db, FirestorePaths.USER_PROFILE(userId));
-  await setDoc(ref, data, { merge: true });
+export const upsertUserProfile = async (userId, data = {}) => {
+  const profileRef = doc(db, FirestorePaths.USER_PROFILE(userId));
+  await setDoc(
+    profileRef,
+    {
+      ...data,
+      lastUpdatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  const userDocUpdates = {};
+  if (data.displayName !== undefined) userDocUpdates.displayName = data.displayName;
+  if (data.email !== undefined) userDocUpdates.email = data.email;
+  if (data.orgId !== undefined) userDocUpdates.orgId = data.orgId;
+  if (data.role !== undefined) userDocUpdates.role = data.role;
+  if (Object.keys(userDocUpdates).length > 0) {
+    userDocUpdates.updatedAt = serverTimestamp();
+    const userDocRef = doc(db, FirestorePaths.USERS_COLLECTION(), userId);
+    await setDoc(userDocRef, userDocUpdates, { merge: true });
+  }
+
+  if (data.role !== undefined || data.orgId !== undefined) {
+    const rolePayload = {};
+    if (data.role !== undefined) rolePayload.role = data.role;
+    if (data.orgId !== undefined) rolePayload.orgId = data.orgId;
+    const roleRef = doc(db, 'roles', userId);
+    await setDoc(roleRef, rolePayload, { merge: true });
+  }
 };
 
 export const adminUpdateUserRole = async (userId, role) => {
