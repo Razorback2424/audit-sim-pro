@@ -30,6 +30,7 @@ import DashboardMetrics from '../components/admin/DashboardMetrics';
 import SetupAlerts from '../components/admin/SetupAlerts';
 import RecentActivity from '../components/admin/RecentActivity';
 import QuickActions from '../components/admin/QuickActions';
+import { AUDIT_AREA_VALUES, AUDIT_AREA_LABELS } from '../models/caseConstants';
 
 const STATUS_OPTIONS = [
   { value: 'assigned', label: 'Assigned' },
@@ -110,6 +111,7 @@ export default function AdminDashboardPage() {
     totalDisbursements: 0,
     totalMappings: 0,
     privateAudiences: 0,
+    auditAreaCounts: {},
   });
   const [alerts, setAlerts] = useState([]);
   const [recentActivity, setRecentActivity] = useState([]);
@@ -212,6 +214,11 @@ export default function AdminDashboardPage() {
       .filter(Boolean);
   }, [query?.visibility]);
 
+  const auditAreaFilter = useMemo(() => {
+    const raw = (query?.auditArea ?? '').trim();
+    return AUDIT_AREA_VALUES.includes(raw) ? raw : '';
+  }, [query?.auditArea]);
+
   const sortOption = useMemo(() => {
     if (!query?.sort) return DEFAULT_CASE_SORT;
     const valid = CASE_SORT_CHOICES.find((option) => option.value === query.sort);
@@ -237,6 +244,7 @@ export default function AdminDashboardPage() {
           search: debouncedSearch,
           status: statusFilters,
           visibility: visibilityFilters,
+          auditArea: auditAreaFilter || undefined,
           sort: sortOption,
           page: currentPage,
           limit: pageSize,
@@ -275,6 +283,7 @@ export default function AdminDashboardPage() {
     debouncedSearch,
     statusFilters,
     visibilityFilters,
+    auditAreaFilter,
     sortOption,
     currentPage,
     pageSize,
@@ -479,7 +488,7 @@ export default function AdminDashboardPage() {
   const hasNextPage = casesState.hasNextPage;
   const hasPreviousPage = casesState.hasPreviousPage;
   const isLoadingCases = casesState.loading;
-  const filtersActive = statusFilters.length + visibilityFilters.length;
+  const filtersActive = statusFilters.length + visibilityFilters.length + (auditAreaFilter ? 1 : 0);
 
   const toggleStatusFilter = (value) => {
     const current = new Set(statusFilters);
@@ -515,11 +524,33 @@ export default function AdminDashboardPage() {
     );
   };
 
+  const handleAuditAreaChange = (event) => {
+    const { value } = event.target;
+    setQuery(
+      {
+        auditArea: value ? value : undefined,
+        page: '1',
+      },
+      { replace: false }
+    );
+  };
+
+  const clearAuditAreaFilter = () => {
+    setQuery(
+      {
+        auditArea: undefined,
+        page: '1',
+      },
+      { replace: false }
+    );
+  };
+
   const clearFilters = () => {
     setQuery(
       {
         status: undefined,
         visibility: undefined,
+        auditArea: undefined,
         page: '1',
       },
       { replace: false }
@@ -858,6 +889,24 @@ export default function AdminDashboardPage() {
                       ))}
                     </Select>
                   </div>
+                  <div className="flex items-center gap-2">
+                    <label htmlFor="case-audit-area" className="text-sm font-medium text-gray-600">
+                      Audit area
+                    </label>
+                    <Select
+                      id="case-audit-area"
+                      value={auditAreaFilter}
+                      onChange={handleAuditAreaChange}
+                      className="w-48"
+                    >
+                      <option value="">All areas</option>
+                      {AUDIT_AREA_VALUES.map((value) => (
+                        <option key={value} value={value}>
+                          {AUDIT_AREA_LABELS[value] || value}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
                   <div className="inline-flex items-center overflow-hidden rounded-lg border border-gray-200">
                     {VIEW_OPTIONS.map(({ id, label, Icon }) => {
                       const isActive = viewMode === id;
@@ -928,12 +977,22 @@ export default function AdminDashboardPage() {
                       );
                     })}
                   </div>
+                  </div>
                 </div>
-              </div>
+              {auditAreaFilter && (
+                <div className="flex items-center justify-between rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-700">
+                  <span>
+                    Audit area filter: {AUDIT_AREA_LABELS[auditAreaFilter] || auditAreaFilter}
+                  </span>
+                  <Button onClick={clearAuditAreaFilter} variant="secondary" className="text-xs">
+                    Clear
+                  </Button>
+                </div>
+              )}
               {filtersActive > 0 && (
                 <div className="flex justify-end">
                   <Button onClick={clearFilters} variant="secondary" className="text-sm">
-                    Clear status & visibility filters
+                    Clear filters
                   </Button>
                 </div>
               )}

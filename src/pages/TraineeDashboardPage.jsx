@@ -232,7 +232,7 @@ export default function TraineeDashboardPage() {
               onClick={() => navigate('/trainee/submission-history')}
               className="text-sm"
             >
-              View Completed Cases
+              View Submission History
             </Button>
           </div>
         </div>

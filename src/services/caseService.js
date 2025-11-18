@@ -131,6 +131,13 @@ const normalizeVisibilityFilters = (input) => {
     .filter((item) => item === 'public' || item === 'private' || item === 'rostered');
 };
 
+const normalizeAuditAreaFilter = (value) => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return AUDIT_AREA_VALUES.includes(trimmed) ? trimmed : null;
+};
+
 const toVisibilityBooleanFilters = (filters) => {
   if (!Array.isArray(filters) || filters.length === 0) return [];
   const mapped = filters.map((value) => (value === 'public' ? true : false));
@@ -343,7 +350,7 @@ const toNormalizedCaseModel = (id, raw = {}) => {
   return toCaseModel(id, normalized);
 };
 
-const buildAdminCasesQueryParts = ({ searchTerm, statusFilters, visibilityFilters, sortKey }) => {
+const buildAdminCasesQueryParts = ({ searchTerm, statusFilters, visibilityFilters, auditAreaFilter, sortKey }) => {
   const deletedFilter = where('_deleted', '==', false);
   const filters = [deletedFilter];
 
@@ -356,6 +363,10 @@ const buildAdminCasesQueryParts = ({ searchTerm, statusFilters, visibilityFilter
   const visibilityBooleanFilters = toVisibilityBooleanFilters(visibilityFilters);
   if (visibilityBooleanFilters.length === 1) {
     filters.push(where('publicVisible', '==', visibilityBooleanFilters[0]));
+  }
+
+  if (auditAreaFilter) {
+    filters.push(where('auditArea', '==', auditAreaFilter));
   }
 
   const order = [];
@@ -528,6 +539,7 @@ export const fetchCasesPage = async ({
   search = '',
   status = [],
   visibility = [],
+  auditArea = '',
   sort = DEFAULT_CASE_SORT,
   page = 1,
   limit: limitInput = 12,
@@ -536,6 +548,7 @@ export const fetchCasesPage = async ({
   const searchTerm = normalizeSearchValue(search);
   const statusFilters = normalizeStatusFilters(status);
   const visibilityFilters = normalizeVisibilityFilters(visibility);
+  const auditAreaFilter = normalizeAuditAreaFilter(auditArea);
   const sortKey = CASE_SORT_CONFIG[sort] ? sort : DEFAULT_CASE_SORT;
 
   const parsedPage = Number.parseInt(page, 10);
@@ -547,6 +560,7 @@ export const fetchCasesPage = async ({
     searchTerm,
     statusFilters,
     visibilityFilters,
+    auditAreaFilter,
     sortKey,
   });
 
@@ -618,6 +632,7 @@ export const fetchCasesPage = async ({
     search: searchTerm,
     statusFilters,
     visibilityFilters,
+    auditAreaFilter,
   };
 };
 
@@ -887,9 +902,12 @@ export const subscribeToAdminCaseSummary = (onData, onError) =>
         if (current.publicVisible === false && Array.isArray(current.visibleToUserIds) && current.visibleToUserIds.length > 0) {
           acc.privateAudiences += 1;
         }
+        const rawArea = typeof current.auditArea === 'string' ? current.auditArea.trim() : '';
+        const area = rawArea || DEFAULT_AUDIT_AREA;
+        acc.auditAreaCounts[area] = (acc.auditAreaCounts[area] || 0) + 1;
         return acc;
       },
-      { activeCases: 0, totalDisbursements: 0, totalMappings: 0, privateAudiences: 0 }
+      { activeCases: 0, totalDisbursements: 0, totalMappings: 0, privateAudiences: 0, auditAreaCounts: {} }
     );
     onData(summary);
   }, onError);

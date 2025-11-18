@@ -2,16 +2,19 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Button, useRoute, useModal } from '../AppCore';
 import { fetchCase } from '../services/caseService';
 import { fetchSubmission } from '../services/submissionService';
-import { CLASSIFICATION_FIELDS } from '../constants/classificationFields';
+import { getClassificationFields } from '../constants/classificationFields';
+import { DEFAULT_AUDIT_AREA } from '../models/caseConstants';
 
 export default function AdminSubmissionDetailPage({ params }) {
   const { caseId, userId } = params;
   const { navigate } = useRoute();
   const { showModal } = useModal();
   const [caseName, setCaseName] = useState('');
+  const [auditArea, setAuditArea] = useState(DEFAULT_AUDIT_AREA);
   const [submission, setSubmission] = useState(null);
   const [loading, setLoading] = useState(true);
   const currency = useMemo(() => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }), []);
+  const classificationFields = useMemo(() => getClassificationFields(auditArea), [auditArea]);
 
   useEffect(() => {
     if (!caseId || !userId) {
@@ -20,7 +23,14 @@ export default function AdminSubmissionDetailPage({ params }) {
     }
     setLoading(true);
     fetchCase(caseId).then((c) => {
-      if (c) setCaseName(c.caseName);
+      if (c) {
+        setCaseName(c.caseName);
+        if (typeof c.auditArea === 'string' && c.auditArea.trim()) {
+          setAuditArea(c.auditArea.trim());
+        } else {
+          setAuditArea(DEFAULT_AUDIT_AREA);
+        }
+      }
     });
     fetchSubmission(userId, caseId)
       .then((doc) => {
@@ -99,7 +109,7 @@ export default function AdminSubmissionDetailPage({ params }) {
                             <table className="min-w-[280px] text-xs text-left text-gray-700">
                               <thead className="bg-gray-100">
                                 <tr>
-                                  {CLASSIFICATION_FIELDS.map(({ label }) => (
+                                  {classificationFields.map(({ label }) => (
                                     <th key={label} className="px-2 py-1 font-semibold text-gray-600">
                                       {label}
                                     </th>
@@ -108,7 +118,7 @@ export default function AdminSubmissionDetailPage({ params }) {
                               </thead>
                               <tbody>
                                 <tr>
-                                  {CLASSIFICATION_FIELDS.map(({ key, label }) => (
+                                  {classificationFields.map(({ key, label }) => (
                                     <td key={label} className="px-2 py-1">
                                       {currency.format(Number(traineeAnswer[key] || 0))}
                                     </td>

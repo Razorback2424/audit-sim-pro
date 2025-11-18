@@ -23,6 +23,7 @@ import {
   AUDIT_AREA_LABELS,
   CASE_GROUP_LABELS,
 } from '../models/caseConstants';
+import { getClassificationFields } from '../constants/classificationFields';
 
 const STATUS_OPTIONS = [
   { value: 'assigned', label: 'Assigned' },
@@ -41,14 +42,6 @@ const ANSWER_KEY_LABELS = {
 };
 const ANSWER_KEY_PLACEHOLDER = '__choose';
 const DEFAULT_ANSWER_KEY_CLASSIFICATION = ANSWER_KEY_PLACEHOLDER;
-const ANSWER_KEY_CLASSIFICATION_OPTIONS = [
-  { value: ANSWER_KEY_PLACEHOLDER, label: 'Choose classification…' },
-  ...ANSWER_KEY_FIELDS.map((key) => ({
-    value: key,
-    label: ANSWER_KEY_LABELS[key],
-  })),
-];
-
 const buildSingleAnswerKey = (classification, amountValue, explanation = '') => {
   const sanitizedAmount = Number(amountValue) || 0;
   const next = {
@@ -69,13 +62,11 @@ const detectAnswerKeyMode = (disbursement) => {
   const amountNumber = Number(disbursement.amount || 0);
   let nonZeroCount = 0;
   let lastClassification = DEFAULT_ANSWER_KEY_CLASSIFICATION;
-  let lastValue = 0;
   ANSWER_KEY_FIELDS.forEach((field) => {
     const value = Number(answerKey[field] || 0);
     if (!Number.isNaN(value) && value > 0) {
       nonZeroCount += 1;
       lastClassification = field;
-      lastValue = value;
     }
   });
   const total = ANSWER_KEY_FIELDS.reduce((sum, field) => {
@@ -255,6 +246,24 @@ function useCaseForm({ params }) {
   const [caseName, setCaseName] = useState('');
   const [publicVisible, setPublicVisible] = useState(true);
   const [auditArea, setAuditArea] = useState(DEFAULT_AUDIT_AREA);
+  const classificationFields = useMemo(() => getClassificationFields(auditArea), [auditArea]);
+  const answerKeyLabels = useMemo(() => {
+    const map = { ...ANSWER_KEY_LABELS };
+    classificationFields.forEach(({ key, label }) => {
+      if (key) map[key] = label || map[key] || key;
+    });
+    return map;
+  }, [classificationFields]);
+  const answerKeyClassificationOptions = useMemo(
+    () => [
+      { value: ANSWER_KEY_PLACEHOLDER, label: 'Choose classification…' },
+      ...classificationFields.map(({ key, label }) => ({
+        value: key,
+        label: label || ANSWER_KEY_LABELS[key] || key,
+      })),
+    ],
+    [classificationFields]
+  );
   const [caseGroupSelection, setCaseGroupSelection] = useState('__none');
   const [customCaseGroupId, setCustomCaseGroupId] = useState('');
   const [selectedUserIds, setSelectedUserIds] = useState([]);
@@ -1577,6 +1586,9 @@ function useCaseForm({ params }) {
   const answerKey = {
     disbursements,
     updateAnswerKeyForDisbursement,
+    classificationFields,
+    answerKeyLabels,
+    answerKeyClassificationOptions,
   };
 
   const files = {
@@ -2291,7 +2303,29 @@ function AttachmentsStep({ attachments, files }) {
   );
 }
 
-function AnswerKeyStep({ disbursements, onUpdate }) {
+function AnswerKeyStep({
+  disbursements,
+  onUpdate,
+  classificationFields,
+  answerKeyLabels,
+  classificationOptions,
+}) {
+  const normalizedFields =
+    Array.isArray(classificationFields) && classificationFields.length > 0
+      ? classificationFields
+      : ANSWER_KEY_FIELDS.map((key) => ({ key, label: ANSWER_KEY_LABELS[key] || key }));
+  const normalizedLabels = answerKeyLabels || {};
+  const normalizedOptions =
+    Array.isArray(classificationOptions) && classificationOptions.length > 0
+      ? classificationOptions
+      : [
+          { value: ANSWER_KEY_PLACEHOLDER, label: 'Choose classification…' },
+          ...normalizedFields.map(({ key, label }) => ({
+            value: key,
+            label: label || ANSWER_KEY_LABELS[key] || key,
+          })),
+        ];
+
   return (
     <div className="space-y-6">
       <StepIntro
@@ -2311,6 +2345,9 @@ function AnswerKeyStep({ disbursements, onUpdate }) {
             disbursement={disbursement}
             index={index}
             onUpdate={onUpdate}
+            classificationFields={normalizedFields}
+            answerKeyLabels={normalizedLabels}
+            classificationOptions={normalizedOptions}
           />
         ))}
       </div>
@@ -2318,15 +2355,36 @@ function AnswerKeyStep({ disbursements, onUpdate }) {
   );
 }
 
-const AnswerKeyCard = ({ disbursement, index, onUpdate }) => {
+const AnswerKeyCard = ({
+  disbursement,
+  index,
+  onUpdate,
+  classificationFields = [],
+  answerKeyLabels = {},
+  classificationOptions = [],
+}) => {
   const paymentLabel = disbursement.paymentId || `Disbursement ${index + 1}`;
   const answerKey = disbursement.answerKey || {};
   const mode = disbursement.answerKeyMode || 'single';
   const splitEnabled = mode === 'split';
   const classification = disbursement.answerKeySingleClassification || DEFAULT_ANSWER_KEY_CLASSIFICATION;
   const classificationChosen = classification && classification !== ANSWER_KEY_PLACEHOLDER;
+  const normalizedFields =
+    Array.isArray(classificationFields) && classificationFields.length > 0
+      ? classificationFields
+      : ANSWER_KEY_FIELDS.map((key) => ({ key, label: ANSWER_KEY_LABELS[key] || key }));
+  const normalizedOptions =
+    Array.isArray(classificationOptions) && classificationOptions.length > 0
+      ? classificationOptions
+      : [
+          { value: ANSWER_KEY_PLACEHOLDER, label: 'Choose classification…' },
+          ...normalizedFields.map(({ key, label }) => ({
+            value: key,
+            label: label || ANSWER_KEY_LABELS[key] || key,
+          })),
+        ];
   const classificationLabel = classificationChosen
-    ? ANSWER_KEY_LABELS[classification]
+    ? (answerKeyLabels && answerKeyLabels[classification]) || ANSWER_KEY_LABELS[classification] || classification
     : 'Choose classification';
   const amountNumber = Number(disbursement.amount || 0);
   const ready = isAnswerKeyReady(disbursement);
@@ -2437,7 +2495,7 @@ const AnswerKeyCard = ({ disbursement, index, onUpdate }) => {
                 id={`classification-${disbursement._tempId}`}
                 value={classification}
                 onChange={(event) => handleClassificationChange(event.target.value)}
-                options={ANSWER_KEY_CLASSIFICATION_OPTIONS}
+                options={normalizedOptions}
                 disabled={splitEnabled}
               />
               <p className="text-xs text-blue-700">
@@ -2465,19 +2523,19 @@ const AnswerKeyCard = ({ disbursement, index, onUpdate }) => {
                 Enter the portion allocated to each classification. Totals must equal the disbursement amount.
               </p>
               <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
-                {ANSWER_KEY_FIELDS.map((field) => (
-                  <div key={field} className="flex flex-col text-sm">
-                    <label className="mb-1 font-medium text-gray-700" htmlFor={`${disbursement._tempId}-${field}`}>
-                      {ANSWER_KEY_LABELS[field]}
+                {normalizedFields.map(({ key, label }) => (
+                  <div key={key} className="flex flex-col text-sm">
+                    <label className="mb-1 font-medium text-gray-700" htmlFor={`${disbursement._tempId}-${key}`}>
+                      {(answerKeyLabels && answerKeyLabels[key]) || ANSWER_KEY_LABELS[key] || label || key}
                     </label>
                     <Input
-                      id={`${disbursement._tempId}-${field}`}
+                      id={`${disbursement._tempId}-${key}`}
                       type="number"
                       step="0.01"
                       min="0"
                       required
-                      value={answerKey?.[field] ?? ''}
-                      onChange={(event) => handleSplitFieldChange(field, event.target.value)}
+                      value={answerKey?.[key] ?? ''}
+                      onChange={(event) => handleSplitFieldChange(key, event.target.value)}
                       placeholder="0.00"
                     />
                   </div>
@@ -2812,7 +2870,13 @@ export default function CaseFormPage({ params }) {
             {activeStep === 2 ? <TransactionsStep transactions={transactions} files={files} /> : null}
             {activeStep === 3 ? <AttachmentsStep attachments={attachments} files={files} /> : null}
             {activeStep === 4 ? (
-              <AnswerKeyStep disbursements={answerKey.disbursements} onUpdate={answerKey.updateAnswerKeyForDisbursement} />
+              <AnswerKeyStep
+                disbursements={answerKey.disbursements}
+                onUpdate={answerKey.updateAnswerKeyForDisbursement}
+                classificationFields={answerKey.classificationFields}
+                answerKeyLabels={answerKey.answerKeyLabels}
+                classificationOptions={answerKey.answerKeyClassificationOptions}
+              />
             ) : null}
             {activeStep === 5 ? (
               <ReviewStep

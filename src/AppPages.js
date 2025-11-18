@@ -133,7 +133,7 @@ const traineeRoutes = {
 function App() {
   const { currentUser, loadingAuth, logout } = useAuth();
   const { role, loadingRole } = useUser();
-  const { route, navigate } = useRoute();
+  const { route, path: currentPath, navigate } = useRoute();
   const [loadingSince, setLoadingSince] = useState(() => Date.now());
 
   useEffect(() => {
@@ -166,8 +166,8 @@ function App() {
 
   useEffect(() => {
     if (loadingAuth || loadingRole) return;
-    const isOnLogin = typeof route === 'string' && route.startsWith('/login');
-    const isOnRegister = typeof route === 'string' && route.startsWith('/register');
+    const isOnLogin = typeof currentPath === 'string' && currentPath.startsWith('/login');
+    const isOnRegister = typeof currentPath === 'string' && currentPath.startsWith('/register');
 
     if (!currentUser || currentUser.isAnonymous) {
       if (!isOnLogin && !isOnRegister) navigate('/register');
@@ -177,9 +177,9 @@ function App() {
       navigate('/');
       return;
     }
-    if (!role && route !== '/select-role') navigate('/select-role');
-    else if (role && route === '/select-role') navigate('/');
-  }, [loadingAuth, loadingRole, currentUser, role, route, navigate]);
+    if (!role && currentPath !== '/select-role') navigate('/select-role');
+    else if (role && currentPath === '/select-role') navigate('/');
+  }, [loadingAuth, loadingRole, currentUser, role, currentPath, navigate]);
 
   if (loadingAuth || loadingRole) {
     console.info('[App] rendering loading screen', { loadingAuth, loadingRole });
@@ -204,12 +204,12 @@ function App() {
     );
   }
 
-  if (route === '/unauthorized') {
+  if (currentPath === '/unauthorized') {
     return <UnauthorizedPage />;
   }
 
   if (!currentUser || currentUser.isAnonymous) {
-    if (typeof route === 'string' && route.startsWith('/register')) return <RegistrationPage />;
+    if (typeof currentPath === 'string' && currentPath.startsWith('/register')) return <RegistrationPage />;
     return <LoginPage />;
   }
 
@@ -218,9 +218,9 @@ function App() {
   }
 
   const renderRoute = (routes) => {
-    for (const path in routes) {
-      const pathSegments = path.split('/');
-      const routeSegments = route.split('/');
+    const routeSegments = currentPath.split('/');
+    for (const routePattern in routes) {
+      const pathSegments = routePattern.split('/');
 
       if (pathSegments.length === routeSegments.length) {
         const params = {};
@@ -233,7 +233,7 @@ function App() {
         });
 
         if (match) {
-          const component = routes[path];
+          const component = routes[routePattern];
           return typeof component === 'function' ? component(params) : component;
         }
       }

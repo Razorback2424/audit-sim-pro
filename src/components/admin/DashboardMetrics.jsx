@@ -1,4 +1,5 @@
 import React from 'react';
+import { getAuditAreaLabel } from '../../models/caseConstants';
 
 const formatNumber = (value) => {
   if (value === null || value === undefined) return '0';
@@ -46,6 +47,12 @@ const DashboardMetrics = ({ summary, loading, onNavigate }) => {
       actionPath: '/admin/case-overview',
     },
   ];
+  const auditAreaCounts = summary?.auditAreaCounts || {};
+  const auditAreaEntries = Object.entries(auditAreaCounts)
+    .filter(([, count]) => Number(count) > 0)
+    .sort((a, b) => (b[1] || 0) - (a[1] || 0));
+  const maxAuditAreasToShow = 4;
+  const displayedAuditAreas = auditAreaEntries.slice(0, maxAuditAreasToShow);
 
   return (
     <section className="bg-white border border-gray-200 rounded-lg shadow-sm p-4 md:p-6 space-y-4">
@@ -80,6 +87,27 @@ const DashboardMetrics = ({ summary, loading, onNavigate }) => {
           </div>
         ))}
       </div>
+      {displayedAuditAreas.length > 0 && (
+        <div className="border-t border-gray-100 pt-4">
+          <h3 className="text-sm font-semibold text-gray-700">Audit areas</h3>
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {displayedAuditAreas.map(([area, count]) => (
+              <div
+                key={area}
+                className="flex items-center justify-between rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-sm"
+              >
+                <span className="font-medium text-gray-700">{getAuditAreaLabel(area)}</span>
+                <span className="text-gray-900 font-semibold">{formatNumber(count)}</span>
+              </div>
+            ))}
+          </div>
+          {auditAreaEntries.length > displayedAuditAreas.length && (
+            <p className="mt-2 text-xs text-gray-500">
+              Showing top {displayedAuditAreas.length} of {auditAreaEntries.length} audit areas.
+            </p>
+          )}
+        </div>
+      )}
     </section>
   );
 };

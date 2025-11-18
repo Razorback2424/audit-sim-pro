@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import TraineeSubmissionHistoryPage from './TraineeSubmissionHistoryPage';
 import { listUserSubmissions } from '../services/submissionService';
 import { fetchCase } from '../services/caseService';
@@ -33,8 +33,8 @@ describe('TraineeSubmissionHistoryPage', () => {
   it('renders empty state when no submissions exist', async () => {
     listUserSubmissions.mockResolvedValueOnce([]);
     render(<TraineeSubmissionHistoryPage />);
-    expect(await screen.findByText(/submission history/i)).toBeInTheDocument();
-    expect(await screen.findByText(/You have not submitted any cases yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Completed Cases/i)).toBeInTheDocument();
+    expect(await screen.findByText(/You haven't completed any cases yet/i)).toBeInTheDocument();
   });
 
   it('shows previous attempts with classification summary', async () => {
@@ -63,9 +63,16 @@ describe('TraineeSubmissionHistoryPage', () => {
 
     expect(await screen.findByText(/Case One/)).toBeInTheDocument();
     await waitFor(() => expect(fetchCase).toHaveBeenCalledWith('case-1'));
-    expect(screen.getByText(/Attempt 1/i)).toBeInTheDocument();
-    expect(screen.getByText(/Vendor/)).toBeInTheDocument();
-    expect(screen.getAllByText(/\$100\.00/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/invoice\.pdf/i)).toBeInTheDocument();
+    const timesCompletedCard = screen.getByText(/Times Completed/i).closest('div');
+    expect(timesCompletedCard).not.toBeNull();
+    if (timesCompletedCard) {
+      expect(within(timesCompletedCard).getByText(/1/)).toBeInTheDocument();
+    }
+    const latestGradeCard = screen.getByText(/Latest Grade/i).closest('div');
+    expect(latestGradeCard).not.toBeNull();
+    if (latestGradeCard) {
+      expect(within(latestGradeCard).getByText(/—/)).toBeInTheDocument();
+    }
+    expect(screen.getAllByText(/Retake Case/i).length).toBeGreaterThan(0);
   });
 });

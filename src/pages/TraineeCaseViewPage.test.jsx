@@ -6,6 +6,25 @@ import { saveSubmission } from '../services/submissionService';
 import { saveProgress, subscribeProgressForCases } from '../services/progressService';
 import { getDownloadURL } from 'firebase/storage';
 
+const mockFetch = jest.fn(() =>
+  Promise.resolve({
+    ok: true,
+    blob: () => Promise.resolve(new Blob(['mock'], { type: 'application/octet-stream' })),
+  })
+);
+
+beforeAll(() => {
+  global.fetch = mockFetch;
+});
+
+afterEach(() => {
+  mockFetch.mockClear();
+});
+
+afterAll(() => {
+  delete global.fetch;
+});
+
 jest.mock('../services/caseService', () => ({
   subscribeToCase: jest.fn(),
 }));
@@ -36,6 +55,16 @@ jest.mock('../AppCore', () => {
       <button {...props}>{isLoading ? 'Loading…' : children}</button>
     ),
     Input: (props) => <input {...props} />,
+    Select: ({ options = [], children, ...props }) => (
+      <select {...props}>
+        {children ||
+          options.map(({ value, label }) => (
+            <option key={value ?? label} value={value}>
+              {label}
+            </option>
+          ))}
+      </select>
+    ),
     useRoute: () => ({ navigate: navigateMock }),
     useModal: () => mockModal,
     useAuth: () => ({ userId: 'u1' }),
@@ -60,12 +89,12 @@ describe('TraineeCaseViewPage', () => {
   };
 
   const advanceToClassification = async () => {
-    await screen.findByText(/Step 1 — Select Disbursements/i);
+    await screen.findByRole('heading', { name: /Step 1 — Select Disbursements/i, level: 2 });
     const checkbox = screen.getByRole('checkbox', { name: /ID:\s*p1/i });
     await userEvent.click(checkbox);
     const continueButton = screen.getByRole('button', { name: /Continue to Classification/i });
     await userEvent.click(continueButton);
-    await screen.findByText(/Step 2 — Classify Results/i);
+    await screen.findByRole('heading', { name: /Step 2 — Classify Results/i, level: 2 });
   };
 
   beforeEach(() => {
@@ -101,10 +130,38 @@ describe('TraineeCaseViewPage', () => {
 
     await advanceToClassification();
     await flushAsync();
+    const classificationSelect = await screen.findByRole('combobox', { name: /Classification/i });
+    expect(classificationSelect).toBeEnabled();
+    const splitToggle = await screen.findByRole('checkbox', { name: /Split across classifications/i });
+    expect(splitToggle).toBeEnabled();
+    await userEvent.click(splitToggle);
     const [properlyIncluded] = await screen.findAllByLabelText(/Properly Included/i);
     const [improperlyExcluded] = await screen.findAllByLabelText(/Improperly Excluded/i);
     expect(properlyIncluded).toBeEnabled();
     expect(improperlyExcluded).toBeEnabled();
+  });
+
+  test('uses cash-specific classification copy for cash audit area', async () => {
+    renderCase({
+      caseName: 'Cash Case',
+      auditArea: 'cash',
+      disbursements: [
+        { paymentId: 'p1', payee: 'Drawer', amount: '85', paymentDate: '2024-02-01', downloadURL: 'https://example.com' },
+      ],
+    });
+
+    await advanceToClassification();
+    await flushAsync();
+    expect(screen.getByText(/Select Cash Counts/i)).toBeInTheDocument();
+    expect(screen.getByText(/Reconcile Variances/i)).toBeInTheDocument();
+
+    const classificationSelect = await screen.findByRole('combobox', { name: /Classification/i });
+    await userEvent.selectOptions(classificationSelect, 'properlyIncluded');
+    expect(
+      within(classificationSelect).getByRole('option', { name: /Cash Count Matches/i })
+    ).toBeInTheDocument();
+    expect(within(classificationSelect).getByRole('option', { name: /Cash Over/i })).toBeInTheDocument();
+    expect(within(classificationSelect).getByRole('option', { name: /Cash Short/i })).toBeInTheDocument();
   });
 
   test('fetches evidence for storage-backed documents on classification step', async () => {
@@ -252,6 +309,10 @@ describe('TraineeCaseViewPage', () => {
 
     await advanceToClassification();
 
+    const classificationSelect = await screen.findByRole('combobox', { name: /Classification/i });
+    const splitToggle = await screen.findByRole('checkbox', { name: /Split across classifications/i });
+    await userEvent.click(splitToggle);
+
     const enterValue = async (label, value) => {
       const [input] = await screen.findAllByLabelText(new RegExp(label, 'i'));
       await userEvent.clear(input);
@@ -266,9 +327,7 @@ describe('TraineeCaseViewPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /Submit Responses/i }));
 
     await waitFor(() => expect(saveSubmission).toHaveBeenCalled());
-    await waitFor(() => {
-      expect(screen.getAllByRole('button', { name: /View Document/i })).toHaveLength(2);
-    });
+    await screen.findByRole('heading', { name: /Submission Confirmed/i });
     const [, , payload] = saveSubmission.mock.calls[0];
     expect(payload.retrievedDocuments).toHaveLength(2);
     expect(payload.disbursementClassifications.p1).toEqual({

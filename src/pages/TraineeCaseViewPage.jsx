@@ -6,7 +6,8 @@ import { subscribeToCase } from '../services/caseService';
 import { saveSubmission } from '../services/submissionService';
 import { saveProgress, subscribeProgressForCases } from '../services/progressService';
 import { Send, Loader2, ExternalLink, Download, CheckCircle2, XCircle, Info } from 'lucide-react';
-import { CLASSIFICATION_FIELDS } from '../constants/classificationFields';
+import { getClassificationFields, getFlowCopy } from '../constants/classificationFields';
+import { DEFAULT_AUDIT_AREA } from '../models/caseConstants';
 
 const FLOW_STEPS = Object.freeze({
   SELECTION: 'selection',
@@ -15,18 +16,6 @@ const FLOW_STEPS = Object.freeze({
 });
 
 const STEP_SEQUENCE = [FLOW_STEPS.SELECTION, FLOW_STEPS.TESTING, FLOW_STEPS.RESULTS];
-
-const STEP_LABELS = {
-  [FLOW_STEPS.SELECTION]: 'Select Disbursements',
-  [FLOW_STEPS.TESTING]: 'Classify Results',
-  [FLOW_STEPS.RESULTS]: 'Review Outcome',
-};
-
-const STEP_DESCRIPTIONS = {
-  [FLOW_STEPS.SELECTION]: 'Choose which disbursements you will test.',
-  [FLOW_STEPS.TESTING]: 'Allocate the amounts across each classification and review documents.',
-  [FLOW_STEPS.RESULTS]: 'See a recap of your responses.',
-};
 
 const isInlinePreviewable = (contentType, fileNameOrPath) => {
   const normalizedType = typeof contentType === 'string' ? contentType.toLowerCase() : '';
@@ -68,37 +57,35 @@ const isSameSelectionMap = (currentMap, nextMap) => {
   return currentKeys.every((key) => !!nextMap[key]);
 };
 
-const CLASSIFICATION_KEY_SET = new Set(CLASSIFICATION_FIELDS.map(({ key }) => key));
-
-const createEmptySplitValues = () => {
+const createEmptySplitValuesForFields = (fields) => {
   const splits = {};
-  CLASSIFICATION_FIELDS.forEach(({ key }) => {
+  fields.forEach(({ key }) => {
     splits[key] = '';
   });
   return splits;
 };
 
-const buildEmptyAllocationState = () => ({
+const buildEmptyAllocationStateForFields = (fields) => ({
   mode: 'single',
   singleClassification: '',
-  splitValues: createEmptySplitValues(),
+  splitValues: createEmptySplitValuesForFields(fields),
 });
 
-const toValidClassificationKey = (value) =>
-  typeof value === 'string' && CLASSIFICATION_KEY_SET.has(value) ? value : '';
+const toValidClassificationKey = (value, keySet) =>
+  typeof value === 'string' && keySet.has(value) ? value : '';
 
-const normalizeAllocationShape = (rawAllocation) => {
+const normalizeAllocationShapeForFields = (rawAllocation, fields, keySet) => {
   if (!rawAllocation || typeof rawAllocation !== 'object') {
-    return buildEmptyAllocationState();
+    return buildEmptyAllocationStateForFields(fields);
   }
 
   // Legacy payloads stored just a classification totals object.
-  const legacyDetected = CLASSIFICATION_FIELDS.some(({ key }) => rawAllocation[key] !== undefined);
+  const legacyDetected = fields.some(({ key }) => rawAllocation[key] !== undefined);
   if (legacyDetected && !rawAllocation.mode) {
-    const legacy = buildEmptyAllocationState();
+    const legacy = buildEmptyAllocationStateForFields(fields);
     const nonZeroKeys = [];
 
-    CLASSIFICATION_FIELDS.forEach(({ key }) => {
+    fields.forEach(({ key }) => {
       const value = rawAllocation[key];
       const asString = value === undefined || value === null || value === '' ? '' : String(value);
       legacy.splitValues[key] = asString;
@@ -111,7 +98,7 @@ const normalizeAllocationShape = (rawAllocation) => {
     if (nonZeroKeys.length <= 1) {
       legacy.mode = 'single';
       legacy.singleClassification = nonZeroKeys[0] ?? '';
-      legacy.splitValues = createEmptySplitValues();
+      legacy.splitValues = createEmptySplitValuesForFields(fields);
     } else {
       legacy.mode = 'split';
     }
@@ -119,11 +106,12 @@ const normalizeAllocationShape = (rawAllocation) => {
     return legacy;
   }
 
-  const normalized = buildEmptyAllocationState();
-  normalized.mode = rawAllocation.mode === 'split' ? 'split' : 'single';
-  normalized.singleClassification = toValidClassificationKey(rawAllocation.singleClassification);
+  const normalized = buildEmptyAllocationStateForFields(fields);
+  const requestedSplitMode = rawAllocation.mode === 'split';
+  normalized.mode = requestedSplitMode ? 'split' : 'single';
+  normalized.singleClassification = toValidClassificationKey(rawAllocation.singleClassification, keySet);
 
-  CLASSIFICATION_FIELDS.forEach(({ key }) => {
+  fields.forEach(({ key }) => {
     const value =
       (rawAllocation.splitValues && rawAllocation.splitValues[key] !== undefined
         ? rawAllocation.splitValues[key]
@@ -131,38 +119,44 @@ const normalizeAllocationShape = (rawAllocation) => {
     normalized.splitValues[key] = value === null ? '' : String(value);
   });
 
-  const hasMeaningfulSplit = CLASSIFICATION_FIELDS.some(({ key }) => {
+  const hasMeaningfulSplit = fields.some(({ key }) => {
     const rawValue = normalized.splitValues[key];
     if (rawValue === '' || rawValue === null || rawValue === undefined) return false;
     const numeric = Number(rawValue);
     return Number.isFinite(numeric) && Math.abs(numeric) > 0;
   });
 
+  if (requestedSplitMode) {
+    return normalized;
+  }
+
   if (normalized.mode === 'split' && !hasMeaningfulSplit) {
-    const fallbackClassification = toValidClassificationKey(normalized.singleClassification);
+    const fallbackClassification = toValidClassificationKey(normalized.singleClassification, keySet);
     normalized.mode = 'single';
     normalized.singleClassification = fallbackClassification;
-    normalized.splitValues = createEmptySplitValues();
+    normalized.splitValues = createEmptySplitValuesForFields(fields);
   }
 
   return normalized;
 };
 
-const allocationsAreEqual = (left, right) => {
-  const a = normalizeAllocationShape(left);
-  const b = normalizeAllocationShape(right);
+const allocationsAreEqualForFields = (left, right, fields, keySet) => {
+  const a = normalizeAllocationShapeForFields(left, fields, keySet);
+  const b = normalizeAllocationShapeForFields(right, fields, keySet);
 
   if (a.mode !== b.mode) return false;
   if ((a.singleClassification || '') !== (b.singleClassification || '')) return false;
 
-  return CLASSIFICATION_FIELDS.every(({ key }) => (a.splitValues[key] ?? '') === (b.splitValues[key] ?? ''));
+  return fields.every(({ key }) => (a.splitValues[key] ?? '') === (b.splitValues[key] ?? ''));
 };
 
-const isSameClassificationMap = (currentMap, nextMap) => {
+const isSameClassificationMapForFields = (currentMap, nextMap, fields, keySet) => {
   const currentKeys = Object.keys(currentMap);
   const nextKeys = Object.keys(nextMap);
   if (currentKeys.length !== nextKeys.length) return false;
-  return currentKeys.every((key) => allocationsAreEqual(currentMap[key], nextMap[key]));
+  return currentKeys.every((key) =>
+    allocationsAreEqualForFields(currentMap[key], nextMap[key], fields, keySet)
+  );
 };
 
 const collectSupportingDocuments = (disbursement) => {
@@ -206,10 +200,11 @@ const collectSupportingDocuments = (disbursement) => {
 };
 
 const currencyFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
+const DEFAULT_FLOW_COPY_STATE = getFlowCopy(DEFAULT_AUDIT_AREA);
 
 export default function TraineeCaseViewPage({ params }) {
   const { caseId } = params;
-  const { navigate } = useRoute();
+  const { navigate, query, setQuery } = useRoute();
   const { userId } = useAuth();
   const { showModal, hideModal } = useModal();
 
@@ -224,6 +219,52 @@ export default function TraineeCaseViewPage({ params }) {
   const [activeEvidenceError, setActiveEvidenceError] = useState('');
   const [activeEvidenceLoading, setActiveEvidenceLoading] = useState(false);
   const [downloadingReferences, setDownloadingReferences] = useState(false);
+  const [isRetakeResetting, setIsRetakeResetting] = useState(false);
+
+  const auditArea =
+    (typeof caseData?.auditArea === 'string' && caseData.auditArea.trim()) || DEFAULT_AUDIT_AREA;
+  const classificationFields = useMemo(() => getClassificationFields(auditArea), [auditArea]);
+  const classificationKeySet = useMemo(
+    () => new Set(classificationFields.map(({ key }) => key)),
+    [classificationFields]
+  );
+  const flowCopy = useMemo(() => getFlowCopy(auditArea), [auditArea]);
+  const effectiveFlowCopy = flowCopy || DEFAULT_FLOW_COPY_STATE;
+  const stepLabels = effectiveFlowCopy.stepLabels || DEFAULT_FLOW_COPY_STATE.stepLabels;
+  const stepDescriptions =
+    effectiveFlowCopy.stepDescriptions || DEFAULT_FLOW_COPY_STATE.stepDescriptions;
+  const testingIntro = effectiveFlowCopy.testingIntro || DEFAULT_FLOW_COPY_STATE.testingIntro;
+  const splitAllocationHint =
+    effectiveFlowCopy.splitAllocationHint || DEFAULT_FLOW_COPY_STATE.splitAllocationHint;
+  const singleAllocationHint =
+    effectiveFlowCopy.singleAllocationHint || DEFAULT_FLOW_COPY_STATE.singleAllocationHint;
+
+  const createEmptySplitValues = useCallback(
+    () => createEmptySplitValuesForFields(classificationFields),
+    [classificationFields]
+  );
+
+  const createEmptyAllocation = useCallback(
+    () => buildEmptyAllocationStateForFields(classificationFields),
+    [classificationFields]
+  );
+
+  const normalizeAllocationShape = useCallback(
+    (rawAllocation) =>
+      normalizeAllocationShapeForFields(rawAllocation, classificationFields, classificationKeySet),
+    [classificationFields, classificationKeySet]
+  );
+
+  const allocationsAreEqual = useCallback(
+    (left, right) => allocationsAreEqualForFields(left, right, classificationFields, classificationKeySet),
+    [classificationFields, classificationKeySet]
+  );
+
+  const isSameClassificationMap = useCallback(
+    (currentMap, nextMap) =>
+      isSameClassificationMapForFields(currentMap, nextMap, classificationFields, classificationKeySet),
+    [classificationFields, classificationKeySet]
+  );
 
   const lastResolvedEvidenceRef = useRef({ evidenceId: null, storagePath: null, url: null, inlineNotSupported: false });
   const progressSaveTimeoutRef = useRef(null);
@@ -231,8 +272,8 @@ export default function TraineeCaseViewPage({ params }) {
   const selectionRef = useRef(selectedDisbursements);
   const classificationRef = useRef(classificationAmounts);
   const isLockedRef = useRef(false);
-
-  const createEmptyAllocation = useCallback(() => buildEmptyAllocationState(), []);
+  const retakeHandledRef = useRef(false);
+  const retakeResettingRef = useRef(false);
 
   const normalizeAllocationInput = useCallback((rawValue) => {
     if (rawValue === null || rawValue === undefined) return '';
@@ -277,7 +318,7 @@ export default function TraineeCaseViewPage({ params }) {
     (disbursement, allocation) => {
       const normalized = normalizeAllocationShape(allocation);
       const totals = {};
-      CLASSIFICATION_FIELDS.forEach(({ key }) => {
+      classificationFields.forEach(({ key }) => {
         totals[key] = 0;
       });
 
@@ -287,7 +328,7 @@ export default function TraineeCaseViewPage({ params }) {
       }
 
       if (normalized.mode === 'split') {
-        CLASSIFICATION_FIELDS.forEach(({ key }) => {
+        classificationFields.forEach(({ key }) => {
           const value = parseAmount(normalized.splitValues[key]);
           totals[key] = Number.isFinite(value) ? value : 0;
         });
@@ -295,12 +336,12 @@ export default function TraineeCaseViewPage({ params }) {
       }
 
       const classification = normalized.singleClassification;
-      if (classification && CLASSIFICATION_KEY_SET.has(classification)) {
+      if (classification && classificationKeySet.has(classification)) {
         totals[classification] = amountNumber;
       }
       return totals;
     },
-    [parseAmount]
+    [classificationFields, classificationKeySet, normalizeAllocationShape, parseAmount]
   );
 
   const isAllocationComplete = useCallback(
@@ -312,7 +353,7 @@ export default function TraineeCaseViewPage({ params }) {
 
       if (normalized.mode === 'split') {
         let sum = 0;
-        for (const { key } of CLASSIFICATION_FIELDS) {
+        for (const { key } of classificationFields) {
           const value = parseAmount(normalized.splitValues[key]);
           if (!Number.isFinite(value) || value < 0) {
             return false;
@@ -323,9 +364,9 @@ export default function TraineeCaseViewPage({ params }) {
       }
 
       const classification = normalized.singleClassification;
-      return Boolean(classification && CLASSIFICATION_KEY_SET.has(classification));
+      return Boolean(classification && classificationKeySet.has(classification));
     },
-    [parseAmount]
+    [classificationFields, classificationKeySet, normalizeAllocationShape, parseAmount]
   );
 
   useEffect(() => {
@@ -343,6 +384,60 @@ export default function TraineeCaseViewPage({ params }) {
   useEffect(() => {
     isLockedRef.current = isLocked;
   }, [isLocked]);
+
+  useEffect(() => {
+    retakeResettingRef.current = isRetakeResetting;
+  }, [isRetakeResetting]);
+
+  useEffect(() => {
+    if (!caseId || !userId) return;
+    const retakeValue = query?.retake;
+    const retakeRequested =
+      typeof retakeValue === 'string' ? retakeValue.toLowerCase() === 'true' : Boolean(retakeValue);
+    if (!retakeRequested || retakeHandledRef.current) return;
+
+    retakeHandledRef.current = true;
+    setIsRetakeResetting(true);
+    setIsLocked(false);
+    setActiveStep(FLOW_STEPS.SELECTION);
+    setSelectedDisbursements({});
+    setClassificationAmounts({});
+
+    const resetProgress = async () => {
+      try {
+        if (progressSaveTimeoutRef.current) {
+          clearTimeout(progressSaveTimeoutRef.current);
+        }
+
+        await saveProgress({
+          appId,
+          uid: userId,
+          caseId,
+          patch: {
+            percentComplete: 0,
+            state: 'not_started',
+            step: FLOW_STEPS.SELECTION,
+            draft: {
+              selectedPaymentIds: [],
+              classificationDraft: {},
+            },
+          },
+        });
+      } catch (err) {
+        console.error('Failed to reset progress for retake:', err);
+        showModal('We ran into an issue preparing your retake. Please try again.', 'Retake Error');
+      } finally {
+        setIsRetakeResetting(false);
+        setQuery((prev) => {
+          const next = { ...prev };
+          delete next.retake;
+          return next;
+        }, { replace: true });
+      }
+    };
+
+    resetProgress();
+  }, [caseId, userId, query, setQuery, showModal]);
 
   useEffect(() => {
     if (!caseId || !userId) {
@@ -406,6 +501,7 @@ export default function TraineeCaseViewPage({ params }) {
     const unsubscribe = subscribeProgressForCases(
       { appId, uid: userId, caseIds: [caseId] },
       (progressMap) => {
+        if (retakeResettingRef.current) return;
         const entry = progressMap.get(caseId);
         if (!entry) return;
 
@@ -442,7 +538,7 @@ export default function TraineeCaseViewPage({ params }) {
     );
 
     return () => unsubscribe();
-  }, [caseId, userId]);
+  }, [caseId, userId, isSameClassificationMap, normalizeAllocationShape, isSameSelectionMap]);
 
   const disbursementList = useMemo(
     () => (Array.isArray(caseData?.disbursements) ? caseData.disbursements : []),
@@ -506,7 +602,7 @@ export default function TraineeCaseViewPage({ params }) {
       }
       return filtered;
     });
-  }, [caseData, disbursementList]);
+  }, [caseData, disbursementList, isSameClassificationMap]);
 
   const disbursementById = useMemo(() => {
     const map = new Map();
@@ -852,12 +948,12 @@ export default function TraineeCaseViewPage({ params }) {
         return next;
       });
     },
-    [setClassificationAmounts]
+    [normalizeAllocationShape]
   );
 
   const handleSingleClassificationChange = (paymentId, classification) => {
     if (isLocked) return;
-    const normalizedValue = CLASSIFICATION_KEY_SET.has(classification) ? classification : '';
+    const normalizedValue = classificationKeySet.has(classification) ? classification : '';
     updateAllocation(paymentId, (current) => ({
       ...current,
       mode: 'single',
@@ -871,7 +967,7 @@ export default function TraineeCaseViewPage({ params }) {
       updateAllocation(paymentId, (current) => {
         const totals = computeAllocationTotals(disbursement, current);
         const splitValues = createEmptySplitValues();
-        CLASSIFICATION_FIELDS.forEach(({ key }) => {
+        classificationFields.forEach(({ key }) => {
           const value = totals[key];
           splitValues[key] = Number.isFinite(value) && value !== 0 ? value.toString() : '';
         });
@@ -944,7 +1040,7 @@ export default function TraineeCaseViewPage({ params }) {
       }
       const totals = computeAllocationTotals(disbursement, allocation);
       const entry = {};
-      CLASSIFICATION_FIELDS.forEach(({ key }) => {
+      classificationFields.forEach(({ key }) => {
         const value = totals[key];
         entry[key] = Number.isFinite(value) ? value : 0;
       });
@@ -1069,6 +1165,12 @@ export default function TraineeCaseViewPage({ params }) {
       {STEP_SEQUENCE.map((stepKey, idx) => {
         const isCompleted = stepIndex > idx;
         const isActive = stepIndex === idx;
+        const label =
+          stepLabels[stepKey] ??
+          DEFAULT_FLOW_COPY_STATE.stepLabels?.[stepKey] ??
+          stepKey.charAt(0).toUpperCase() + stepKey.slice(1);
+        const description =
+          stepDescriptions[stepKey] ?? DEFAULT_FLOW_COPY_STATE.stepDescriptions?.[stepKey] ?? '';
         return (
           <li key={stepKey} className="flex items-center space-x-3">
             <span
@@ -1079,8 +1181,8 @@ export default function TraineeCaseViewPage({ params }) {
               {isCompleted ? '✓' : idx + 1}
             </span>
             <div>
-              <p className={`text-sm font-semibold ${isActive ? 'text-blue-700' : 'text-gray-800'}`}>{STEP_LABELS[stepKey]}</p>
-              <p className="text-xs text-gray-500 hidden sm:block">{STEP_DESCRIPTIONS[stepKey]}</p>
+              <p className={`text-sm font-semibold ${isActive ? 'text-blue-700' : 'text-gray-800'}`}>{label}</p>
+              <p className="text-xs text-gray-500 hidden sm:block">{description}</p>
             </div>
           </li>
         );
@@ -1377,7 +1479,7 @@ export default function TraineeCaseViewPage({ params }) {
           <div>
             <h2 className="text-2xl font-semibold text-gray-800">Step 2 — Classify Results</h2>
             <p className="text-sm text-gray-500">
-              Review the supporting documents and allocate the disbursement amount across each classification category.
+              {testingIntro}
             </p>
           </div>
           {missingPaymentIds.length > 0 ? (
@@ -1417,14 +1519,14 @@ export default function TraineeCaseViewPage({ params }) {
                   );
                   const isSplit = allocation.mode === 'split';
                   const totals = computeAllocationTotals(d, allocation);
-                  const totalEntered = CLASSIFICATION_FIELDS.reduce((sum, { key }) => {
+                  const totalEntered = classificationFields.reduce((sum, { key }) => {
                     const value = totals[key];
                     return sum + (Number.isFinite(value) ? value : 0);
                   }, 0);
                   const amountNumber = Number(d.amount) || 0;
                   const totalsMatch = Math.abs(totalEntered - amountNumber) <= 0.01;
                   const classificationLabel =
-                    CLASSIFICATION_FIELDS.find(({ key }) => key === allocation.singleClassification)?.label ||
+                    classificationFields.find(({ key }) => key === allocation.singleClassification)?.label ||
                     'Select classification';
 
                   return (
@@ -1461,7 +1563,7 @@ export default function TraineeCaseViewPage({ params }) {
                               className="w-full"
                             >
                               <option value="">Select classification</option>
-                              {CLASSIFICATION_FIELDS.map(({ key, label }) => (
+                              {classificationFields.map(({ key, label }) => (
                                 <option key={key} value={key}>
                                   {label}
                                 </option>
@@ -1485,10 +1587,10 @@ export default function TraineeCaseViewPage({ params }) {
                         {isSplit ? (
                           <div className="rounded-md border border-gray-200 bg-white p-3 space-y-3">
                             <p className="text-xs text-gray-500">
-                              Enter the amount allocated to each classification. Totals must equal the disbursement amount.
+                              {splitAllocationHint}
                             </p>
                             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-                              {CLASSIFICATION_FIELDS.map(({ key, label }) => (
+                              {classificationFields.map(({ key, label }) => (
                                 <label key={key} className="flex flex-col text-sm text-gray-700">
                                   <span className="font-medium mb-1">{label}</span>
                                   <Input
@@ -1509,7 +1611,7 @@ export default function TraineeCaseViewPage({ params }) {
                           <div className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-sm text-gray-600">
                             {allocation.singleClassification
                               ? `Entire amount allocated to ${classificationLabel}.`
-                              : 'Select a classification to assign the full amount.'}
+                              : singleAllocationHint}
                           </div>
                         )}
                       </div>
@@ -1550,7 +1652,7 @@ export default function TraineeCaseViewPage({ params }) {
     const evaluate = (trainee, answerKey) => {
       const result = {};
       let allCorrect = true;
-      CLASSIFICATION_FIELDS.forEach(({ key }) => {
+      classificationFields.forEach(({ key }) => {
         const userVal = toNumber(trainee?.[key] ?? 0);
         const correctVal = toNumber(answerKey?.[key] ?? 0);
         const isCorrect = Math.abs(userVal - correctVal) <= tolerance;
@@ -1561,17 +1663,17 @@ export default function TraineeCaseViewPage({ params }) {
     };
 
     const formatClassificationLabel = (key) =>
-      CLASSIFICATION_FIELDS.find((field) => field.key === key)?.label || key || 'Not specified';
+      classificationFields.find((field) => field.key === key)?.label || key || 'Not specified';
 
     const findTopClassification = (allocationTotals = {}) => {
-      const entries = CLASSIFICATION_FIELDS.map(({ key }) => ({ key, value: toNumber(allocationTotals[key]) }));
+      const entries = classificationFields.map(({ key }) => ({ key, value: toNumber(allocationTotals[key]) }));
       const primary = entries.find((entry) => entry.value > 0);
       return primary ? primary.key : '';
     };
 
     const answerKeyIsSplit = (disbursement) => {
       if (disbursement?.answerKeyMode === 'split') return true;
-      const keyTotals = CLASSIFICATION_FIELDS.map(({ key }) => toNumber(disbursement?.answerKey?.[key] ?? 0));
+      const keyTotals = classificationFields.map(({ key }) => toNumber(disbursement?.answerKey?.[key] ?? 0));
       return keyTotals.filter((value) => Math.abs(value) > 0.009).length > 1;
     };
 
@@ -1593,7 +1695,7 @@ export default function TraineeCaseViewPage({ params }) {
               {selectedDisbursementDetails.map((d) => {
                 const traineeTotals = computeAllocationTotals(d, classificationAmounts[d.paymentId]);
                 const answerKey = d.answerKey || {};
-                const hasNumericAnswer = CLASSIFICATION_FIELDS.some(({ key }) => typeof answerKey[key] === 'number');
+                const hasNumericAnswer = classificationFields.some(({ key }) => typeof answerKey[key] === 'number');
                 const hasExplanation =
                   typeof answerKey.explanation === 'string' && answerKey.explanation.trim().length > 0;
                 const evaln = hasNumericAnswer ? evaluate(traineeTotals, answerKey) : null;
@@ -1664,7 +1766,7 @@ export default function TraineeCaseViewPage({ params }) {
                               </tr>
                             </thead>
                             <tbody>
-                              {CLASSIFICATION_FIELDS.map(({ key, label }) => {
+                              {classificationFields.map(({ key, label }) => {
                                 const fieldEval = evaln.fields[key];
                                 return (
                                   <tr key={`${d.paymentId}-${key}`} className="border-t">

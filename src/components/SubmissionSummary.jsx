@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useMemo } from 'react';
 import { FileText } from 'lucide-react';
 import { Button } from '../AppCore';
-import { CLASSIFICATION_FIELDS } from '../constants/classificationFields';
+import { getClassificationFields } from '../constants/classificationFields';
+import { DEFAULT_AUDIT_AREA } from '../models/caseConstants';
 
 const currencyFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 
@@ -11,7 +12,15 @@ const toNumber = (value) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
-const SubmissionSummary = ({ items, extraDocuments = [], onViewDocument, emptyMessage = 'No disbursements were recorded.' }) => {
+const SubmissionSummary = ({
+  items,
+  extraDocuments = [],
+  onViewDocument,
+  emptyMessage = 'No disbursements were recorded.',
+  auditArea = DEFAULT_AUDIT_AREA,
+}) => {
+  const classificationFields = useMemo(() => getClassificationFields(auditArea), [auditArea]);
+
   if (!items || items.length === 0) {
     return <p className="text-sm text-gray-500">{emptyMessage}</p>;
   }
@@ -21,7 +30,7 @@ const SubmissionSummary = ({ items, extraDocuments = [], onViewDocument, emptyMe
       <ul className="space-y-4">
         {items.map(({ paymentId, metadata = {}, classification = {}, documents = [] }) => {
           const displayPaymentId = paymentId || metadata.paymentId || 'N/A';
-          const parsedValues = CLASSIFICATION_FIELDS.map(({ key }) => toNumber(classification[key]));
+          const parsedValues = classificationFields.map(({ key }) => toNumber(classification[key]));
           const totalEntered = parsedValues.reduce((sum, value) => sum + value, 0);
 
           const amountNumber = toNumber(metadata.amount);
@@ -56,7 +65,7 @@ const SubmissionSummary = ({ items, extraDocuments = [], onViewDocument, emptyMe
                 <table className="min-w-full text-sm text-left text-gray-700 border border-gray-200 rounded-md">
                   <thead className="bg-gray-100">
                     <tr>
-                      {CLASSIFICATION_FIELDS.map(({ label }) => (
+                      {classificationFields.map(({ label }) => (
                         <th key={label} className="px-3 py-2 font-semibold text-gray-600">
                           {label}
                         </th>
@@ -66,7 +75,7 @@ const SubmissionSummary = ({ items, extraDocuments = [], onViewDocument, emptyMe
                   </thead>
                   <tbody>
                     <tr>
-                      {CLASSIFICATION_FIELDS.map(({ label }, index) => (
+                      {classificationFields.map(({ label }, index) => (
                         <td key={label} className="px-3 py-2">
                           {currencyFormatter.format(parsedValues[index])}
                         </td>

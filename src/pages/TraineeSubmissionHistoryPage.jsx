@@ -28,14 +28,85 @@ const formatPercent = (value) => {
   return `${Math.round(pct)}%`;
 };
 
-const getLatestAttempt = (attempts = []) => {
+const toMillis = (value) => {
+  if (!value) return null;
+  if (typeof value.toMillis === 'function') {
+    try {
+      const result = value.toMillis();
+      return Number.isFinite(result) ? result : null;
+    } catch (err) {
+      return null;
+    }
+  }
+  if (typeof value.toDate === 'function') {
+    try {
+      const date = value.toDate();
+      return date instanceof Date && Number.isFinite(date.getTime()) ? date.getTime() : null;
+    } catch (err) {
+      return null;
+    }
+  }
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return Number.isFinite(time) ? time : null;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'string') {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+};
+
+export const getLatestAttempt = (attempts = []) => {
   if (!Array.isArray(attempts) || attempts.length === 0) return null;
-  // Prefer the attempt with the latest submittedAt timestamp
-  const withDates = attempts
-    .map((a) => ({ a, t: (typeof a.submittedAt?.toDate === 'function' ? a.submittedAt.toDate() : a.submittedAt) || null }))
-    .map(({ a, t }) => ({ a, ts: t instanceof Date ? t.getTime() : (t ? new Date(t).getTime() : 0) }));
-  const latest = withDates.reduce((best, cur) => (cur.ts > best.ts ? cur : best), withDates[0]);
-  return latest.a || attempts[attempts.length - 1];
+
+  const fieldOrder = ['submittedAt', 'updatedAt', 'createdAt'];
+
+  const enriched = attempts.map((attempt, index) => {
+    const stateValue = typeof attempt?.state === 'string' ? attempt.state.toLowerCase() : '';
+    const inProgress = stateValue === 'in_progress';
+
+    let rank = Number.POSITIVE_INFINITY;
+    let timestamp = null;
+
+    for (let i = 0; i < fieldOrder.length; i += 1) {
+      const field = fieldOrder[i];
+      const millis = toMillis(attempt?.[field]);
+      if (Number.isFinite(millis)) {
+        rank = i;
+        timestamp = millis;
+        break;
+      }
+    }
+
+    return {
+      attempt,
+      index,
+      rank,
+      timestamp: Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY,
+      inProgress,
+    };
+  });
+
+  const candidates = enriched.filter((item) => !item.inProgress);
+  const pool = candidates.length > 0 ? candidates : enriched;
+
+  const best = pool.reduce((currentBest, candidate) => {
+    if (!currentBest) return candidate;
+
+    if (candidate.rank < currentBest.rank) return candidate;
+    if (candidate.rank > currentBest.rank) return currentBest;
+
+    if (candidate.timestamp > currentBest.timestamp) return candidate;
+    if (candidate.timestamp < currentBest.timestamp) return currentBest;
+
+    return candidate.index > currentBest.index ? candidate : currentBest;
+  }, null);
+
+  return best ? best.attempt : null;
 };
 
 const extractGrade = (attempt = {}) => {
