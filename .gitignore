@@ -22,3 +22,15 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .env
+
+# Python
+/venv/
+
+# PHP
+/vendor/
+
+# Java
+/target/
+
+# Log files
+*.log
