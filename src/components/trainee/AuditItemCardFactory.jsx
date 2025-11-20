@@ -1,5 +1,5 @@
 import React from 'react';
-import TransactionItemCard from './items/TransactionItemCard';
+import AuditProcedureWorkspace from './workspaces/AuditProcedureWorkspace';
 
 export default function AuditItemCardFactory(props) {
   const { item } = props;
@@ -8,6 +8,6 @@ export default function AuditItemCardFactory(props) {
       return <div className="rounded-md border border-gray-200 p-4 bg-white">Inventory card coming soon.</div>;
     case 'transaction':
     default:
-      return <TransactionItemCard {...props} />;
+      return <AuditProcedureWorkspace {...props} />;
   }
 }

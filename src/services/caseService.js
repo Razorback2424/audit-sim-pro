@@ -155,6 +155,78 @@ const toOptionalString = (value) => {
   return trimmed === '' ? null : trimmed;
 };
 
+const extractPrivateCaseKeyEntries = (items = []) => {
+  const sanitizedItems = [];
+  const privateEntries = {};
+
+  items.forEach((item, index) => {
+    if (!item || typeof item !== 'object') {
+      return;
+    }
+
+    const {
+      answerKey,
+      answerKeyMode,
+      answerKeySingleClassification,
+      groundTruths,
+      correctClassification,
+      primaryAssertion,
+      ...rest
+    } = item;
+
+    const paymentId =
+      toOptionalString(rest.paymentId) ||
+      toOptionalString(item.paymentId) ||
+      `item-${index + 1}`;
+
+    const entry = {};
+    if (isRecord(answerKey) && Object.keys(answerKey).length > 0) {
+      entry.answerKey = { ...answerKey };
+    }
+    if (typeof answerKeyMode === 'string' && answerKeyMode.trim()) {
+      entry.answerKeyMode = answerKeyMode.trim();
+    }
+    if (
+      typeof answerKeySingleClassification === 'string' &&
+      answerKeySingleClassification.trim()
+    ) {
+      entry.answerKeySingleClassification = answerKeySingleClassification.trim();
+    }
+    if (isRecord(groundTruths) && Object.keys(groundTruths).length > 0) {
+      entry.groundTruths = { ...groundTruths };
+    }
+    if (typeof correctClassification === 'string' && correctClassification.trim()) {
+      entry.correctClassification = correctClassification.trim();
+    }
+    if (typeof primaryAssertion === 'string' && primaryAssertion.trim()) {
+      entry.primaryAssertion = primaryAssertion.trim();
+    }
+    const resolvedRiskLevel =
+      typeof rest.riskLevel === 'string' && rest.riskLevel.trim()
+        ? rest.riskLevel.trim()
+        : typeof item.riskLevel === 'string' && item.riskLevel.trim()
+        ? item.riskLevel.trim()
+        : null;
+    if (resolvedRiskLevel) {
+      entry.riskLevel = resolvedRiskLevel;
+    }
+
+    const hasEntry = Object.keys(entry).length > 0;
+
+    sanitizedItems.push({
+      ...rest,
+      paymentId: rest.paymentId || paymentId,
+      hasAnswerKey: Boolean(entry.answerKey),
+    });
+
+    if (hasEntry && paymentId) {
+      privateEntries[paymentId] = entry;
+    }
+  });
+
+  return { sanitizedItems, privateEntries };
+};
+
 const normalizeAuditArea = (value) => {
   const auditArea = toOptionalString(value);
   if (auditArea && AUDIT_AREA_VALUES.includes(auditArea)) {
@@ -369,6 +441,48 @@ const toNormalizedCaseModel = (id, raw = {}) => {
   return toCaseModel(id, normalized);
 };
 
+const mergeCaseKeysIntoCaseModel = (caseModel, caseKeysData) => {
+  if (!caseModel) return caseModel;
+  const itemsMap = isRecord(caseKeysData?.items) ? caseKeysData.items : null;
+  if (!itemsMap) return caseModel;
+
+  const disbursements = Array.isArray(caseModel.disbursements) ? caseModel.disbursements : [];
+  const mergedDisbursements = disbursements.map((item) => {
+    if (!item || typeof item !== 'object') {
+      return item;
+    }
+    const paymentId = item.paymentId;
+    if (!paymentId || !isRecord(itemsMap[paymentId])) {
+      return item;
+    }
+    const entry = itemsMap[paymentId];
+    const merged = { ...item };
+    if (isRecord(entry.answerKey)) {
+      merged.answerKey = { ...entry.answerKey };
+      merged.hasAnswerKey = true;
+    }
+    if (typeof entry.answerKeyMode === 'string') {
+      merged.answerKeyMode = entry.answerKeyMode;
+    }
+    if (typeof entry.answerKeySingleClassification === 'string') {
+      merged.answerKeySingleClassification = entry.answerKeySingleClassification;
+    }
+    if (typeof entry.correctClassification === 'string') {
+      merged.correctClassification = entry.correctClassification;
+    }
+    if (typeof entry.primaryAssertion === 'string') {
+      merged.primaryAssertion = entry.primaryAssertion;
+    }
+    return merged;
+  });
+
+  return {
+    ...caseModel,
+    disbursements: mergedDisbursements,
+    auditItems: mergedDisbursements,
+  };
+};
+
 const buildAdminCasesQueryParts = ({ searchTerm, statusFilters, visibilityFilters, auditAreaFilter, sortKey }) => {
   const deletedFilter = where('_deleted', '==', false);
   const filters = [deletedFilter];
@@ -434,7 +548,8 @@ const sanitizeCaseWriteData = (rawData = {}, { isCreate = false } = {}) => {
     sanitized.auditItems ?? sanitized.disbursements,
     sanitized.invoiceMappings
   );
-  sanitized.auditItems = normalizedItems;
+  const { sanitizedItems, privateEntries } = extractPrivateCaseKeyEntries(normalizedItems);
+  sanitized.auditItems = sanitizedItems;
   delete sanitized.disbursements;
   sanitized.referenceDocuments = normalizeReferenceDocuments(sanitized.referenceDocuments);
 
@@ -477,7 +592,12 @@ const sanitizeCaseWriteData = (rawData = {}, { isCreate = false } = {}) => {
     sanitized.createdAt = sanitized.createdAt ?? serverTimestamp();
   }
 
-  return sanitized;
+  const caseKeysDoc = {
+    items: privateEntries,
+    updatedAt: serverTimestamp(),
+  };
+
+  return { caseData: sanitized, caseKeysDoc };
 };
 
 const buildCaseRepairPatch = (data = {}) => {
@@ -694,20 +814,36 @@ export const subscribeToCase = (caseId, onData, onError) => {
 
 export const fetchCase = async (caseId) => {
   const ref = doc(db, FirestorePaths.CASE_DOCUMENT(caseId));
-  const snap = await getDoc(ref);
-  if (!snap.exists()) return null;
-  return toNormalizedCaseModel(snap.id, snap.data());
+  const [caseSnap, caseKeysSnap] = await Promise.all([
+    getDoc(ref),
+    getDoc(doc(db, FirestorePaths.CASE_KEYS_DOCUMENT(caseId))).catch((err) => {
+      console.warn('[caseService] Failed to load private case keys', { caseId, error: err?.message });
+      return null;
+    }),
+  ]);
+
+  if (!caseSnap.exists()) return null;
+  const baseModel = toNormalizedCaseModel(caseSnap.id, caseSnap.data());
+  const caseKeysData =
+    caseKeysSnap && typeof caseKeysSnap.exists === 'function' && caseKeysSnap.exists()
+      ? caseKeysSnap.data()
+      : null;
+  return mergeCaseKeysIntoCaseModel(baseModel, caseKeysData);
 };
 
 export const createCase = async (data) => {
+  const { caseData, caseKeysDoc } = sanitizeCaseWriteData(data, { isCreate: true });
   const collectionRef = collection(db, FirestorePaths.CASES_COLLECTION());
-  const docRef = await addDoc(collectionRef, sanitizeCaseWriteData(data, { isCreate: true }));
+  const docRef = await addDoc(collectionRef, caseData);
+  await setDoc(doc(db, FirestorePaths.CASE_KEYS_DOCUMENT(docRef.id)), caseKeysDoc);
   return docRef.id;
 };
 
 export const updateCase = async (caseId, data) => {
+  const { caseData, caseKeysDoc } = sanitizeCaseWriteData(data, { isCreate: false });
   const ref = doc(db, FirestorePaths.CASE_DOCUMENT(caseId));
-  await setDoc(ref, sanitizeCaseWriteData(data, { isCreate: false }), { merge: true });
+  await setDoc(ref, caseData, { merge: true });
+  await setDoc(doc(db, FirestorePaths.CASE_KEYS_DOCUMENT(caseId)), caseKeysDoc);
 };
 
 export const markCaseDeleted = async (caseId) => {
@@ -754,7 +890,9 @@ const computeDisbursementAlerts = (caseData) => {
 
   disbursements.forEach((item) => {
     const paymentId = item?.paymentId || 'Unknown payment';
-    const hasAnswerKey = item && item.answerKey && Object.keys(item.answerKey).length > 0;
+    const hasAnswerKey =
+      item?.hasAnswerKey ||
+      (item && item.answerKey && Object.keys(item.answerKey).length > 0);
     const hasSupportingDocs = Array.isArray(item?.supportingDocuments) && item.supportingDocuments.length > 0;
     const isMapped = mappedPayments.has(item?.paymentId);
 

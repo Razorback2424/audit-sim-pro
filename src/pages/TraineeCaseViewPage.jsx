@@ -245,6 +245,7 @@ export default function TraineeCaseViewPage({ params }) {
   const [activeStep, setActiveStep] = useState(null);
   const [selectedDisbursements, setSelectedDisbursements] = useState({});
   const [classificationAmounts, setClassificationAmounts] = useState({});
+  const [workspaceNotes, setWorkspaceNotes] = useState({});
   const [isLocked, setIsLocked] = useState(false);
   const [activeEvidenceId, setActiveEvidenceId] = useState(null);
   const [activeEvidenceUrl, setActiveEvidenceUrl] = useState(null);
@@ -284,11 +285,6 @@ export default function TraineeCaseViewPage({ params }) {
   const normalizeAllocationShape = useCallback(
     (rawAllocation) =>
       normalizeAllocationShapeForFields(rawAllocation, classificationFields, classificationKeySet),
-    [classificationFields, classificationKeySet]
-  );
-
-  const allocationsAreEqual = useCallback(
-    (left, right) => allocationsAreEqualForFields(left, right, classificationFields, classificationKeySet),
     [classificationFields, classificationKeySet]
   );
 
@@ -601,7 +597,6 @@ export default function TraineeCaseViewPage({ params }) {
     userId,
     isSameClassificationMap,
     normalizeAllocationShape,
-    isSameSelectionMap,
     workflow,
     firstWorkflowStep,
     resultsWorkflowStep,
@@ -665,6 +660,24 @@ export default function TraineeCaseViewPage({ params }) {
         if (validIds.has(id)) filtered[id] = prev[id];
       });
       if (isSameClassificationMap(prev, filtered)) {
+        return prev;
+      }
+      return filtered;
+    });
+
+    setWorkspaceNotes((prev) => {
+      const filtered = {};
+      Object.keys(prev).forEach((id) => {
+        if (validIds.has(id)) {
+          filtered[id] = prev[id];
+        }
+      });
+      const prevKeys = Object.keys(prev);
+      const filteredKeys = Object.keys(filtered);
+      if (
+        prevKeys.length === filteredKeys.length &&
+        prevKeys.every((key) => prev[key] === filtered[key])
+      ) {
         return prev;
       }
       return filtered;
@@ -751,6 +764,13 @@ export default function TraineeCaseViewPage({ params }) {
   }, [allEvidenceItems, selectedIds]);
 
   const viewerEnabled = activeStep === FLOW_STEPS.TESTING;
+  const pdfViewerState = useMemo(
+    () => ({
+      isOpen: viewerEnabled && Boolean(activeEvidenceUrl),
+      currentDocId: viewerEnabled ? activeEvidenceId : null,
+    }),
+    [viewerEnabled, activeEvidenceUrl, activeEvidenceId]
+  );
   const evidenceSource = useMemo(
     () => (viewerEnabled ? selectedEvidenceItems : []),
     [viewerEnabled, selectedEvidenceItems]
@@ -966,7 +986,7 @@ export default function TraineeCaseViewPage({ params }) {
   useEffect(() => {
     if (!caseData || !userId || isLocked || activeStep === resultsWorkflowStep) return;
     enqueueProgressSave();
-  }, [caseData, userId, isLocked, activeStep, enqueueProgressSave]);
+  }, [caseData, userId, isLocked, activeStep, resultsWorkflowStep, enqueueProgressSave]);
 
   useEffect(
     () => () => {
@@ -997,6 +1017,11 @@ export default function TraineeCaseViewPage({ params }) {
         const { [paymentId]: _removed, ...rest } = prev;
         return rest;
       });
+      setWorkspaceNotes((prev) => {
+        if (!Object.prototype.hasOwnProperty.call(prev, paymentId)) return prev;
+        const { [paymentId]: _removedNotes, ...rest } = prev;
+        return rest;
+      });
     } else {
       setClassificationAmounts((prev) => {
         if (prev[paymentId]) return prev;
@@ -1017,6 +1042,17 @@ export default function TraineeCaseViewPage({ params }) {
     },
     [normalizeAllocationShape]
   );
+
+  const handleWorkspaceUpdate = useCallback((paymentId, updates = {}) => {
+    if (!paymentId || typeof updates !== 'object' || updates === null) return;
+    setWorkspaceNotes((prev) => ({
+      ...prev,
+      [paymentId]: {
+        ...(prev[paymentId] || {}),
+        ...updates,
+      },
+    }));
+  }, []);
 
   const handleSingleClassificationChange = (paymentId, classification) => {
     if (isLocked) return;
@@ -1072,7 +1108,9 @@ export default function TraineeCaseViewPage({ params }) {
       showModal('Please select at least one disbursement to continue.', 'No Selection');
       return;
     }
-    const missingDocs = selectedEvidenceItems.filter((item) => !item?.hasLinkedDocument);
+    const missingDocs = selectedEvidenceItems.filter(
+      (item) => !item?.hasLinkedDocument && !isEvidenceWorkflowLinked(item.paymentId)
+    );
     if (missingDocs.length > 0) {
       const missingList = Array.from(new Set(missingDocs.map((item) => item?.paymentId || 'Unknown ID'))).join(', ');
       showModal(
@@ -1143,6 +1181,14 @@ export default function TraineeCaseViewPage({ params }) {
         downloadURL: doc.downloadURL,
       }))
     );
+    const workspacePayload = selectedIds.reduce((acc, id) => {
+      if (workspaceNotes[id]) {
+        acc[id] = workspaceNotes[id];
+      } else {
+        acc[id] = {};
+      }
+      return acc;
+    }, {});
 
     try {
       if (progressSaveTimeoutRef.current) {
@@ -1156,6 +1202,8 @@ export default function TraineeCaseViewPage({ params }) {
         retrievedDocuments: documents,
         disbursementClassifications: allocationPayload,
         expectedClassifications: expectedPayload,
+        workspaceNotes: workspacePayload,
+        status: 'submitted',
         submittedAt: Timestamp.now(),
       });
 
@@ -1260,6 +1308,7 @@ export default function TraineeCaseViewPage({ params }) {
       })}
     </ol>
   );
+  const isEvidenceWorkflowLinked = (paymentId) => Boolean(workspaceNotes[paymentId]?.evidenceLinked);
 
   const renderEvidenceList = (items) => (
     <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
@@ -1279,6 +1328,8 @@ export default function TraineeCaseViewPage({ params }) {
               (item.paymentId ? `Invoice for ${item.paymentId}` : `Invoice ${index + 1}`);
             const payeeLabel = item.payee || 'Unknown payee';
             const documentLabel = `${invoiceLabel} — ${payeeLabel}`;
+            const evidenceSatisfied =
+              item.hasLinkedDocument || isEvidenceWorkflowLinked(item.paymentId);
             return (
               <button
                 key={item.evidenceId}
@@ -1293,7 +1344,7 @@ export default function TraineeCaseViewPage({ params }) {
                   <span className={`text-sm font-semibold ${isActive ? 'text-blue-700' : 'text-gray-800'}`}>
                     Invoice: {invoiceLabel}
                   </span>
-                  {!item.hasLinkedDocument && (
+                  {!evidenceSatisfied && (
                     <span className="ml-3 inline-flex items-center text-[10px] font-semibold uppercase tracking-wider text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
                       Document not linked
                     </span>
@@ -1541,7 +1592,9 @@ export default function TraineeCaseViewPage({ params }) {
   );
 
   const renderTestingStep = () => {
-    const missingDocuments = selectedEvidenceItems.filter((item) => !item?.hasLinkedDocument);
+    const missingDocuments = selectedEvidenceItems.filter(
+      (item) => !item?.hasLinkedDocument && !isEvidenceWorkflowLinked(item.paymentId)
+    );
     const missingPaymentIds = Array.from(new Set(missingDocuments.map((item) => item?.paymentId || 'Unknown ID')));
 
     return (
@@ -1611,6 +1664,9 @@ export default function TraineeCaseViewPage({ params }) {
                       onSplitAmountChange={handleSplitAmountChange}
                       totalEntered={totalEntered}
                       totalsMatch={totalsMatch}
+                      pdfViewerState={pdfViewerState}
+                      onUpdate={handleWorkspaceUpdate}
+                      workspaceState={workspaceNotes[itemId]}
                     />
                   );
                 })}

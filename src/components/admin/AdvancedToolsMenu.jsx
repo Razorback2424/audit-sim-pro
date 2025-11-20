@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '../../AppCore';
 import { ListFilter, Loader2, MoreHorizontal, Users2, Wrench } from 'lucide-react';
 
@@ -65,27 +65,30 @@ const AdvancedToolsMenu = ({
     };
   }, [isOpen]);
 
-  const getNextEnabledIndex = (startIndex, direction) => {
-    if (!menuItems.length) return -1;
-    let attempts = 0;
-    let index = startIndex;
-    const itemsCount = menuItems.length;
-    do {
-      index = (index + direction + itemsCount) % itemsCount;
-      const item = menuItems[index];
-      if (!item.disabled) {
-        return index;
-      }
-      attempts += 1;
-    } while (attempts < itemsCount);
-    return -1;
-  };
+  const getNextEnabledIndex = useCallback(
+    (startIndex, direction) => {
+      if (!menuItems.length) return -1;
+      let attempts = 0;
+      let index = startIndex;
+      const itemsCount = menuItems.length;
+      do {
+        index = (index + direction + itemsCount) % itemsCount;
+        const item = menuItems[index];
+        if (!item.disabled) {
+          return index;
+        }
+        attempts += 1;
+      } while (attempts < itemsCount);
+      return -1;
+    },
+    [menuItems]
+  );
 
   useEffect(() => {
     if (!isOpen) return;
     const firstEnabledIndex = getNextEnabledIndex(-1, 1);
     setActiveIndex(firstEnabledIndex);
-  }, [isOpen, menuItems]);
+  }, [getNextEnabledIndex, isOpen]);
 
   useEffect(() => {
     if (!isOpen) return;

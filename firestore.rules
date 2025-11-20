@@ -83,7 +83,9 @@ service cloud.firestore {
              (!('amount' in item) || item.amount == null || (item.amount is string || item.amount is number)) &&
              (!('paymentDate' in item) || item.paymentDate == null || item.paymentDate is string) &&
              (!('expectedClassification' in item) || item.expectedClassification == null || item.expectedClassification is string) &&
-             (!('answerKey' in item) || item.answerKey == null || isValidAnswerKey(item.answerKey)) &&
+             (!('answerKey' in item) || item.answerKey == null) &&
+             (!('hasAnswerKey' in item) || item.hasAnswerKey == null || item.hasAnswerKey is bool) &&
+             (!('groundTruths' in item) || item.groundTruths == null) &&
              (!('storagePath' in item) || item.storagePath == null || item.storagePath is string) &&
              (!('downloadURL' in item) || item.downloadURL == null || item.downloadURL is string) &&
              (!('fileName' in item) || item.fileName == null || item.fileName is string) &&
@@ -163,11 +165,45 @@ service cloud.firestore {
              )) &&
              (!('invoiceMappings' in request.resource.data) || (
                request.resource.data.invoiceMappings is list &&
+             (
+               request.resource.data.invoiceMappings.size() == 0 ||
+               isValidInvoiceMapping(request.resource.data.invoiceMappings[0])
+             )
+           ));
+    }
+
+    function isValidCaseKeyEntry(entry) {
+      return entry is map &&
+             (!('answerKey' in entry) || entry.answerKey == null || isValidAnswerKey(entry.answerKey)) &&
+             (!('answerKeyMode' in entry) || entry.answerKeyMode == null || entry.answerKeyMode is string) &&
+             (!('answerKeySingleClassification' in entry) || entry.answerKeySingleClassification == null || entry.answerKeySingleClassification is string) &&
+             (!('groundTruths' in entry) || entry.groundTruths == null || entry.groundTruths is map) &&
+             (!('correctClassification' in entry) || entry.correctClassification == null || entry.correctClassification is string) &&
+             (!('primaryAssertion' in entry) || entry.primaryAssertion == null || entry.primaryAssertion is string);
+    }
+
+    function isValidCaseKeyDocument(data) {
+      return data is map &&
+             (!('items' in data) || (
+               data.items is map &&
                (
-                 request.resource.data.invoiceMappings.size() == 0 ||
-                 isValidInvoiceMapping(request.resource.data.invoiceMappings[0])
+                 data.items.size() == 0 ||
+                 isValidCaseKeyEntry(data.items[data.items.keys()[0]])
                )
-             ));
+             )) &&
+             (!('updatedAt' in data) || data.updatedAt == request.time);
+    }
+
+    function canAccessCaseKeys(appId, caseId) {
+      if (isAdmin()) {
+        return true;
+      }
+      if (!isInstructor() || request.auth.token.orgId == null) {
+        return false;
+      }
+      return exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)) &&
+             get(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.orgId ==
+               request.auth.token.orgId;
     }
 
     function gradeFieldUnchanged(field) {
@@ -222,6 +258,14 @@ service cloud.firestore {
           (isInstructor() && resource.data.orgId == request.auth.token.orgId)
         ) &&
         isValidCaseDocument();
+      allow delete: if request.auth != null && isAdmin();
+    }
+
+    match /artifacts/{appId}/private/case_keys/{caseId} {
+      allow read: if request.auth != null && canAccessCaseKeys(appId, caseId);
+      allow create, update: if request.auth != null &&
+                               canAccessCaseKeys(appId, caseId) &&
+                               isValidCaseKeyDocument(request.resource.data);
       allow delete: if request.auth != null && isAdmin();
     }
 

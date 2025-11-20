@@ -5,6 +5,14 @@ import { DEFAULT_AUDIT_AREA, DEFAULT_ITEM_TYPE } from './caseConstants';
  */
 
 /**
+ * @typedef {Object} AuditEvidencePoint
+ * @property {string} label - e.g., "Invoice Date"
+ * @property {string} value - e.g., "2023-12-28"
+ * @property {string} assertion - e.g., "cutoff", "existence"
+ * @property {number} [toleranceDays] - Allowed date variance
+ */
+
+/**
  * @typedef {Object} CaseDisbursement
  * @property {string} paymentId
  * @property {string} payee
@@ -26,6 +34,12 @@ import { DEFAULT_AUDIT_AREA, DEFAULT_ITEM_TYPE } from './caseConstants';
  * @property {string} [description]
  * @property {string} [notes]
  * @property {Record<string, any>} [meta]
+ * @property {AuditEvidencePoint[]} [evidencePoints]
+ * @property {string} [auditArea]
+ * @property {string[]} [requiredAssertions]
+ * @property {'low' | 'medium' | 'high'} [riskLevel]
+ * @property {{ allowVouching?: boolean, allowTracing?: boolean }} [directionalFlags]
+ * @property {boolean} [hasAnswerKey]
  */
 
 /**
@@ -64,10 +78,15 @@ export {}; // eslint-disable-line
  * @returns {CaseModel}
  */
 export const toCaseModel = (id, data) => {
-  const rawItems = Array.isArray(data?.auditItems)
-    ? data.auditItems
-    : Array.isArray(data?.disbursements)
-    ? data.disbursements
+  const sanitizedCase = data && typeof data === 'object' ? { ...data } : {};
+  if ('groundTruths' in sanitizedCase) {
+    delete sanitizedCase.groundTruths;
+  }
+
+  const rawItems = Array.isArray(sanitizedCase?.auditItems)
+    ? sanitizedCase.auditItems
+    : Array.isArray(sanitizedCase?.disbursements)
+    ? sanitizedCase.disbursements
     : [];
 
   const auditItems = rawItems
@@ -81,36 +100,46 @@ export const toCaseModel = (id, data) => {
         normalized.paymentId = inferredId;
       }
       normalized.type = normalized.type || DEFAULT_ITEM_TYPE;
+      if ('groundTruths' in normalized) {
+        delete normalized.groundTruths;
+      }
       return normalized;
     })
     .filter(Boolean);
 
   return {
     id,
-    ...data,
-    title: data?.title || data?.caseName || '',
-    caseName: data?.caseName || data?.title || '',
-    publicVisible: data?.publicVisible === false ? false : true,
-    visibleToUserIds: Array.isArray(data?.visibleToUserIds) ? data.visibleToUserIds : [],
-    opensAt: data?.opensAt,
-    dueAt: data?.dueAt,
-    status: data?.status,
-    createdAt: data?.createdAt,
-    updatedAt: data?.updatedAt,
+    ...sanitizedCase,
+    title: sanitizedCase?.title || sanitizedCase?.caseName || '',
+    caseName: sanitizedCase?.caseName || sanitizedCase?.title || '',
+    publicVisible: sanitizedCase?.publicVisible === false ? false : true,
+    visibleToUserIds: Array.isArray(sanitizedCase?.visibleToUserIds)
+      ? sanitizedCase.visibleToUserIds
+      : [],
+    opensAt: sanitizedCase?.opensAt,
+    dueAt: sanitizedCase?.dueAt,
+    status: sanitizedCase?.status,
+    createdAt: sanitizedCase?.createdAt,
+    updatedAt: sanitizedCase?.updatedAt,
     auditItems,
     disbursements: auditItems,
-    invoiceMappings: Array.isArray(data?.invoiceMappings) ? data.invoiceMappings : [],
-    referenceDocuments: Array.isArray(data?.referenceDocuments) ? data.referenceDocuments : [],
-    auditArea: typeof data?.auditArea === 'string' && data.auditArea.trim()
-      ? data.auditArea.trim()
-      : DEFAULT_AUDIT_AREA,
+    invoiceMappings: Array.isArray(sanitizedCase?.invoiceMappings)
+      ? sanitizedCase.invoiceMappings
+      : [],
+    referenceDocuments: Array.isArray(sanitizedCase?.referenceDocuments)
+      ? sanitizedCase.referenceDocuments
+      : [],
+    auditArea:
+      typeof sanitizedCase?.auditArea === 'string' && sanitizedCase.auditArea.trim()
+        ? sanitizedCase.auditArea.trim()
+        : DEFAULT_AUDIT_AREA,
     caseGroupId:
-      typeof data?.caseGroupId === 'string' && data.caseGroupId.trim()
-        ? data.caseGroupId.trim()
+      typeof sanitizedCase?.caseGroupId === 'string' && sanitizedCase.caseGroupId.trim()
+        ? sanitizedCase.caseGroupId.trim()
         : null,
     workflow:
-      Array.isArray(data?.workflow) && data.workflow.length > 0
-        ? data.workflow
+      Array.isArray(sanitizedCase?.workflow) && sanitizedCase.workflow.length > 0
+        ? sanitizedCase.workflow
         : ['selection', 'testing', 'results'],
   };
 };

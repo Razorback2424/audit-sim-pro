@@ -9,7 +9,6 @@ import getUUID from '../utils/getUUID';
 import {
   PlusCircle,
   Trash2,
-  Paperclip,
   CheckCircle2,
   AlertTriangle,
   UploadCloud,
@@ -575,6 +574,7 @@ function useCaseForm({ params }) {
   const SUPPORTED_EXTENSIONS = new Set(
     SUPPORTED_FILE_TYPES.flatMap((entry) => entry.extensions.map((ext) => ext.toLowerCase()))
   );
+  const UNSAFE_STORAGE_CHARS = new RegExp('[\\\\/#?\\[\\]*<>:"|]+', 'g');
 
   const prettySupportedLabels = Array.from(new Set(SUPPORTED_FILE_TYPES.map((entry) => entry.label))).join(', ');
 
@@ -620,7 +620,7 @@ function useCaseForm({ params }) {
 
   const ensureSafeStorageName = (rawName, desiredContentType) => {
     const sanitized = (rawName || 'artifact')
-      .replace(/[\/\\#?[\]*<>:"|]+/g, '_')
+      .replace(UNSAFE_STORAGE_CHARS, '_')
       .replace(/\s+/g, ' ')
       .trim();
     const baseName = sanitized || 'artifact';
@@ -2829,7 +2829,6 @@ export default function CaseFormPage({ params }) {
     audience.selectedUserIds,
     basics.caseName,
     transactions.disbursements,
-    answerKey.disbursements,
   ]);
 
   const allChecklistItemsReady = useMemo(

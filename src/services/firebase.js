@@ -4,7 +4,7 @@ import { getFirestore } from 'firebase/firestore';
 import { getFunctions } from 'firebase/functions';
 import { getStorage } from 'firebase/storage';
 
-/* global __firebase_config, __app_id, __initial_auth_token */
+/* global __firebase_config, __app_id */
 
 if (!window.__firebase_config) {
   window.__firebase_config = process.env.REACT_APP_FIREBASE_CONFIG ?? '{}';
@@ -89,6 +89,8 @@ export const FirestorePaths = {
   USER_PROFILE: (userId) => `artifacts/${appId}/users/${userId}/userProfileData/profile`,
   CASES_COLLECTION: () => `artifacts/${appId}/public/data/cases`,
   CASE_DOCUMENT: (caseId) => `artifacts/${appId}/public/data/cases/${caseId}`,
+  CASE_KEYS_COLLECTION: () => `artifacts/${appId}/private/case_keys`,
+  CASE_KEYS_DOCUMENT: (caseId) => `artifacts/${appId}/private/case_keys/${caseId}`,
   USERS_COLLECTION: () => `artifacts/${appId}/users`,
   USER_SUBMISSIONS_COLLECTION: (appIdValue, userId) =>
     `artifacts/${appIdValue}/users/${userId}/caseSubmissions`,

@@ -23,8 +23,9 @@ jest.mock('firebase/firestore', () => ({
 jest.mock('../AppCore', () => ({
   db: {},
   FirestorePaths: {
-    CASE_DOCUMENT: (id) => `cases/${id}`
-  }
+    CASE_DOCUMENT: (id) => `cases/${id}`,
+    CASE_KEYS_DOCUMENT: (id) => `caseKeys/${id}`,
+  },
 }));
 
 describe('caseService', () => {
@@ -33,9 +34,12 @@ describe('caseService', () => {
   });
 
   test('fetchCase returns data when found', async () => {
-    getDoc.mockResolvedValue({ exists: () => true, id: '1', data: () => ({ a: 1 }) });
+    getDoc
+      .mockResolvedValueOnce({ exists: () => true, id: '1', data: () => ({ a: 1 }) })
+      .mockResolvedValueOnce({ exists: () => false });
     const result = await fetchCase('1');
-    expect(doc).toHaveBeenCalledWith({}, 'cases/1');
+    expect(doc).toHaveBeenNthCalledWith(1, {}, 'cases/1');
+    expect(doc).toHaveBeenNthCalledWith(2, {}, 'caseKeys/1');
     expect(result).toMatchObject({
       id: '1',
       a: 1,

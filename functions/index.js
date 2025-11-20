@@ -260,11 +260,43 @@ exports.gradeSubmission = onDocumentWritten(
     const disbursementList = Array.isArray(caseData.disbursements)
       ? caseData.disbursements
       : [];
+    let caseKeyItems = null;
+    try {
+      const privateDoc = await firestore
+        .doc(`artifacts/${event.params.appId}/private/case_keys/${event.params.caseId}`)
+        .get();
+      if (privateDoc.exists) {
+        const caseKeysData = privateDoc.data() || {};
+        caseKeyItems =
+          caseKeysData && typeof caseKeysData.items === 'object' && caseKeysData.items !== null
+            ? caseKeysData.items
+            : null;
+      }
+    } catch (err) {
+      console.warn(
+        `[gradeSubmission] Failed to load case keys for ${event.params.caseId} under app ${event.params.appId}`,
+        err
+      );
+    }
 
     const disbursementMap = new Map();
     disbursementList.forEach((item) => {
       if (item && item.paymentId) {
-        disbursementMap.set(item.paymentId, item);
+        const normalized = { ...item };
+        const caseKeyEntry = caseKeyItems?.[item.paymentId];
+        if (caseKeyEntry) {
+          if (caseKeyEntry.answerKey) {
+            normalized.answerKey = caseKeyEntry.answerKey;
+          }
+          if (caseKeyEntry.answerKeyMode) {
+            normalized.answerKeyMode = caseKeyEntry.answerKeyMode;
+          }
+          if (caseKeyEntry.answerKeySingleClassification) {
+            normalized.answerKeySingleClassification =
+              caseKeyEntry.answerKeySingleClassification;
+          }
+        }
+        disbursementMap.set(item.paymentId, normalized);
       }
     });
 
@@ -299,6 +331,127 @@ exports.gradeSubmission = onDocumentWritten(
         grade: roundedScore,
         gradedAt: admin.firestore.FieldValue.serverTimestamp(),
         gradingDetails,
+      },
+      { merge: true }
+    );
+  }
+);
+
+exports.evaluateAuditSubmission = onDocumentWritten(
+  'artifacts/{appId}/users/{userId}/caseSubmissions/{caseId}',
+  async (event) => {
+    if (!event?.data?.after?.exists) {
+      return null;
+    }
+
+    const submission = event.data.after.data() || {};
+    const status = typeof submission.status === 'string'
+      ? submission.status
+      : submission.submittedAt
+      ? 'submitted'
+      : null;
+
+    if (status !== 'submitted') {
+      return null;
+    }
+
+    const beforeData = event.data.before?.exists ? event.data.before.data() : null;
+    const beforeClassifications = beforeData?.disbursementClassifications || {};
+    const beforeWorkspace = beforeData?.workspaceNotes || {};
+    const currentClassifications = submission.disbursementClassifications || {};
+    const currentWorkspace = submission.workspaceNotes || {};
+
+    const classificationsChanged =
+      stableStringify(beforeClassifications) !== stableStringify(currentClassifications);
+    const workspaceChanged =
+      stableStringify(beforeWorkspace) !== stableStringify(currentWorkspace);
+
+    if (!classificationsChanged && !workspaceChanged && Array.isArray(submission.virtualSeniorFeedback)) {
+      return null;
+    }
+
+    const firestore = admin.firestore();
+    const keysSnap = await firestore
+      .doc(`artifacts/${event.params.appId}/private/case_keys/${event.params.caseId}`)
+      .get();
+    const privateKeysData = keysSnap.exists ? keysSnap.data() : null;
+    const privateItems =
+      privateKeysData && typeof privateKeysData.items === 'object' && privateKeysData.items !== null
+        ? privateKeysData.items
+        : {};
+
+    const reviewNotes = [];
+
+    Object.keys(currentClassifications).forEach((itemId) => {
+      const truth = privateItems[itemId];
+      if (!truth) return;
+      const workspace = currentWorkspace[itemId] && typeof currentWorkspace[itemId] === 'object'
+        ? currentWorkspace[itemId]
+        : {};
+      const allocations = currentClassifications[itemId];
+      const totals = allocations && typeof allocations === 'object' ? allocations : {};
+      const normalizedTotals = Object.keys(totals).reduce((acc, key) => {
+        const value = totals[key];
+        const numericValue = typeof value === 'number' ? value : Number(value);
+        acc[key] = Number.isFinite(numericValue) ? numericValue : 0;
+        return acc;
+      }, {});
+      const derivedClassification =
+        workspace.classification || findPrimaryClassification(normalizedTotals);
+      const userWork = {
+        ...workspace,
+        classification: derivedClassification || '',
+      };
+
+      const durationSeconds =
+        typeof userWork.interactionDuration === 'number' ? userWork.interactionDuration : null;
+      if (truth.riskLevel === 'high' && typeof durationSeconds === 'number' && durationSeconds < 5) {
+        reviewNotes.push({
+          itemId,
+          severity: 'high',
+          message:
+            'Review Note: You concluded on this high-risk item too quickly. Did you review all attachments?',
+        });
+      }
+
+      if (
+        userWork.selectedAssertion === 'cutoff' &&
+        userWork.serviceEndInput &&
+        truth?.groundTruths?.servicePeriodEnd
+      ) {
+        const userDate = new Date(userWork.serviceEndInput);
+        const trueDate = new Date(truth.groundTruths.servicePeriodEnd);
+        if (!Number.isNaN(userDate.getTime()) && !Number.isNaN(trueDate.getTime())) {
+          const diffTime = Math.abs(userDate.getTime() - trueDate.getTime());
+          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+          if (diffDays > 1) {
+            reviewNotes.push({
+              itemId,
+              severity: 'medium',
+              message:
+                'Review Note: Your conclusion is correct, but the Service Period date you documented does not match the invoice. Re-examine the document.',
+            });
+          }
+        }
+      }
+
+      if (
+        userWork.classification === 'properly_included' &&
+        !userWork.evidenceLinked
+      ) {
+        reviewNotes.push({
+          itemId,
+          severity: 'medium',
+          message:
+            'Documentation Deficiency: You vouched for existence but failed to link the supporting evidence in the workpaper.',
+        });
+      }
+    });
+
+    return event.data.after.ref.set(
+      {
+        virtualSeniorFeedback: reviewNotes,
+        heuristicsEvaluatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }
     );
