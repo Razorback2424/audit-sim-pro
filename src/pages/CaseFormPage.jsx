@@ -3151,6 +3151,23 @@ const DisbursementItem = ({
     }
   };
 
+  const handleGroundTruthChange = (field, value, { asNumber = false } = {}) => {
+    const nextTruths = { ...(item.groundTruths || {}) };
+    let normalizedValue = value;
+    if (value === '' || value === null || value === undefined) {
+      normalizedValue = undefined;
+    } else if (asNumber) {
+      const numericValue = Number(value);
+      normalizedValue = Number.isFinite(numericValue) ? numericValue : undefined;
+    }
+    if (normalizedValue === undefined) {
+      delete nextTruths[field];
+    } else {
+      nextTruths[field] = normalizedValue;
+    }
+    const cleanedTruths = Object.keys(nextTruths).length > 0 ? nextTruths : undefined;
+    onChange(index, { ...item, groundTruths: cleanedTruths });
+  };
   const baseId = item._tempId || item.paymentId || `disbursement-${index}`;
   const mappings = item.mappings || [];
 
@@ -3295,6 +3312,74 @@ const DisbursementItem = ({
                   />
                 ))
               )}
+            </div>
+          </div>
+
+          <div className="mt-4 border-t border-gray-100 pt-4">
+            <h4 className="text-sm font-semibold text-gray-800 mb-2">Virtual Senior Ground Truths</h4>
+            <p className="text-xs text-gray-500 mb-3">
+              Enter the factual evidence found in the document. The system compares this against the student's selections.
+            </p>
+            <div className="grid grid-cols-1 gap-4 rounded-lg bg-gray-50 p-3 sm:grid-cols-2">
+              <div className="flex flex-col text-sm font-medium text-gray-700">
+                <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">
+                  Document Date (Invoice / Count Sheet)
+                </span>
+                <Input
+                  type="date"
+                  value={item.groundTruths?.invoiceDate || ''}
+                  onChange={(event) => handleGroundTruthChange('invoiceDate', event.target.value)}
+                />
+              </div>
+              <div className="flex flex-col text-sm font-medium text-gray-700">
+                <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Service / Shipping Date</span>
+                <Input
+                  type="date"
+                  value={item.groundTruths?.servicePeriodEnd || ''}
+                  onChange={(event) => handleGroundTruthChange('servicePeriodEnd', event.target.value)}
+                />
+              </div>
+              <div className="flex flex-col text-sm font-medium text-gray-700">
+                <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">
+                  Actual Count (Inventory)
+                </span>
+                <Input
+                  type="number"
+                  placeholder="e.g., 95"
+                  value={
+                    item.groundTruths?.actualCount !== undefined && item.groundTruths.actualCount !== null
+                      ? item.groundTruths.actualCount
+                      : ''
+                  }
+                  onChange={(event) => handleGroundTruthChange('actualCount', event.target.value, { asNumber: true })}
+                />
+              </div>
+              <div className="flex flex-col text-sm font-medium text-gray-700">
+                <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">
+                  Confirmed Value (Cash / AR)
+                </span>
+                <Input
+                  type="number"
+                  placeholder="e.g., 50000"
+                  value={
+                    item.groundTruths?.confirmedValue !== undefined && item.groundTruths.confirmedValue !== null
+                      ? item.groundTruths.confirmedValue
+                      : ''
+                  }
+                  onChange={(event) =>
+                    handleGroundTruthChange('confirmedValue', event.target.value, { asNumber: true })
+                  }
+                />
+              </div>
+              <div className="sm:col-span-2 flex flex-col text-sm font-medium text-gray-700">
+                <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Condition / Notes</span>
+                <Input
+                  type="text"
+                  placeholder="e.g., Damaged pallet, obsolete stock"
+                  value={item.groundTruths?.condition || ''}
+                  onChange={(event) => handleGroundTruthChange('condition', event.target.value)}
+                />
+              </div>
             </div>
           </div>
         </div>

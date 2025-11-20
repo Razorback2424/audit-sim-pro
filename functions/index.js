@@ -295,6 +295,12 @@ exports.gradeSubmission = onDocumentWritten(
             normalized.answerKeySingleClassification =
               caseKeyEntry.answerKeySingleClassification;
           }
+          if (caseKeyEntry.groundTruths) {
+            normalized.groundTruths = caseKeyEntry.groundTruths;
+          }
+          if (caseKeyEntry.riskLevel && !normalized.riskLevel) {
+            normalized.riskLevel = caseKeyEntry.riskLevel;
+          }
         }
         disbursementMap.set(item.paymentId, normalized);
       }
@@ -308,6 +314,13 @@ exports.gradeSubmission = onDocumentWritten(
     let correctCount = 0;
     let totalCount = 0;
     const gradingDetails = {};
+    const reviewNotes = [];
+    const workspaceNotes = submission?.workspaceNotes || {};
+    const globalAuditAreaRaw =
+      typeof caseData.auditArea === 'string' && caseData.auditArea.trim()
+        ? caseData.auditArea.trim()
+        : '';
+    const globalAuditArea = globalAuditAreaRaw || 'PAYABLES';
 
     selectedIds.forEach((paymentId) => {
       const disbursement = disbursementMap.get(paymentId);
@@ -316,6 +329,102 @@ exports.gradeSubmission = onDocumentWritten(
       }
       const userAllocations = afterClassifications[paymentId] || {};
       const detail = buildGradingDetail(disbursement, userAllocations);
+      const issues = [];
+      const workspaceEntry = workspaceNotes[paymentId] || {};
+      const noteValue =
+        (typeof userAllocations.notes === 'string' && userAllocations.notes) ||
+        (typeof workspaceEntry.workpaperNote === 'string' && workspaceEntry.workpaperNote) ||
+        (typeof workspaceEntry.notes === 'string' && workspaceEntry.notes) ||
+        '';
+      const trimmedNote = noteValue.trim();
+      const userClassification =
+        detail?.userClassification || userAllocations.singleClassification || '';
+      const isException =
+        typeof userClassification === 'string' &&
+        ['improperlyIncluded', 'improperlyExcluded'].includes(userClassification);
+      const hasNote = trimmedNote.length > 5;
+
+      if (isException && !hasNote) {
+        issues.push(
+          'Documentation Deficiency: You proposed an adjustment but failed to document your evidence.'
+        );
+        detail.isCorrect = false;
+      }
+
+      const groundTruths = disbursement.groundTruths || {};
+      const itemAuditAreaRaw =
+        typeof disbursement.auditArea === 'string' && disbursement.auditArea.trim()
+          ? disbursement.auditArea.trim()
+          : '';
+      const auditArea = itemAuditAreaRaw || globalAuditArea;
+
+      switch (auditArea) {
+        case 'PAYABLES': {
+          if (
+            groundTruths.servicePeriodEnd &&
+            disbursement.paymentDate &&
+            typeof groundTruths.servicePeriodEnd === 'string' &&
+            typeof disbursement.paymentDate === 'string'
+          ) {
+            const glDate = new Date(disbursement.paymentDate);
+            const svcDate = new Date(groundTruths.servicePeriodEnd);
+            if (
+              !Number.isNaN(glDate.getTime()) &&
+              !Number.isNaN(svcDate.getTime()) &&
+              svcDate > glDate &&
+              svcDate.getMonth() !== glDate.getMonth()
+            ) {
+              if (userClassification === 'properlyIncluded') {
+                issues.push(
+                  'Cut-off Error: You accepted this item, but the service period indicates it belongs in the next period.'
+                );
+                detail.isCorrect = false;
+              }
+            }
+          }
+          break;
+        }
+        case 'INVENTORY': {
+          const actualRaw =
+            groundTruths.actualCount ??
+            groundTruths.actualValue ??
+            groundTruths.confirmedValue ??
+            null;
+          const actualQty = actualRaw !== null ? Number(actualRaw) : NaN;
+          const ledgerQty = Number(disbursement.amount);
+          if (Number.isFinite(actualQty) && Number.isFinite(ledgerQty) && actualQty < ledgerQty) {
+            if (userClassification === 'properlyIncluded') {
+              issues.push(
+                `Existence Error: Physical count (${actualQty}) is lower than the system record (${ledgerQty}). You should have proposed an adjustment.`
+              );
+              detail.isCorrect = false;
+            }
+          }
+          break;
+        }
+        case 'CASH': {
+          if (isException && hasNote) {
+            const noteLower = trimmedNote.toLowerCase();
+            if (!noteLower.includes('outstanding') && !noteLower.includes('transit')) {
+              issues.push(
+                "Terminology Warning: Cash variances are typically due to 'Outstanding Checks' or 'Deposits in Transit'. Please use precise terminology."
+              );
+            }
+          }
+          break;
+        }
+        default:
+          break;
+      }
+
+      if (issues.length > 0) {
+        reviewNotes.push({
+          paymentId,
+          payee: disbursement.payee || null,
+          notes: issues,
+        });
+      }
+
       gradingDetails[paymentId] = detail;
       totalCount += 1;
       if (detail.isCorrect) {
@@ -331,6 +440,7 @@ exports.gradeSubmission = onDocumentWritten(
         grade: roundedScore,
         gradedAt: admin.firestore.FieldValue.serverTimestamp(),
         gradingDetails,
+        virtualSeniorFeedback: reviewNotes,
       },
       { merge: true }
     );
@@ -380,7 +490,14 @@ exports.evaluateAuditSubmission = onDocumentWritten(
         ? privateKeysData.items
         : {};
 
-    const reviewNotes = [];
+    const groupedFeedback = {};
+
+    const appendNote = (itemId, message) => {
+      if (!groupedFeedback[itemId]) {
+        groupedFeedback[itemId] = { paymentId: itemId, payee: null, notes: [] };
+      }
+      groupedFeedback[itemId].notes.push(message);
+    };
 
     Object.keys(currentClassifications).forEach((itemId) => {
       const truth = privateItems[itemId];
@@ -406,12 +523,10 @@ exports.evaluateAuditSubmission = onDocumentWritten(
       const durationSeconds =
         typeof userWork.interactionDuration === 'number' ? userWork.interactionDuration : null;
       if (truth.riskLevel === 'high' && typeof durationSeconds === 'number' && durationSeconds < 5) {
-        reviewNotes.push({
+        appendNote(
           itemId,
-          severity: 'high',
-          message:
-            'Review Note: You concluded on this high-risk item too quickly. Did you review all attachments?',
-        });
+          'Review Note: You concluded on this high-risk item too quickly. Did you review all attachments?'
+        );
       }
 
       if (
@@ -425,13 +540,11 @@ exports.evaluateAuditSubmission = onDocumentWritten(
           const diffTime = Math.abs(userDate.getTime() - trueDate.getTime());
           const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
           if (diffDays > 1) {
-            reviewNotes.push({
-              itemId,
-              severity: 'medium',
-              message:
-                'Review Note: Your conclusion is correct, but the Service Period date you documented does not match the invoice. Re-examine the document.',
-            });
-          }
+        appendNote(
+          itemId,
+          'Review Note: Your conclusion is correct, but the Service Period date you documented does not match the invoice. Re-examine the document.'
+        );
+      }
         }
       }
 
@@ -439,18 +552,16 @@ exports.evaluateAuditSubmission = onDocumentWritten(
         userWork.classification === 'properly_included' &&
         !userWork.evidenceLinked
       ) {
-        reviewNotes.push({
+        appendNote(
           itemId,
-          severity: 'medium',
-          message:
-            'Documentation Deficiency: You vouched for existence but failed to link the supporting evidence in the workpaper.',
-        });
+          'Documentation Deficiency: You vouched for existence but failed to link the supporting evidence in the workpaper.'
+        );
       }
     });
 
     return event.data.after.ref.set(
       {
-        virtualSeniorFeedback: reviewNotes,
+        virtualSeniorFeedback: Object.values(groupedFeedback),
         heuristicsEvaluatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }

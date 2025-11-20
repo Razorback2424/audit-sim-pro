@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Input, Select } from '../../../AppCore';
+import { Input, Select, Textarea } from '../../../AppCore';
 import { currencyFormatter } from '../../../utils/formatters';
 
 const RISK_STYLES = {
@@ -34,6 +34,7 @@ export default function AuditProcedureWorkspace({
   onSplitToggle = noop,
   onClassificationChange = noop,
   onSplitAmountChange = noop,
+  onNoteChange = noop,
   isLocked,
   totalsMatch,
   totalEntered,
@@ -256,6 +257,14 @@ export default function AuditProcedureWorkspace({
     return renderGeneralTab();
   };
 
+  const handleNoteInputChange = (event) => {
+    const value = event.target.value;
+    if (typeof onNoteChange === 'function') {
+      onNoteChange(item.id, value);
+    }
+    emitUpdate({ workpaperNote: value });
+  };
+
   return (
     <div className="audit-workspace border rounded-lg p-4 bg-white shadow-sm space-y-5">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -352,6 +361,19 @@ export default function AuditProcedureWorkspace({
               : singleAllocationHint}
           </div>
         )}
+
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">
+            Workpaper Procedure / Notes
+          </label>
+          <Textarea
+            rows={2}
+            placeholder="e.g., Vouched to Invoice #123. Service period verified as Dec 2023."
+            value={allocation.notes || ''}
+            onChange={handleNoteInputChange}
+            disabled={isLocked}
+          />
+        </div>
 
         <div className="text-xs text-gray-500">
           Entered total: <strong>{currencyFormatter.format(totalEntered)}</strong>{' '}

@@ -13,6 +13,15 @@ import { DEFAULT_AUDIT_AREA, DEFAULT_ITEM_TYPE } from './caseConstants';
  */
 
 /**
+ * @typedef {Object} GroundTruths
+ * @property {string} [invoiceDate] - Actual invoice date (YYYY-MM-DD)
+ * @property {string} [servicePeriodEnd] - Actual service period end date (YYYY-MM-DD)
+ * @property {number} [actualCount] - Verified physical count (inventory)
+ * @property {number} [confirmedValue] - Confirmed amount from third party
+ * @property {string} [condition] - Qualitative notes (e.g., damaged)
+ */
+
+/**
  * @typedef {Object} CaseDisbursement
  * @property {string} paymentId
  * @property {string} payee
@@ -40,6 +49,7 @@ import { DEFAULT_AUDIT_AREA, DEFAULT_ITEM_TYPE } from './caseConstants';
  * @property {'low' | 'medium' | 'high'} [riskLevel]
  * @property {{ allowVouching?: boolean, allowTracing?: boolean }} [directionalFlags]
  * @property {boolean} [hasAnswerKey]
+ * @property {GroundTruths} [groundTruths]
  */
 
 /**

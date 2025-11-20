@@ -1054,6 +1054,25 @@ export default function TraineeCaseViewPage({ params }) {
     }));
   }, []);
 
+  const handleNoteChange = useCallback(
+    (paymentId, noteText) => {
+      if (isLocked) return;
+      setClassificationAmounts((prev) => {
+        const current = prev[paymentId] || createEmptyAllocation();
+        if (current.notes === noteText) return prev;
+        return {
+          ...prev,
+          [paymentId]: {
+            ...current,
+            notes: noteText,
+          },
+        };
+      });
+      handleWorkspaceUpdate(paymentId, { workpaperNote: noteText });
+    },
+    [createEmptyAllocation, handleWorkspaceUpdate, isLocked]
+  );
+
   const handleSingleClassificationChange = (paymentId, classification) => {
     if (isLocked) return;
     const normalizedValue = classificationKeySet.has(classification) ? classification : '';
@@ -1666,6 +1685,7 @@ export default function TraineeCaseViewPage({ params }) {
                       totalsMatch={totalsMatch}
                       pdfViewerState={pdfViewerState}
                       onUpdate={handleWorkspaceUpdate}
+                      onNoteChange={handleNoteChange}
                       workspaceState={workspaceNotes[itemId]}
                     />
                   );
@@ -1713,6 +1733,9 @@ export default function TraineeCaseViewPage({ params }) {
     const gradedAtText = formatTimestamp(submission?.gradedAt);
     const gradingDetails = submission?.gradingDetails || {};
     const gradeReady = gradeDisplay !== null;
+    const seniorFeedback = Array.isArray(submission?.virtualSeniorFeedback)
+      ? submission.virtualSeniorFeedback
+      : [];
 
     const renderDisbursementResults = () => {
       if (!submission) {
@@ -1869,6 +1892,34 @@ export default function TraineeCaseViewPage({ params }) {
             <p className="text-sm text-gray-500">Grading in progress… please check back shortly.</p>
           )}
         </div>
+
+        {seniorFeedback.length > 0 ? (
+          <div className="rounded-lg border border-red-100 bg-white shadow-sm overflow-hidden">
+            <div className="bg-red-50 px-4 py-3 border-b border-red-100 flex items-center">
+              <span className="text-xl mr-2" role="img" aria-label="Review notes">
+                📝
+              </span>
+              <h3 className="font-bold text-red-900">Virtual Senior Review Notes</h3>
+            </div>
+            <div className="divide-y divide-gray-100">
+              {seniorFeedback.map((item) => (
+                <div key={item.paymentId || item.payee} className="p-4">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-semibold text-gray-700">{item.payee || 'Unnamed item'}</span>
+                    <span className="text-xs text-gray-400 uppercase tracking-wide">{item.paymentId}</span>
+                  </div>
+                  <ul className="list-disc pl-5 space-y-1">
+                    {(item.notes || []).map((note, idx) => (
+                      <li key={`${item.paymentId || 'item'}-${idx}`} className="text-sm text-red-700">
+                        {note}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
           <h2 className="text-xl font-semibold text-gray-800 mb-4">Results & Feedback</h2>
