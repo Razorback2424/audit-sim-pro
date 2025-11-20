@@ -71,6 +71,7 @@ const buildEmptyAllocationStateForFields = (fields) => ({
   mode: 'single',
   singleClassification: '',
   splitValues: createEmptySplitValuesForFields(fields),
+  notes: '',
 });
 
 const toValidClassificationKey = (value, keySet) =>
@@ -85,6 +86,7 @@ const normalizeAllocationShapeForFields = (rawAllocation, fields, keySet) => {
   const legacyDetected = fields.some(({ key }) => rawAllocation[key] !== undefined);
   if (legacyDetected && !rawAllocation.mode) {
     const legacy = buildEmptyAllocationStateForFields(fields);
+    legacy.notes = typeof rawAllocation.notes === 'string' ? rawAllocation.notes : '';
     const nonZeroKeys = [];
 
     fields.forEach(({ key }) => {
@@ -109,6 +111,7 @@ const normalizeAllocationShapeForFields = (rawAllocation, fields, keySet) => {
   }
 
   const normalized = buildEmptyAllocationStateForFields(fields);
+  normalized.notes = typeof rawAllocation.notes === 'string' ? rawAllocation.notes : '';
   const requestedSplitMode = rawAllocation.mode === 'split';
   normalized.mode = requestedSplitMode ? 'split' : 'single';
   normalized.singleClassification = toValidClassificationKey(rawAllocation.singleClassification, keySet);
@@ -148,6 +151,7 @@ const allocationsAreEqualForFields = (left, right, fields, keySet) => {
 
   if (a.mode !== b.mode) return false;
   if ((a.singleClassification || '') !== (b.singleClassification || '')) return false;
+  if ((a.notes || '') !== (b.notes || '')) return false;
 
   return fields.every(({ key }) => (a.splitValues[key] ?? '') === (b.splitValues[key] ?? ''));
 };
@@ -1201,10 +1205,12 @@ export default function TraineeCaseViewPage({ params }) {
       }))
     );
     const workspacePayload = selectedIds.reduce((acc, id) => {
-      if (workspaceNotes[id]) {
-        acc[id] = workspaceNotes[id];
+      const existing = workspaceNotes[id] || {};
+      const classificationNote = classificationAmounts[id]?.notes;
+      if (typeof classificationNote === 'string' && classificationNote !== '' && !existing.workpaperNote) {
+        acc[id] = { ...existing, workpaperNote: classificationNote };
       } else {
-        acc[id] = {};
+        acc[id] = existing;
       }
       return acc;
     }, {});
