@@ -34,6 +34,8 @@ import { DEFAULT_AUDIT_AREA, DEFAULT_ITEM_TYPE, AUDIT_AREAS } from './caseConsta
  *   improperlyIncluded?: number,
  *   improperlyExcluded?: number,
  *   explanation?: string,
+ *   assertion?: string,
+ *   reason?: string,
  * }} [answerKey]
  * @property {string|null} [storagePath]
  * @property {string|null} [downloadURL]

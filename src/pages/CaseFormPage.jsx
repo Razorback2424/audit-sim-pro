@@ -42,6 +42,7 @@ const ANSWER_KEY_LABELS = {
 };
 const ANSWER_KEY_PLACEHOLDER = '__choose';
 const DEFAULT_ANSWER_KEY_CLASSIFICATION = ANSWER_KEY_PLACEHOLDER;
+const DEFAULT_ANSWER_KEY_META = { assertion: '', reason: '' };
 const CASH_RECON_SCENARIOS = [
   { value: 'clean', label: 'Properly Outstanding / Matched' },
   { value: 'unrecorded', label: 'Unrecorded (Evidence only)' },
@@ -58,7 +59,12 @@ const WORKPAPER_LAYOUT_OPTIONS = [
   { value: 'fixed_assets', label: 'Fixed Assets (rollforward + testing)' },
   { value: 'inventory_two_pane', label: 'Inventory (two-pane preset)' },
 ];
-const buildSingleAnswerKey = (classification, amountValue, explanation = '') => {
+const extractAnswerKeyMeta = (answerKey = {}) => ({
+  assertion: answerKey.assertion || '',
+  reason: answerKey.reason || '',
+});
+
+const buildSingleAnswerKey = (classification, amountValue, explanation = '', meta = DEFAULT_ANSWER_KEY_META) => {
   const sanitizedAmount = Number(amountValue) || 0;
   const next = {
     properlyIncluded: 0,
@@ -66,6 +72,8 @@ const buildSingleAnswerKey = (classification, amountValue, explanation = '') => 
     improperlyIncluded: 0,
     improperlyExcluded: 0,
     explanation,
+    assertion: meta.assertion || '',
+    reason: meta.reason || '',
   };
   if (classification && ANSWER_KEY_FIELDS.includes(classification)) {
     next[classification] = sanitizedAmount;
@@ -99,7 +107,8 @@ const detectAnswerKeyMode = (disbursement) => {
     const normalized = buildSingleAnswerKey(
       classificationCandidate === ANSWER_KEY_PLACEHOLDER ? null : classificationCandidate,
       classificationCandidate === ANSWER_KEY_PLACEHOLDER ? 0 : amountNumber,
-      answerKey.explanation || ''
+      answerKey.explanation || '',
+      extractAnswerKeyMeta(answerKey)
     );
     return {
       mode: 'single',
@@ -554,6 +563,8 @@ const [cashContext, setCashContext] = useState({
                     improperlyIncluded: d.answerKey?.improperlyIncluded ?? 0,
                     improperlyExcluded: d.answerKey?.improperlyExcluded ?? 0,
                     explanation: d.answerKey?.explanation ?? '',
+                    assertion: d.answerKey?.assertion ?? '',
+                    reason: d.answerKey?.reason ?? '',
                   },
                   mappings: [],
                 };
@@ -717,9 +728,10 @@ const [cashContext, setCashContext] = useState({
           const classification = nextItem.answerKeySingleClassification || DEFAULT_ANSWER_KEY_CLASSIFICATION;
           const amountNumber = Number(nextItem.amount || 0);
           const explanation = nextItem.answerKey?.explanation || '';
+          const meta = extractAnswerKeyMeta(nextItem.answerKey);
           nextItem = {
             ...nextItem,
-            answerKey: buildSingleAnswerKey(classification, amountNumber, explanation),
+            answerKey: buildSingleAnswerKey(classification, amountNumber, explanation, meta),
           };
         }
         return nextItem;
@@ -3847,6 +3859,7 @@ const AnswerKeyCard = ({
   const handleClassificationChange = (value) => {
     onUpdate(index, (current) => {
       const explanation = current.answerKey?.explanation || '';
+      const meta = extractAnswerKeyMeta(current.answerKey);
       return {
         ...current,
         answerKeyMode: 'single',
@@ -3854,7 +3867,8 @@ const AnswerKeyCard = ({
         answerKey: buildSingleAnswerKey(
           value && value !== ANSWER_KEY_PLACEHOLDER ? value : null,
           value && value !== ANSWER_KEY_PLACEHOLDER ? Number(current.amount || 0) : 0,
-          explanation
+          explanation,
+          meta
         ),
       };
     });
@@ -3874,6 +3888,7 @@ const AnswerKeyCard = ({
             : null;
         const fallbackClassification = existingClassification || ANSWER_KEY_PLACEHOLDER;
         const explanation = current.answerKey?.explanation || '';
+        const meta = extractAnswerKeyMeta(current.answerKey);
         return {
           ...current,
           answerKeyMode: 'single',
@@ -3881,7 +3896,8 @@ const AnswerKeyCard = ({
           answerKey: buildSingleAnswerKey(
             fallbackClassification && fallbackClassification !== ANSWER_KEY_PLACEHOLDER ? fallbackClassification : null,
             fallbackClassification && fallbackClassification !== ANSWER_KEY_PLACEHOLDER ? Number(current.amount || 0) : 0,
-            explanation
+            explanation,
+            meta
           ),
         };
       });
@@ -3908,7 +3924,29 @@ const AnswerKeyCard = ({
     }));
   };
 
+  const handleAssertionChange = (value) => {
+    onUpdate(index, (current) => ({
+      ...current,
+      answerKey: {
+        ...current.answerKey,
+        assertion: value,
+      },
+    }));
+  };
+
+  const handleReasonChange = (value) => {
+    onUpdate(index, (current) => ({
+      ...current,
+      answerKey: {
+        ...current.answerKey,
+        reason: value,
+      },
+    }));
+  };
+
   const explanationPreview = String(answerKey.explanation || '').trim() || 'Not provided yet';
+  const assertionPreview = String(answerKey.assertion || '').trim();
+  const reasonPreview = String(answerKey.reason || '').trim();
   const statusBadgeClass = ready ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700';
   const statusText = ready ? 'READY' : 'INCOMPLETE';
 
@@ -4011,6 +4049,31 @@ const AnswerKeyCard = ({
               placeholder="Briefly explain why this allocation is correct."
             />
           </div>
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="flex flex-col text-sm font-medium text-gray-700">
+              <label className="mb-1 text-xs uppercase tracking-wide text-gray-500" htmlFor={`${disbursement._tempId}-assertion`}>
+                Expected assertion (for grading)
+              </label>
+              <Input
+                id={`${disbursement._tempId}-assertion`}
+                value={answerKey?.assertion ?? ''}
+                onChange={(event) => handleAssertionChange(event.target.value)}
+                placeholder="e.g., cutoff, existence, rights & obligations"
+              />
+            </div>
+            <div className="flex flex-col text-sm font-medium text-gray-700">
+              <label className="mb-1 text-xs uppercase tracking-wide text-gray-500" htmlFor={`${disbursement._tempId}-reason`}>
+                Expected reason / trigger
+              </label>
+              <Input
+                id={`${disbursement._tempId}-reason`}
+                value={answerKey?.reason ?? ''}
+                onChange={(event) => handleReasonChange(event.target.value)}
+                placeholder="e.g., dated after year end, customer-owned inventory"
+              />
+            </div>
+          </div>
         </div>
       ) : (
         <div className="border-t border-gray-100 p-4">
@@ -4024,6 +4087,10 @@ const AnswerKeyCard = ({
             <div>
               <span className="text-xs uppercase tracking-wide text-gray-500">Explanation</span>
               <p className="mt-1 truncate text-gray-600">{explanationPreview}</p>
+              <div className="mt-1 space-y-1 text-xs text-gray-500">
+                {assertionPreview ? <p>Assertion: {assertionPreview}</p> : null}
+                {reasonPreview ? <p>Reason: {reasonPreview}</p> : null}
+              </div>
             </div>
           </div>
         </div>
@@ -4603,7 +4670,8 @@ const DisbursementItem = ({
       const classification = nextItem.answerKeySingleClassification || DEFAULT_ANSWER_KEY_CLASSIFICATION;
       const amountNumber = Number(value) || 0;
       const explanation = nextItem.answerKey?.explanation || '';
-      nextItem.answerKey = buildSingleAnswerKey(classification, amountNumber, explanation);
+      const meta = extractAnswerKeyMeta(nextItem.answerKey);
+      nextItem.answerKey = buildSingleAnswerKey(classification, amountNumber, explanation, meta);
     }
     onChange(index, nextItem);
     if (name === 'paymentId') {

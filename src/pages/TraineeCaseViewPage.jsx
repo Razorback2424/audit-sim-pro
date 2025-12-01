@@ -8,6 +8,7 @@ import { saveProgress, subscribeProgressForCases } from '../services/progressSer
 import { Send, Loader2, ExternalLink, Download, CheckCircle2, XCircle, Info } from 'lucide-react';
 import { getClassificationFields, getFlowCopy } from '../constants/classificationFields';
 import { DEFAULT_AUDIT_AREA, AUDIT_AREAS } from '../models/caseConstants';
+import { deriveImmediateFeedbackForItem } from '../logic/ValidatorRegistry';
 import { currencyFormatter } from '../utils/formatters';
 import AuditItemCardFactory from '../components/trainee/AuditItemCardFactory';
 import CashReconciliationWorkbench from '../components/trainee/workspaces/CashReconciliationWorkbench';
@@ -331,6 +332,8 @@ export default function TraineeCaseViewPage({ params }) {
     if (auditArea === AUDIT_AREAS.FIXED_ASSETS) return 'fixed_assets';
     return 'two_pane';
   }, [caseData, auditArea]);
+  const isCashLayout = layoutType === 'cash_recon' || auditArea === AUDIT_AREAS.CASH;
+  const isFixedAssetLayout = layoutType === 'fixed_assets' || auditArea === AUDIT_AREAS.FIXED_ASSETS;
   const layoutConfig = useMemo(
     () =>
       caseData?.workpaper && typeof caseData.workpaper.layoutConfig === 'object'
@@ -340,18 +343,22 @@ export default function TraineeCaseViewPage({ params }) {
   );
 
   useEffect(() => {
-    if (auditArea === AUDIT_AREAS.CASH) {
+    if (isCashLayout) {
       setCashCanSubmit(false);
     } else {
       setCashCanSubmit(true);
     }
-  }, [auditArea]);
-  const classificationFields = useMemo(() => getClassificationFields(auditArea), [auditArea]);
+  }, [isCashLayout]);
+  const classificationContextArea = isCashLayout ? AUDIT_AREAS.CASH : auditArea;
+  const classificationFields = useMemo(
+    () => getClassificationFields(classificationContextArea),
+    [classificationContextArea]
+  );
   const classificationKeySet = useMemo(
     () => new Set(classificationFields.map(({ key }) => key)),
     [classificationFields]
   );
-  const flowCopy = useMemo(() => getFlowCopy(auditArea), [auditArea]);
+  const flowCopy = useMemo(() => getFlowCopy(classificationContextArea), [classificationContextArea]);
   const effectiveFlowCopy = flowCopy || DEFAULT_FLOW_COPY_STATE;
   const stepLabels = effectiveFlowCopy.stepLabels || DEFAULT_FLOW_COPY_STATE.stepLabels;
   const stepDescriptions =
@@ -487,55 +494,6 @@ export default function TraineeCaseViewPage({ params }) {
     },
     [classificationFields, classificationKeySet, normalizeAllocationShape, parseAmount]
   );
-
-  const deriveImmediateFeedbackForItem = useCallback((disbursement) => {
-    const messages = [];
-    if (!disbursement) return messages;
-
-    const validatorType = disbursement.validator?.type;
-    const config = disbursement.validator?.config || {};
-
-    if (validatorType === 'cutoff') {
-      const serviceEndRaw = disbursement.groundTruths?.servicePeriodEnd || disbursement.groundTruths?.invoiceDate;
-      const paymentDateRaw = disbursement.paymentDate;
-      if (serviceEndRaw && paymentDateRaw) {
-        const serviceDate = new Date(serviceEndRaw);
-        const paymentDate = new Date(paymentDateRaw);
-        if (!Number.isNaN(serviceDate.getTime()) && !Number.isNaN(paymentDate.getTime())) {
-          const diffDays = Math.round((paymentDate.getTime() - serviceDate.getTime()) / (1000 * 60 * 60 * 24));
-          const toleranceDays = Number(config.toleranceDays) || 0;
-          if (diffDays > toleranceDays) {
-            messages.push(
-              `Service ended ${diffDays} day${diffDays === 1 ? '' : 's'} before the recorded date — revisit cutoff.`
-            );
-          }
-        }
-      }
-    } else if (validatorType === 'match_amount') {
-      const expected = Number(disbursement.groundTruths?.confirmedValue || disbursement.amount);
-      const recorded = Number(disbursement.amount);
-      if (Number.isFinite(expected) && Number.isFinite(recorded)) {
-        const delta = Math.abs(expected - recorded);
-        const threshold = Number(config.tolerance || 0);
-        if (delta > threshold) {
-          messages.push(`Amount differs from evidence by ${currencyFormatter.format(delta)} — investigate the variance.`);
-        }
-      }
-    }
-
-    const invoiceDateRaw = disbursement.groundTruths?.invoiceDate;
-    const paymentDateRaw = disbursement.paymentDate;
-    if (invoiceDateRaw && paymentDateRaw) {
-      const invoiceDate = new Date(invoiceDateRaw);
-      const paymentDate = new Date(paymentDateRaw);
-      if (!Number.isNaN(invoiceDate.getTime()) && !Number.isNaN(paymentDate.getTime())) {
-        if (invoiceDate.getTime() > paymentDate.getTime()) {
-          messages.push('Invoice date is after book date — check if support is misdated.');
-        }
-      }
-    }
-    return messages;
-  }, [currencyFormatter]);
 
   const isAllocationComplete = useCallback(
     (disbursement, allocation) => {
@@ -824,7 +782,7 @@ export default function TraineeCaseViewPage({ params }) {
   ]);
 
   const cashOutstandingList = useMemo(() => {
-    if (auditArea !== AUDIT_AREAS.CASH) return [];
+    if (!isCashLayout) return [];
     return Array.isArray(caseData?.cashOutstandingItems)
       ? caseData.cashOutstandingItems.map((item, index) => ({
           ...item,
@@ -838,14 +796,14 @@ export default function TraineeCaseViewPage({ params }) {
           paymentDate: item.issueDate || item.bookDate || item.paymentDate || '',
         }))
       : [];
-  }, [auditArea, caseData]);
+  }, [caseData, isCashLayout]);
 
   const disbursementList = useMemo(() => {
-    if (auditArea === AUDIT_AREAS.CASH) {
+    if (isCashLayout) {
       return [...cashOutstandingList, ...cashAdjustments];
     }
     return Array.isArray(caseData?.disbursements) ? caseData.disbursements : [];
-  }, [auditArea, cashAdjustments, cashOutstandingList, caseData]);
+  }, [cashAdjustments, cashOutstandingList, caseData, isCashLayout]);
   const cashCutoffList = useMemo(
     () => (Array.isArray(caseData?.cashCutoffItems) ? caseData.cashCutoffItems : []),
     [caseData]
@@ -972,14 +930,14 @@ export default function TraineeCaseViewPage({ params }) {
   }, [disbursementList]);
 
   const selectedIds = useMemo(() => {
-    if (auditArea === AUDIT_AREAS.CASH || auditArea === AUDIT_AREAS.FIXED_ASSETS) {
+    if (isCashLayout || isFixedAssetLayout) {
       return disbursementList.map((item) => item.paymentId).filter(Boolean);
     }
     if (disbursementList.length === 0) {
       return Object.keys(selectedDisbursements).filter((id) => selectedDisbursements[id]);
     }
     return disbursementList.map((item) => item.paymentId).filter((id) => selectedDisbursements[id]);
-  }, [auditArea, disbursementList, selectedDisbursements]);
+  }, [disbursementList, isCashLayout, isFixedAssetLayout, selectedDisbursements]);
 
   const selectedDisbursementDetails = useMemo(
     () => selectedIds.map((id) => disbursementById.get(id)).filter(Boolean),
@@ -1005,27 +963,25 @@ export default function TraineeCaseViewPage({ params }) {
   const allClassified =
     selectedDisbursementDetails.length > 0 && classifiedCount === selectedDisbursementDetails.length;
 
-  const exceptionNoteRequiredIds = useMemo(
-    () => {
-      if (auditArea === AUDIT_AREAS.CASH) return [];
-      return selectedDisbursementDetails
-        .map((item) => {
-          const allocation = classificationAmounts[item.paymentId] || createEmptyAllocation();
-          const needsNote = requiresExceptionNote(allocation);
-          const hasNote = hasExceptionNote(allocation, workspaceNotes[item.paymentId]);
-          return needsNote && !hasNote ? item.paymentId : null;
-        })
-        .filter(Boolean);
-    },
-    [
-      selectedDisbursementDetails,
-      classificationAmounts,
-      createEmptyAllocation,
-      requiresExceptionNote,
-      hasExceptionNote,
-      workspaceNotes,
-    ]
-  );
+  const exceptionNoteRequiredIds = useMemo(() => {
+    if (isCashLayout) return [];
+    return selectedDisbursementDetails
+      .map((item) => {
+        const allocation = classificationAmounts[item.paymentId] || createEmptyAllocation();
+        const needsNote = requiresExceptionNote(allocation);
+        const hasNote = hasExceptionNote(allocation, workspaceNotes[item.paymentId]);
+        return needsNote && !hasNote ? item.paymentId : null;
+      })
+      .filter(Boolean);
+  }, [
+    classificationAmounts,
+    createEmptyAllocation,
+    hasExceptionNote,
+    isCashLayout,
+    requiresExceptionNote,
+    selectedDisbursementDetails,
+    workspaceNotes,
+  ]);
 
   const allEvidenceItems = useMemo(() => {
     const items = [];
@@ -1631,11 +1587,11 @@ export default function TraineeCaseViewPage({ params }) {
 
   const goToTestingStep = () => {
     if (isLocked) return;
-    if (auditArea !== AUDIT_AREAS.CASH && selectedIds.length === 0) {
+    if (!isCashLayout && selectedIds.length === 0) {
       showModal('Please select at least one disbursement to continue.', 'No Selection');
       return;
     }
-    if (auditArea !== AUDIT_AREAS.CASH) {
+    if (!isCashLayout) {
       const missingDocs = selectedEvidenceItems.filter(
         (item) => !item?.hasLinkedDocument && !isEvidenceWorkflowLinked(item.paymentId)
       );
@@ -1916,11 +1872,11 @@ export default function TraineeCaseViewPage({ params }) {
   };
 
   const handleSubmitTesting = async () => {
-    if (auditArea === AUDIT_AREAS.FIXED_ASSETS) {
+    if (isFixedAssetLayout) {
       await handleSubmitFixedAsset();
       return;
     }
-    if (auditArea === AUDIT_AREAS.CASH) {
+    if (isCashLayout) {
       await handleSubmitCash();
       return;
     }
@@ -2681,7 +2637,7 @@ export default function TraineeCaseViewPage({ params }) {
   };
 
   const renderSelectionStep = () => (
-    auditArea === AUDIT_AREAS.FIXED_ASSETS ? (
+    isFixedAssetLayout ? (
       renderFixedAssetSelectionStep()
     ) : (
       <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-4">
@@ -3418,7 +3374,7 @@ export default function TraineeCaseViewPage({ params }) {
   };
 
   const renderResultsStep = () => {
-    if (auditArea === AUDIT_AREAS.FIXED_ASSETS) {
+    if (isFixedAssetLayout) {
       const latestAttempt =
         Array.isArray(submission?.attempts) && submission.attempts.length > 0
           ? submission.attempts[submission.attempts.length - 1]
