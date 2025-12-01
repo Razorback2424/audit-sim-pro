@@ -56,6 +56,7 @@ jest.mock('../AppCore', () => {
       <button {...props}>{isLoading ? 'Loading…' : children}</button>
     ),
     Input: (props) => <input {...props} />,
+    Textarea: (props) => <textarea {...props} />,
     Select: ({ options = [], children, ...props }) => (
       <select {...props}>
         {children ||
@@ -91,7 +92,7 @@ describe('TraineeCaseViewPage', () => {
 
   const advanceToClassification = async () => {
     await screen.findByRole('heading', { name: /Step 1 — Select Disbursements/i, level: 2 });
-    const checkbox = screen.getByRole('checkbox', { name: /ID:\s*p1/i });
+    const [checkbox] = screen.getAllByRole('checkbox');
     await userEvent.click(checkbox);
     const continueButton = screen.getByRole('button', { name: /Continue to Classification/i });
     await userEvent.click(continueButton);
@@ -153,23 +154,19 @@ describe('TraineeCaseViewPage', () => {
     renderCase({
       caseName: 'Cash Case',
       auditArea: 'cash',
-      disbursements: [
-        { paymentId: 'p1', payee: 'Drawer', amount: '85', paymentDate: '2024-02-01', downloadURL: 'https://example.com' },
+      cashContext: { bookBalance: '1000', bankBalance: '1000' },
+      cashOutstandingItems: [
+        { _tempId: 'o1', reference: 'Chk1045', payee: 'Drawer', issueDate: '2023-12-29', amount: '500' },
       ],
+      cashCutoffItems: [{ _tempId: 'b1', reference: 'Chk1045', clearDate: '2024-01-03', amount: '500' }],
+      cashArtifacts: [{ type: 'cash_year_end_statement', downloadURL: 'https://example.com/yearend.pdf', fileName: 'Year End' }],
     });
 
     await advanceToClassification();
     await flushAsync();
-    expect(screen.getByText(/Select Cash Counts/i)).toBeInTheDocument();
-    expect(screen.getByText(/Reconcile Variances/i)).toBeInTheDocument();
-
-    const classificationSelect = await screen.findByRole('combobox', { name: /Classification/i });
-    await userEvent.selectOptions(classificationSelect, 'properlyIncluded');
-    expect(
-      within(classificationSelect).getByRole('option', { name: /Cash Count Matches/i })
-    ).toBeInTheDocument();
-    expect(within(classificationSelect).getByRole('option', { name: /Cash Over/i })).toBeInTheDocument();
-    expect(within(classificationSelect).getByRole('option', { name: /Cash Short/i })).toBeInTheDocument();
+    expect(screen.getByText(/Reconciliation Summary/i)).toBeInTheDocument();
+    expect(screen.getByText(/Outstanding List/i)).toBeInTheDocument();
+    expect(screen.getByText(/Year-End Bank Statement/i)).toBeInTheDocument();
   });
 
   test('fetches evidence for storage-backed documents on classification step', async () => {

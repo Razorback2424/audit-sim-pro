@@ -20,13 +20,37 @@ export const saveSubmission = async (userId, caseId, data) => {
   const ref = doc(db, FirestorePaths.USER_CASE_SUBMISSION(userId, caseId));
   // The `data` object already contains a client-side timestamp.
   // Do not use serverTimestamp() inside an arrayUnion element.
-  const attemptData = { ...data };
+  const {
+    grade,
+    gradedAt,
+    gradingDetails,
+    virtualSeniorFeedback,
+    status,
+    ...attemptData
+  } = data || {};
+  const docPayload = {
+    submittedAt: serverTimestamp(), // This sets the last update time for the document itself.
+    attempts: arrayUnion(attemptData),
+  };
+
+  if (status) docPayload.status = status;
+
+  ['selectedPaymentIds', 'retrievedDocuments', 'disbursementClassifications', 'expectedClassifications', 'workspaceNotes', 'fixedAssetResponses'].forEach(
+    (key) => {
+      if (attemptData[key] !== undefined) {
+        docPayload[key] = attemptData[key];
+      }
+    }
+  );
+
+  if (grade !== undefined) docPayload.grade = grade;
+  if (gradedAt) docPayload.gradedAt = gradedAt;
+  if (gradingDetails) docPayload.gradingDetails = gradingDetails;
+  if (virtualSeniorFeedback) docPayload.virtualSeniorFeedback = virtualSeniorFeedback;
+
   await setDoc(
     ref,
-    {
-      submittedAt: serverTimestamp(), // This sets the last update time for the document itself.
-      attempts: arrayUnion(attemptData),
-    },
+    docPayload,
     { merge: true }
   );
 };

@@ -11,7 +11,8 @@ import { Timestamp } from 'firebase/firestore';
 /**
  * @typedef {{
  *   selectedPaymentIds: string[],
- *   classificationDraft: Record<string, Record<string, string>>
+ *   classificationDraft: Record<string, Record<string, string>>,
+ *   fixedAssetDraft?: Record<string, any>
  * }} ProgressDraft
  */
 
@@ -59,8 +60,9 @@ export const toProgressModel = (data, caseId) => {
               return acc;
             }, {})
           : {},
+        fixedAssetDraft: isRecord(draft.fixedAssetDraft) ? { ...draft.fixedAssetDraft } : {},
       }
-    : { selectedPaymentIds: [], classificationDraft: {} };
+    : { selectedPaymentIds: [], classificationDraft: {}, fixedAssetDraft: {} };
 
   return {
     caseId: caseId,

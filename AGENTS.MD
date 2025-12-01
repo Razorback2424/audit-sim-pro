@@ -1,122 +1,174 @@
-Absolutely! Here is a single, coherent AGENTS.MD file tailored specifically for your actual audit-sim-pro codebase. This version directly reflects your code’s tech stack (React + Firebase), directory structure, testing conventions, and real-world usage. It is ready to drop in at your repo root.
+# AGENTS.md — Audit Flight Simulator (Codex Operating Guide)
 
-⸻
+> Read this first. If you’re unsure what to build next, re-read the **North Star** and ship the smallest thing that increases *realism + detection skill + immediate feedback*.
 
-AGENTS.MD
+## North Star (Product Vision)
+We are replacing passive, generic audit training with **active, high-stakes simulation**—turning “auditor judgment” from an abstract concept into a **measurable skill**.
 
-AuditSim Pro — Agent and Contributor Guide
+Traditional training is a **lecture hall**. This product is a **flight simulator**:
+- Briefing → cockpit (workpaper) → realistic disaster (“the trap”) → crash safely → learn instantly.
 
-Project Purpose
+**10X differentiator**
+- We don’t teach “rules.” We teach **detection**.
+- We don’t provide perfect data. We provide **defective data** and make the user find the needle in the haystack.
 
-AuditSim Pro is a React and Firebase-based platform that simulates the audit search for unrecorded liabilities. It is designed for audit trainee and instructor roles, delivering realistic, interactive, and automated training via a secure, web-based experience.
+If the user doesn’t feel a spike of adrenaline when they find the error, we haven’t done our job.
 
-⸻
+---
 
-1. Environment & Toolchain
-	•	Frontend: React (Create React App), MUI, Tailwind CSS.
-	•	Backend/Infra: Firebase (Firestore, Storage, Authentication).
-No server-side code exists in this repo; all business logic is in the frontend and Firebase cloud services.
-	•	Testing: Jest (via react-scripts test), React Testing Library.
-	•	Styling: Tailwind utility classes and MUI components.
-	•	Linting: No explicit linter script. Follow Prettier/CRA code formatting if present.
+## What this repo is (and is not)
 
-Setup:
+### Is
+A **content-agnostic simulation OS** that can run many audit scenarios (“cartridges”) with consistent mechanics:
+- Just-in-time instruction
+- Workpaper simulation (evidence + work)
+- Real-time/instant feedback
+- Mastery tracking (competency, not completion)
 
-npm install
-# Environment variables for Firebase config are set in .env (never commit secrets)
+### Is not
+- A generic LMS
+- A video library with quizzes
+- A course builder full of “nice-to-have” UI
+- A project that prioritizes “login page polish” over the core simulation loop
 
+When tempted by scope creep, ship the next improvement to the **core loop** instead.
 
-⸻
+---
 
-2. Project Structure
-	•	/src/pages/ — Main UI screens for admin and trainees.
-	•	/src/services/ — Firebase logic (e.g., roleService.js).
-	•	/src/routes/ — Custom route components (e.g., RoleRoute.jsx).
-	•	/public/ — Static files and main HTML entry.
-	•	firestore.rules / storage.rules — Firebase backend security rules.
-	•	tailwind.config.js, postcss.config.js — Tailwind/PostCSS configuration.
+## The Universal Audit Engine (4 layers)
 
-⸻
+### Layer 1 — The Academy (Instruction Engine)
+**Metaphor:** the senior’s desk  
+**Function:** deliver Just-in-Time theory that enables correct judgment inside the sim.
 
-3. Coding Standards
-	•	Components: Use React functional components and hooks. Prefer composition and small, reusable units.
-	•	Naming: Use descriptive, unambiguous names for files, variables, and functions. No abbreviations unless standard.
-	•	Services: All Firestore/Firebase calls should go through /src/services/. Never manipulate Firestore directly in components.
-	•	Styling: Use Tailwind utility classes and MUI for new UI work; avoid inline styles.
-	•	Security: Never hard-code credentials or secrets—always use environment variables. Apply RBAC and permission checks on sensitive UI and Firestore calls.
+Required components:
+- **Hook:** high-stakes context (why it matters, fraud/misstatement risk)
+- **Asset:** embedded visual (video/diagram/timeline)
+- **Heuristic:** the “golden rule” (memorable detection rule)
+- **Gate:** forcing function quiz that blocks cockpit entry until grasped
 
-⸻
+Implementation rule: the Academy exists to make the cockpit decisions *meaningful*, not to be a standalone course.
 
-4. Testing & Verification
-	•	All code changes must pass:
+---
 
-npm test
+### Layer 2 — The Workpaper (Simulation Engine)
+**Metaphor:** the cockpit  
+**Function:** a split-screen environment that mimics real work.
 
+- **Left panel (Evidence):** PDFs, emails, bank statements, supporting docs
+- **Right panel (Work):** interactive grid/spreadsheet, ticking/tying, assertions, classification choices
 
-	•	Use @testing-library/react for UI/component tests.
-	•	Place all test files alongside the code as *.test.js[x].
-	•	Do not commit code with failing or skipped tests.
-	•	Ensure all lint checks pass before PR.
+**Trap logic**
+- **Distractors:** realistic noise that should be “passed”
+- **Triggers:** specific embedded errors that should be flagged
+- The engine validates against a hidden **Answer Key** in real time (or on submit), then routes feedback through the Reviewer.
 
-⸻
+Design constraint: realism comes from the *shape* of the workflow and imperfect data—not from UI decoration.
 
-5. Git & PR Workflow
-	•	Branch names:
-Use feature/<desc>, bugfix/<desc>, or similar for clarity.
-	•	Pull request titles:
-Use action-based, concise titles (e.g., feat: add trainee dashboard page).
-	•	PR descriptions:
-	•	Explain what and why
-	•	Reference related issues or tasks
-	•	Note any manual steps or migration needed
-	•	Reviews:
-All PRs must be reviewed and all tests must pass before merging to main.
+---
 
-⸻
+### Layer 3 — The Reviewer (Feedback Engine)
+**Metaphor:** review note  
+**Function:** instant, context-aware correction.
 
-6. Security, Compliance, and Privacy
-	•	RBAC: Enforced via app logic and Firestore security rules.
-	•	Document/PII access:
-	•	Secure all invoice/document downloads via Firebase rules.
-	•	Do not expose user IDs, emails, or other PII in logs, errors, or UI.
-	•	Firestore/Storage:
-	•	Update security rules with every feature affecting permissions.
-	•	Test security rules before deploying changes.
+- If the user is correct: crisp “good catch” dopamine hit
+- If incorrect: immediate remediation explaining *why* the judgment was wrong and what heuristic applies
 
-⸻
+Hard constraint: **no waiting for a grade**. Feedback must be immediate.
 
-7. Agent-Specific Instructions
-	•	Respect file structure and existing patterns in /src/pages, /src/services, and /src/routes.
-	•	Use and extend service files (e.g., roleService.js) for Firebase or role logic; do not bypass with inline logic.
-	•	UI: Always use MUI and Tailwind for components; do not use inline styles.
-	•	Environment: Never hard-code sensitive keys; always use .env for config.
-	•	For ambiguity: Leave a // TODO: comment with rationale for human follow-up.
-	•	Documentation: Update the README.md (and /docs if present) when adding or changing features or workflows.
+---
 
-⸻
+### Layer 4 — The Partner (Mastery Dashboard)
+**Metaphor:** performance review  
+**Function:** aggregate learning across modules.
 
-8. Documentation
-	•	README.md must stay up to date with setup, deployment, and usage instructions.
-	•	Add/update /docs/ for new workflows, edge cases, or architectural decisions.
+Tracks **competency**, not just completion.
+Example: “User has mastered SURL but struggles with Existence assertions.”
 
-⸻
+---
 
-9. Living Document Principle
-	•	This file is the canonical agent and contributor guide for audit-sim-pro.
-	•	Update it via pull request with clear rationale for any major change in workflow, conventions, or stack.
+## Launch content (Vertical slices / “Cartridges”)
+We prove the engine is universal by shipping distinct scenarios that reuse the same underlying mechanics.
 
-⸻
+### Module A — Search for Unrecorded Liabilities (SURL)
+- **Risk:** timing / cutoff
+- **Trap:** invoice dated Jan 3 for services performed Dec 28
+- **Lesson:** expenses follow the work, not the paper
+- **Mechanic:** document inspection (PDF vs GL)
 
-10. Prohibited Practices
-	•	No direct Firestore/Storage manipulation in components; use the service layer.
-	•	No hardcoded secrets or credentials in the codebase.
-	•	No logging or exposing of sensitive data in errors, logs, or the UI.
+### Module B — Cash & Bank Recs
+- **Risk:** existence / completeness
+- **Trap:** “phantom check” outstanding that never clears subsequent bank statement
+- **Lesson:** just because it balances doesn’t mean it’s real
+- **Mechanic:** recon logic (bank vs GL vs outstanding list)
 
-⸻
+### Module C — Expenses & Vouching (future)
+- **Risk:** classification / occurrence
+- **Trap:** R&M expense that should be capitalized (CapEx)
+- **Lesson:** big numbers need to be capitalized
+- **Mechanic:** classification choice (expense vs capitalize)
 
-End of AGENTS.MD
-Last updated: June 2025. Review and update regularly as the project evolves.
+---
 
-⸻
+## The “Happy Path” user journey (the core loop)
+1. User enters dashboard: **SURL open**, **Cash locked**
+2. User opens SURL → Academy briefing → passes Gate question
+3. Cockpit (split screen):
+   - Left: invoice stack
+   - Right: January check register (or GL view)
+   - User passes first 3 distractors, flags the 4th trap as exception
+4. User submits audit
+5. Results modal:
+   - “Audit complete. You found the unrecorded liability. Net income adjusted by -$4,500.”
+6. SURL marked **Mastered** → Cash module unlocks
 
-Let me know if you need anything added for future backend expansion, stricter lint/test automation, or more deployment detail!
+If a change does not strengthen steps 2–6, it’s probably not the next thing to build.
+
+---
+
+## Business goals (what “success” means)
+- Immediate: validate “realism sells”
+- Short term: reach **$2,000/month** via individual sales (lifetime deal / manager toolkit)
+- Long term: enterprise licensing to regional firms lacking L&D
+- Ultimate: acquisition by major training provider (Becker/Wiley/etc.) or a major firm
+
+Product implication: prioritize features that make the sim feel **credible, tense, and teachable**, not features that make it feel like “another platform.”
+
+---
+
+## Codex working agreement (how to operate in this repo)
+When you’re asked to implement something:
+
+1. **Restate the user-visible outcome** in one sentence.
+2. Identify where it fits (Academy / Workpaper / Reviewer / Partner).
+3. Ship the **smallest vertical slice** that improves the core loop.
+4. Prefer **existing repo patterns** over new frameworks.
+5. Avoid large refactors unless they directly unblock the slice.
+
+### Guardrails
+- Don’t introduce features that delay feedback.
+- Don’t “perfect” UI at the expense of trap realism.
+- Don’t add complexity to make it “future-proof” unless today’s slice needs it.
+- Don’t store or ship anything that looks like real client data (keep all content fictional).
+
+### Quality bar (“Fully Baked” standard)
+A feature is done when:
+- The user can complete an end-to-end loop (brief → gate → sim → feedback → mastery impact).
+- The trap is detectable via the heuristic (not guesswork).
+- Feedback is specific, immediate, and teaches judgment.
+- The module can be replayed without breaking state or logic.
+
+---
+
+## Product principles (defaults)
+- **Realism over gamification** (but keep the dopamine: crisp success/fail feedback)
+- **Detection over memorization**
+- **Defective data is a feature**
+- **Immediate feedback always**
+- **Competency tracking > completion tracking**
+- **Unlocks are earned** (mastery gates future modules)
+
+---
+
+## Reference mantra
+“We do not build courses. We build experience.”

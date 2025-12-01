@@ -31,6 +31,16 @@ const stableStringify = (value) => {
   return JSON.stringify(value);
 };
 
+const toSafeDate = (value) => {
+  if (!value) return null;
+  if (typeof value?.toDate === 'function') {
+    const asDate = value.toDate();
+    return Number.isNaN(asDate?.getTime()) ? null : asDate;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
 const normalizeSelection = (list) => {
   if (!Array.isArray(list)) {
     return [];
@@ -260,6 +270,14 @@ exports.gradeSubmission = onDocumentWritten(
     const disbursementList = Array.isArray(caseData.disbursements)
       ? caseData.disbursements
       : [];
+    const cashContext = caseData.cashContext || {};
+    const cashOutstandingItems = Array.isArray(caseData.cashOutstandingItems)
+      ? caseData.cashOutstandingItems
+      : [];
+    const cashCutoffItems = Array.isArray(caseData.cashCutoffItems) ? caseData.cashCutoffItems : [];
+    const cashReconciliationMap = Array.isArray(caseData.cashReconciliationMap)
+      ? caseData.cashReconciliationMap
+      : [];
     let caseKeyItems = null;
     try {
       const privateDoc = await firestore
@@ -305,6 +323,68 @@ exports.gradeSubmission = onDocumentWritten(
         disbursementMap.set(item.paymentId, normalized);
       }
     });
+
+    const normalizeRef = (value) => (value || '').toString().trim().toLowerCase();
+    const outstandingById = new Map();
+    const outstandingByRef = new Map();
+    cashOutstandingItems.forEach((item) => {
+      if (item && item._tempId) {
+        outstandingById.set(item._tempId, item);
+      }
+      const refKey = normalizeRef(item?.reference || item?.paymentId);
+      if (refKey) {
+        outstandingByRef.set(refKey, item);
+      }
+    });
+    const cutoffById = new Map();
+    const cutoffByRef = new Map();
+    cashCutoffItems.forEach((item) => {
+      if (item && item._tempId) {
+        cutoffById.set(item._tempId, item);
+      }
+      const refKey = normalizeRef(item?.reference);
+      if (refKey) {
+        cutoffByRef.set(refKey, item);
+      }
+    });
+    const scenarioByRef = new Map();
+    const cutoffByScenarioRef = new Map();
+    const scenarioClassificationMap = {
+      clean: 'properlyExcluded',
+      unrecorded: 'improperlyExcluded',
+      fictitious: 'improperlyIncluded',
+    };
+    cashReconciliationMap.forEach((entry) => {
+      const scenario = entry?.scenarioType;
+      if (!scenario) return;
+      let refKey = '';
+      let cutoffRef = '';
+      let cutoffDate = null;
+      if (entry.outstandingTempId && outstandingById.has(entry.outstandingTempId)) {
+        const outItem = outstandingById.get(entry.outstandingTempId);
+        refKey = normalizeRef(outItem?.reference || outItem?.paymentId);
+      }
+      if (!refKey && entry.cutoffTempId && cutoffById.has(entry.cutoffTempId)) {
+        const cutItem = cutoffById.get(entry.cutoffTempId);
+        refKey = normalizeRef(cutItem?.reference);
+        cutoffRef = refKey;
+        cutoffDate = toSafeDate(cutItem?.clearDate || cutItem?.clear_date);
+      }
+      if (refKey) {
+        scenarioByRef.set(refKey, scenario);
+        if (cutoffRef) {
+          cutoffByScenarioRef.set(refKey, cutoffDate);
+        }
+      }
+    });
+    let headerNoteAdded = false;
+    const cutoffBaseDate =
+      toSafeDate(cashContext.reportingDate || cashContext.reconciliationDate) ||
+      toSafeDate(caseData.auditYearEnd || caseData.yearEnd || caseData.periodEnd);
+    const cutoffWindowDays = Number(cashContext.cutoffWindowDays);
+    const applyCutoffWindow = Number.isFinite(cutoffWindowDays) && cutoffWindowDays > 0;
+    const testingThreshold = Number(cashContext.testingThreshold);
+    const applyThreshold = Number.isFinite(testingThreshold) && testingThreshold > 0;
 
     const selectedIds =
       afterSelection.length > 0
@@ -407,6 +487,17 @@ exports.gradeSubmission = onDocumentWritten(
                 detail.isCorrect = false;
               }
             }
+            const yearEnd = toSafeDate(
+              disbursement.yearEnd || caseData?.yearEnd || caseData?.auditYearEnd || caseData?.periodEnd
+            );
+            if (yearEnd && !Number.isNaN(yearEnd.getTime())) {
+              if (svcDate <= yearEnd && glDate > yearEnd && normalizedClassification === 'properlyexcluded') {
+                issues.push(
+                  'Unrecorded Liability: Service occurred before year-end but payment was after. You should propose an accrued liability (improperly excluded).'
+                );
+                detail.isCorrect = false;
+              }
+            }
             if (
               workspaceEntry.selectedAssertion === 'cutoff' &&
               workspaceEntry.serviceEndInput &&
@@ -443,6 +534,14 @@ exports.gradeSubmission = onDocumentWritten(
               detail.isCorrect = false;
             }
           }
+          if (typeof groundTruths.condition === 'string' && groundTruths.condition.trim()) {
+            const conditionLower = groundTruths.condition.toLowerCase();
+            if (conditionLower.includes('damaged') && !trimmedNote.toLowerCase().includes('damaged')) {
+              issues.push(
+                'Valuation Missing: Inventory noted as damaged in the evidence. Document the condition and consider an adjustment.'
+              );
+            }
+          }
           break;
         }
         case 'CASH': {
@@ -453,6 +552,29 @@ exports.gradeSubmission = onDocumentWritten(
                 "Terminology Warning: Cash variances are typically due to 'Outstanding Checks' or 'Deposits in Transit'. Please use precise terminology."
               );
             }
+          }
+          const refKey = normalizeRef(disbursement.paymentId || disbursement.payee);
+          const scenario = scenarioByRef.get(refKey);
+          const expectedClassification = scenario ? scenarioClassificationMap[scenario] : null;
+          const cutoffRefDate = cutoffByScenarioRef.get(refKey);
+          const outsideCutoffWindow =
+            applyCutoffWindow &&
+            cutoffBaseDate &&
+            cutoffRefDate &&
+            !Number.isNaN(cutoffRefDate.getTime()) &&
+            cutoffRefDate.getTime() - cutoffBaseDate.getTime() > cutoffWindowDays * 24 * 60 * 60 * 1000;
+          const belowThreshold = applyThreshold && Number(disbursement.amount) < testingThreshold;
+          if (
+            scenario &&
+            expectedClassification &&
+            expectedClassification !== normalizedClassification &&
+            !outsideCutoffWindow &&
+            !belowThreshold
+          ) {
+            issues.push(
+              `Bank Rec Mismatch: Expected ${expectedClassification} based on reconciliation scenario (${scenario}).`
+            );
+            detail.isCorrect = false;
           }
           break;
         }
@@ -483,6 +605,17 @@ exports.gradeSubmission = onDocumentWritten(
 
     const score = totalCount > 0 ? (correctCount / totalCount) * 100 : 0;
     const roundedScore = Math.round(score * 100) / 100;
+
+    if (cashContext.simulateMathError && !headerNoteAdded) {
+      reviewNotes.push({
+        paymentId: 'cash_header',
+        payee: null,
+        notes: [
+          'Header Check: Client bank rec may contain a math/transposition error. Ensure student ties bank and book balances.',
+        ],
+      });
+      headerNoteAdded = true;
+    }
 
     return event.data.after.ref.set(
       {

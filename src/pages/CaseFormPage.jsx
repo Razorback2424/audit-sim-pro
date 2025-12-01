@@ -21,6 +21,7 @@ import {
   DEFAULT_AUDIT_AREA,
   AUDIT_AREA_LABELS,
   CASE_GROUP_LABELS,
+  AUDIT_AREAS,
 } from '../models/caseConstants';
 import { getClassificationFields } from '../constants/classificationFields';
 
@@ -41,6 +42,16 @@ const ANSWER_KEY_LABELS = {
 };
 const ANSWER_KEY_PLACEHOLDER = '__choose';
 const DEFAULT_ANSWER_KEY_CLASSIFICATION = ANSWER_KEY_PLACEHOLDER;
+const CASH_RECON_SCENARIOS = [
+  { value: 'clean', label: 'Properly Outstanding / Matched' },
+  { value: 'unrecorded', label: 'Unrecorded (Evidence only)' },
+  { value: 'fictitious', label: 'Fictitious (Client only)' },
+];
+const CASH_ARTIFACT_TYPES = [
+  { value: 'cash_year_end_statement', label: 'Year-End Bank Statement' },
+  { value: 'cash_bank_confirmation', label: 'Bank Confirmation' },
+  { value: 'cash_cutoff_statement', label: 'Cutoff Statement' },
+];
 const buildSingleAnswerKey = (classification, amountValue, explanation = '') => {
   const sanitizedAmount = Number(amountValue) || 0;
   const next = {
@@ -215,15 +226,35 @@ function useCaseForm({ params }) {
     payee: '',
     amount: '',
     paymentDate: '',
+    transactionType: '',
     answerKeyMode: 'single',
     answerKeySingleClassification: DEFAULT_ANSWER_KEY_CLASSIFICATION,
     answerKey: buildSingleAnswerKey(null, 0, ''),
     mappings: [],
   });
-  const initialMapping = () => ({
+  const initialOutstandingItem = () => ({
     _tempId: getUUID(),
-    disbursementTempId: '',
-    fileName: '',
+    reference: '',
+    payee: '',
+    issueDate: '',
+    amount: '',
+  });
+  const initialCutoffItem = () => ({
+    _tempId: getUUID(),
+    reference: '',
+    clearDate: '',
+    amount: '',
+  });
+  const initialReconciliationMap = () => ({
+    _tempId: getUUID(),
+    outstandingTempId: '',
+    cutoffTempId: '',
+    scenarioType: '',
+  });
+const initialMapping = () => ({
+  _tempId: getUUID(),
+  disbursementTempId: '',
+  fileName: '',
     storagePath: '',
     clientSideFile: null,
     uploadProgress: undefined,
@@ -272,6 +303,52 @@ function useCaseForm({ params }) {
   const [status, setStatus] = useState('assigned');
   const [opensAtStr, setOpensAtStr] = useState('');
   const [dueAtStr, setDueAtStr] = useState('');
+const [cashContext, setCashContext] = useState({
+  bookBalance: '',
+  bankBalance: '',
+  reconciliationDate: '',
+  simulateMathError: false,
+  confirmedBalance: '',
+  testingThreshold: '',
+  cutoffWindowDays: '',
+});
+  const [cashOutstandingItems, setCashOutstandingItems] = useState([initialOutstandingItem()]);
+  const [cashCutoffItems, setCashCutoffItems] = useState([initialCutoffItem()]);
+  const [cashReconciliationMap, setCashReconciliationMap] = useState([]);
+  const [cashArtifacts, setCashArtifacts] = useState([]);
+  const initialFaClass = () => ({
+    _tempId: getUUID(),
+    className: '',
+    beginningBalance: '',
+    additions: '',
+    disposals: '',
+    endingBalance: '',
+  });
+  const initialFaAddition = () => ({
+    _tempId: getUUID(),
+    vendor: '',
+    description: '',
+    amount: '',
+    inServiceDate: '',
+    glAccount: '',
+    natureOfExpenditure: '',
+    properPeriod: '',
+  });
+  const initialFaDisposal = () => ({
+    _tempId: getUUID(),
+    assetId: '',
+    description: '',
+    proceeds: '',
+    nbv: '',
+  });
+  const [faSummary, setFaSummary] = useState([initialFaClass()]);
+  const [faRisk, setFaRisk] = useState({
+    tolerableMisstatement: '',
+    strategy: 'all_over_tm',
+    sampleSize: '',
+  });
+  const [faAdditions, setFaAdditions] = useState([initialFaAddition()]);
+  const [faDisposals, setFaDisposals] = useState([initialFaDisposal()]);
   const [disbursements, setDisbursements] = useState([initialDisbursement()]);
   const [referenceDocuments, setReferenceDocuments] = useState([initialReferenceDocument()]);
   const [loading, setLoading] = useState(false);
@@ -378,6 +455,55 @@ function useCaseForm({ params }) {
             setStatus(data.status || 'assigned');
             setOpensAtStr(toDateTimeLocalInput(data.opensAt));
             setDueAtStr(toDateTimeLocalInput(data.dueAt));
+            setCashContext({
+              bookBalance: data.cashContext?.bookBalance ?? '',
+              bankBalance: data.cashContext?.bankBalance ?? '',
+              reconciliationDate:
+                data.cashContext?.reconciliationDate ??
+                data.cashContext?.reportingDate ??
+                data.auditYearEnd ??
+                '',
+              simulateMathError: Boolean(data.cashContext?.simulateMathError),
+              confirmedBalance: data.cashContext?.confirmedBalance ?? '',
+              testingThreshold: data.cashContext?.testingThreshold ?? '',
+              cutoffWindowDays: data.cashContext?.cutoffWindowDays ?? '',
+            });
+            setCashOutstandingItems(
+              Array.isArray(data.cashOutstandingItems) && data.cashOutstandingItems.length > 0
+                ? data.cashOutstandingItems.map((entry) => ({ _tempId: getUUID(), ...entry }))
+                : [initialOutstandingItem()]
+            );
+            setCashCutoffItems(
+              Array.isArray(data.cashCutoffItems) && data.cashCutoffItems.length > 0
+                ? data.cashCutoffItems.map((entry) => ({ _tempId: getUUID(), ...entry }))
+                : [initialCutoffItem()]
+            );
+            setCashReconciliationMap(
+              Array.isArray(data.cashReconciliationMap)
+                ? data.cashReconciliationMap.map((entry) => ({ _tempId: getUUID(), ...entry }))
+                : []
+            );
+      setCashArtifacts([...(Array.isArray(data.cashArtifacts) ? data.cashArtifacts : [])]);
+            setFaSummary(
+              Array.isArray(data.faSummary) && data.faSummary.length > 0
+                ? data.faSummary.map((entry) => ({ _tempId: getUUID(), ...entry }))
+                : [initialFaClass()]
+            );
+            setFaRisk({
+              tolerableMisstatement: data.faRisk?.tolerableMisstatement ?? '',
+              strategy: data.faRisk?.strategy ?? 'all_over_tm',
+              sampleSize: data.faRisk?.sampleSize ?? '',
+            });
+            setFaAdditions(
+              Array.isArray(data.faAdditions) && data.faAdditions.length > 0
+                ? data.faAdditions.map((entry) => ({ _tempId: getUUID(), ...entry }))
+                : [initialFaAddition()]
+            );
+            setFaDisposals(
+              Array.isArray(data.faDisposals) && data.faDisposals.length > 0
+                ? data.faDisposals.map((entry) => ({ _tempId: getUUID(), ...entry }))
+                : [initialFaDisposal()]
+            );
             const baseDisbursements =
               data.disbursements?.map((d) => {
                 const draft = {
@@ -386,6 +512,7 @@ function useCaseForm({ params }) {
                   payee: d.payee || '',
                   amount: d.amount || '',
                   paymentDate: d.paymentDate || '',
+                  transactionType: d.transactionType || '',
                   answerKey: {
                     properlyIncluded: d.answerKey?.properlyIncluded ?? 0,
                     properlyExcluded: d.answerKey?.properlyExcluded ?? 0,
@@ -489,6 +616,28 @@ function useCaseForm({ params }) {
       setDueAtStr('');
       setDisbursements([initialDisbursement()]);
       setReferenceDocuments([initialReferenceDocument()]);
+      setCashContext({
+        bookBalance: '',
+        bankBalance: '',
+        reconciliationDate: '',
+        reportingDate: '',
+        simulateMathError: false,
+        confirmedBalance: '',
+        testingThreshold: '',
+        cutoffWindowDays: '',
+      });
+      setCashOutstandingItems([initialOutstandingItem()]);
+      setCashCutoffItems([initialCutoffItem()]);
+      setCashReconciliationMap([]);
+      setCashArtifacts([]);
+      setFaSummary([initialFaClass()]);
+      setFaRisk({
+        tolerableMisstatement: '',
+        strategy: 'all_over_tm',
+        sampleSize: '',
+      });
+      setFaAdditions([initialFaAddition()]);
+      setFaDisposals([initialFaDisposal()]);
       setOriginalCaseData(null);
       setAuditArea(DEFAULT_AUDIT_AREA);
       setCaseGroupSelection('__none');
@@ -547,6 +696,32 @@ function useCaseForm({ params }) {
       })
     );
   };
+
+  const handleOutstandingChange = (index, updates) => {
+    setCashOutstandingItems((prev) =>
+      prev.map((item, i) => (i === index ? { ...item, ...updates } : item))
+    );
+  };
+  const addOutstandingItem = () => setCashOutstandingItems((prev) => [...prev, initialOutstandingItem()]);
+  const removeOutstandingItem = (index) =>
+    setCashOutstandingItems((prev) => prev.filter((_, i) => i !== index));
+
+  const handleCutoffChange = (index, updates) => {
+    setCashCutoffItems((prev) =>
+      prev.map((item, i) => (i === index ? { ...item, ...updates } : item))
+    );
+  };
+  const addCutoffItem = () => setCashCutoffItems((prev) => [...prev, initialCutoffItem()]);
+  const removeCutoffItem = (index) => setCashCutoffItems((prev) => prev.filter((_, i) => i !== index));
+
+  const handleReconciliationMapChange = (index, updates) => {
+    setCashReconciliationMap((prev) =>
+      prev.map((item, i) => (i === index ? { ...item, ...updates } : item))
+    );
+  };
+  const addReconciliationMap = () => setCashReconciliationMap((prev) => [...prev, initialReconciliationMap()]);
+  const removeReconciliationMap = (index) =>
+    setCashReconciliationMap((prev) => prev.filter((_, i) => i !== index));
 
   const removeMappingFromDisbursement = (disbursementTempId, mappingTempId) => {
     setDisbursements((prev) =>
@@ -733,6 +908,44 @@ function useCaseForm({ params }) {
           : doc
       )
     );
+  };
+
+  const handleCashArtifactFileSelect = (index, file) => {
+    if (!file) return;
+    if (!isSupportedFile(file)) {
+      ulog('cash-artifact:reject:unsupported-file', { index, name: file.name, type: file.type });
+      showModal(`Unsupported file. Allowed formats: ${prettySupportedLabels}.`, 'Invalid File Type');
+      return;
+    }
+    if (file.size > MAX_ARTIFACT_BYTES) {
+      ulog('cash-artifact:reject:too-large', { index, name: file.name, size: file.size });
+      showModal(`File must be under ${Math.round(MAX_ARTIFACT_BYTES / (1024 * 1024))} MB.`, 'File Too Large');
+      return;
+    }
+    const contentType = pickContentType(file);
+    setCashArtifacts((prevDocs) =>
+      prevDocs.map((doc, i) =>
+        i === index
+          ? {
+              ...doc,
+              clientSideFile: file,
+              fileName: doc.fileName ? doc.fileName : file.name,
+              storagePath: '',
+              downloadURL: '',
+              uploadProgress: 0,
+              uploadError: null,
+              contentType,
+            }
+          : doc
+      )
+    );
+  };
+
+  const addFaClass = () => setFaSummary((prev) => [...prev, initialFaClass()]);
+  const addFaAddition = () => setFaAdditions((prev) => [...prev, initialFaAddition()]);
+  const addFaDisposal = () => setFaDisposals((prev) => [...prev, initialFaDisposal()]);
+  const handleCashArtifactChange = (index, updates) => {
+    setCashArtifacts((prev) => prev.map((doc, i) => (i === index ? { ...doc, ...updates } : doc)));
   };
 
   const addReferenceDocument = () => {
@@ -1006,6 +1219,13 @@ function useCaseForm({ params }) {
 
   const uploadReferenceDocument = async (docItem, caseIdForUpload) => {
     const fallbackName = (docItem.fileName || '').trim() || (docItem.clientSideFile?.name || '').trim();
+    const applyDocUpdate = (mutator) => {
+      if (docItem.type && docItem.type.startsWith('cash_')) {
+        setCashArtifacts((prev) => prev.map((doc) => mutator(doc)));
+      } else {
+        setReferenceDocuments((prev) => prev.map((doc) => mutator(doc)));
+      }
+    };
     if (!docItem.clientSideFile) {
       if (!fallbackName) {
         return null;
@@ -1015,6 +1235,8 @@ function useCaseForm({ params }) {
       const payload = {
         _tempId: docItem._tempId,
         fileName: fallbackName,
+        type: docItem.type,
+        confirmedBalance: docItem.confirmedBalance,
       };
       if (storagePath) payload.storagePath = storagePath;
       if (downloadURL) payload.downloadURL = downloadURL;
@@ -1041,14 +1263,16 @@ function useCaseForm({ params }) {
         storagePath: '',
         downloadURL: '',
         contentType: docItem.contentType || pickContentType(file),
+        type: docItem.type,
+        confirmedBalance: docItem.confirmedBalance,
       };
     }
     if (!caseIdForUpload) {
       const errorMsg = 'Cannot upload reference document: Case ID not finalized.';
       console.error(errorMsg, docItem);
       ulog(uploadId, 'reference:abort:no-case-id');
-      setReferenceDocuments((prev) =>
-        prev.map((doc) => (doc._tempId === docItem._tempId ? { ...doc, uploadError: errorMsg, uploadProgress: undefined } : doc))
+      applyDocUpdate((doc) =>
+        doc._tempId === docItem._tempId ? { ...doc, uploadError: errorMsg, uploadProgress: undefined } : doc
       );
       throw new Error(errorMsg);
     }
@@ -1060,20 +1284,18 @@ function useCaseForm({ params }) {
     const finalStoragePath = `artifacts/${appId}/case_reference/${caseIdForUpload}/${safeStorageName}`;
     ulog(uploadId, 'reference:path', { rawName, safeStorageName, displayName, finalStoragePath });
 
-    setReferenceDocuments((prev) =>
-      prev.map((doc) =>
-        doc._tempId === docItem._tempId
-          ? {
-              ...doc,
-              fileName: displayName,
-              storagePath: finalStoragePath,
-              downloadURL: '',
-              uploadProgress: 0,
-              uploadError: null,
-              contentType: desiredContentType,
-            }
-          : doc
-      )
+    applyDocUpdate((doc) =>
+      doc._tempId === docItem._tempId
+        ? {
+            ...doc,
+            fileName: displayName,
+            storagePath: finalStoragePath,
+            downloadURL: '',
+            uploadProgress: 0,
+            uploadError: null,
+            contentType: desiredContentType,
+          }
+        : doc
     );
 
     const timeoutMs = UPLOAD_TIMEOUT_MS;
@@ -1104,9 +1326,7 @@ function useCaseForm({ params }) {
               });
               lastLogged = pct;
             }
-            setReferenceDocuments((prev) =>
-              prev.map((doc) => (doc._tempId === docItem._tempId ? { ...doc, uploadProgress: pct } : doc))
-            );
+            applyDocUpdate((doc) => (doc._tempId === docItem._tempId ? { ...doc, uploadProgress: pct } : doc));
           },
           (err) => {
             clearTimeout(timer);
@@ -1138,12 +1358,8 @@ function useCaseForm({ params }) {
         const snapshot = await awaitResumable(task);
         const downloadURL = await getDownloadURL(snapshot.ref);
         ulog(uploadId, 'reference:success', { downloadURL });
-        setReferenceDocuments((prev) =>
-          prev.map((doc) =>
-            doc._tempId === docItem._tempId
-              ? { ...doc, uploadProgress: 100, downloadURL, uploadError: null }
-              : doc
-          )
+        applyDocUpdate((doc) =>
+          doc._tempId === docItem._tempId ? { ...doc, uploadProgress: 100, downloadURL, uploadError: null } : doc
         );
         return {
           _tempId: docItem._tempId,
@@ -1151,6 +1367,8 @@ function useCaseForm({ params }) {
           storagePath: finalStoragePath,
           downloadURL,
           contentType: desiredContentType || 'application/octet-stream',
+          type: docItem.type,
+          confirmedBalance: docItem.confirmedBalance,
         };
       } catch (error) {
         const code = error?.code || '';
@@ -1187,12 +1405,8 @@ function useCaseForm({ params }) {
               }
             : null,
         });
-        setReferenceDocuments((prev) =>
-          prev.map((doc) =>
-            doc._tempId === docItem._tempId
-              ? { ...doc, uploadError: msg, uploadProgress: undefined }
-              : doc
-          )
+        applyDocUpdate((doc) =>
+          doc._tempId === docItem._tempId ? { ...doc, uploadError: msg, uploadProgress: undefined } : doc
         );
         return {
           _tempId: docItem._tempId,
@@ -1201,6 +1415,8 @@ function useCaseForm({ params }) {
           downloadURL: '',
           uploadError: msg,
           contentType: desiredContentType || 'application/octet-stream',
+          type: docItem.type,
+          confirmedBalance: docItem.confirmedBalance,
         };
       }
     };
@@ -1227,9 +1443,140 @@ function useCaseForm({ params }) {
   const handleSubmit = async (event) => {
     event.preventDefault();
 
+    let derivedReconciliationMap = cashReconciliationMap;
+    let faAdditionsTotal = 0;
+    let faDisposalsTotal = 0;
+
     if (!caseName.trim()) {
       showModal('Case name is required.', 'Validation Error');
       return;
+    }
+
+    if (auditArea === AUDIT_AREAS.CASH) {
+      const { bookBalance, bankBalance, reconciliationDate } = cashContext || {};
+      if (!bookBalance || !bankBalance || !reconciliationDate) {
+        showModal('For Cash cases, provide Book Balance, Bank Statement Balance, and the reconciliation/reporting date in the Data Entry step.', 'Validation Error');
+        return;
+      }
+      const outstandingIssues = [];
+      cashOutstandingItems.forEach((item, idx) => {
+        const missing = [];
+        if (!item.reference) missing.push('Reference #');
+        if (!item.payee) missing.push('Description / Payee');
+        if (!item.issueDate) missing.push('Book Date');
+        if (!item.amount) missing.push('Amount');
+        if (missing.length > 0) {
+          outstandingIssues.push(`Outstanding item #${idx + 1} missing: ${missing.join(', ')}.`);
+        }
+      });
+      if (outstandingIssues.length > 0) {
+        showModal(outstandingIssues.join('\n'), 'Validation Error');
+        return;
+      }
+
+      const cutoffIssues = [];
+      cashCutoffItems.forEach((item, idx) => {
+        const missing = [];
+        if (!item.reference) missing.push('Reference #');
+        if (!item.clearDate) missing.push('Cleared Date');
+        if (!item.amount) missing.push('Amount');
+        if (missing.length > 0) {
+          cutoffIssues.push(`Cutoff item #${idx + 1} missing: ${missing.join(', ')}.`);
+        }
+      });
+      if (cutoffIssues.length > 0) {
+        showModal(cutoffIssues.join('\n'), 'Validation Error');
+        return;
+      }
+
+      const normalizedMap = [...cashReconciliationMap];
+      cashCutoffItems.forEach((cutoffItem) => {
+        const hasMap = normalizedMap.some((m) => m.cutoffTempId === cutoffItem._tempId);
+        if (!hasMap) {
+          normalizedMap.push({
+            _tempId: getUUID(),
+            outstandingTempId: '',
+            cutoffTempId: cutoffItem._tempId,
+            scenarioType: 'unrecorded',
+          });
+        }
+      });
+
+      const mappingIssues = [];
+      cashOutstandingItems.forEach((item, idx) => {
+        const mapping = normalizedMap.find((m) => m.outstandingTempId === item._tempId);
+        if (!mapping || !mapping.scenarioType) {
+          mappingIssues.push(`Reconciliation mapping required for outstanding item #${idx + 1} (${item.reference || 'no ref'}).`);
+        }
+      });
+      if (mappingIssues.length > 0) {
+        showModal(mappingIssues.join('\n'), 'Validation Error');
+        return;
+      }
+
+      derivedReconciliationMap = normalizedMap;
+    }
+
+    if (auditArea === AUDIT_AREAS.FIXED_ASSETS) {
+      const faIssues = [];
+      if (!faRisk.tolerableMisstatement) {
+        faIssues.push('Enter a tolerable misstatement for Fixed Assets.');
+      }
+      faSummary.forEach((row, idx) => {
+        const missing = [];
+        if (!row.className) missing.push('Asset class name');
+        if (!row.beginningBalance) missing.push('Beginning balance');
+        if (!row.additions) missing.push('Additions');
+        if (!row.disposals) missing.push('Disposals');
+        if (!row.endingBalance) missing.push('Ending balance');
+        if (missing.length > 0) {
+          faIssues.push(`Rollforward class #${idx + 1} missing: ${missing.join(', ')}.`);
+        }
+        const begin = Number(row.beginningBalance) || 0;
+        const add = Number(row.additions) || 0;
+        const disp = Number(row.disposals) || 0;
+        const end = Number(row.endingBalance) || 0;
+        if (Math.abs(begin + add - disp - end) > 0.01) {
+          faIssues.push(`Rollforward class ${row.className || idx + 1} does not foot (Beg + Add - Disp should equal End).`);
+        }
+        faAdditionsTotal += add;
+        faDisposalsTotal += disp;
+      });
+
+      faAdditions.forEach((item, idx) => {
+        const missing = [];
+        if (!item.vendor) missing.push('Vendor/Description');
+        if (!item.amount) missing.push('Amount');
+        if (!item.inServiceDate) missing.push('In-service date');
+        if (!item.natureOfExpenditure) missing.push('Nature of expenditure');
+        if (!item.properPeriod) missing.push('Proper period');
+        if (missing.length > 0) {
+          faIssues.push(`Addition #${idx + 1} missing: ${missing.join(', ')}.`);
+        }
+      });
+      faDisposals.forEach((item, idx) => {
+        const missing = [];
+        if (!item.assetId) missing.push('Asset ID/Description');
+        if (!item.proceeds) missing.push('Proceeds');
+        if (!item.nbv) missing.push('Net book value');
+        if (missing.length > 0) {
+          faIssues.push(`Disposal #${idx + 1} missing: ${missing.join(', ')}.`);
+        }
+      });
+
+      const detailAddSum = faAdditions.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+      const detailDispSum = faDisposals.reduce((sum, item) => sum + (Number(item.proceeds) || 0), 0);
+      if (Math.abs(detailAddSum - faAdditionsTotal) > 0.5) {
+        faIssues.push('Additions detail total does not tie to rollforward additions.');
+      }
+      if (Math.abs(detailDispSum - faDisposalsTotal) > 0.5) {
+        faIssues.push('Disposals detail total does not tie to rollforward disposals.');
+      }
+
+      if (faIssues.length > 0) {
+        showModal(faIssues.join('\n'), 'Validation Error');
+        return;
+      }
     }
 
     if (!Array.isArray(disbursements) || disbursements.length === 0) {
@@ -1237,7 +1584,10 @@ function useCaseForm({ params }) {
       return;
     }
 
-    const keyFields = ['paymentId', 'payee', 'amount', 'paymentDate'];
+    const keyFields =
+      auditArea === AUDIT_AREAS.CASH
+        ? ['paymentId', 'payee', 'amount', 'paymentDate', 'transactionType']
+        : ['paymentId', 'payee', 'amount', 'paymentDate'];
     for (let index = 0; index < disbursements.length; index++) {
       const item = disbursements[index];
       const missingFields = keyFields.filter((field) => !item[field]);
@@ -1347,7 +1697,7 @@ function useCaseForm({ params }) {
     let currentCaseId = editingCaseId;
     let isNewCaseCreation = !isEditing;
 
-    const activeReferenceDocs = referenceDocuments.filter((doc) => {
+    const activeReferenceDocs = [...referenceDocuments, ...cashArtifacts].filter((doc) => {
       if (!doc) return false;
       if (doc.clientSideFile) return true;
       if (doc.fileName) return true;
@@ -1455,6 +1805,7 @@ function useCaseForm({ params }) {
       const finalInvoiceMappings = [...retainedMappings, ...uploadedMappings];
 
       let finalReferenceDocuments = [];
+      let finalCashArtifacts = [];
       if (activeReferenceDocs.length > 0) {
         const referenceSettled = await Promise.allSettled(
           activeReferenceDocs.map((doc) => uploadReferenceDocument(doc, currentCaseId))
@@ -1469,6 +1820,7 @@ function useCaseForm({ params }) {
                   activeReferenceDocs[idx]?.fileName ||
                   activeReferenceDocs[idx]?.clientSideFile?.name ||
                   `Reference document ${idx + 1}`,
+                type: activeReferenceDocs[idx]?.type,
               }
         );
 
@@ -1485,9 +1837,12 @@ function useCaseForm({ params }) {
           return;
         }
 
-        finalReferenceDocuments = referenceResults
+        const normalizedResults = referenceResults
           .filter((item) => item && !item.uploadError && item.fileName)
           .map(({ _tempId, clientSideFile, uploadProgress, uploadError, ...rest }) => rest);
+
+        finalCashArtifacts = normalizedResults.filter((doc) => doc.type && doc.type.startsWith('cash_'));
+        finalReferenceDocuments = normalizedResults.filter((doc) => !doc.type || !doc.type.startsWith('cash_'));
       }
 
       const disbursementPayload = mergeDisbursementDocuments(disbursements, finalInvoiceMappings).map(
@@ -1509,6 +1864,33 @@ function useCaseForm({ params }) {
         _deleted: originalCaseData?._deleted ?? false,
         auditArea,
         caseGroupId: resolvedCaseGroupId,
+        cashContext: auditArea === AUDIT_AREAS.CASH
+          ? {
+              bookBalance: cashContext.bookBalance || '',
+              bankBalance: cashContext.bankBalance || '',
+              reconciliationDate: cashContext.reconciliationDate || '',
+              reportingDate: cashContext.reconciliationDate || '',
+              simulateMathError: Boolean(cashContext.simulateMathError),
+              confirmedBalance: cashContext.confirmedBalance || '',
+              testingThreshold: cashContext.testingThreshold || '',
+              cutoffWindowDays: cashContext.cutoffWindowDays || '',
+            }
+          : null,
+        cashOutstandingItems: auditArea === AUDIT_AREAS.CASH ? cashOutstandingItems : [],
+        cashCutoffItems: auditArea === AUDIT_AREAS.CASH ? cashCutoffItems : [],
+        cashReconciliationMap: auditArea === AUDIT_AREAS.CASH ? derivedReconciliationMap : [],
+        cashArtifacts:
+          auditArea === AUDIT_AREAS.CASH
+            ? finalCashArtifacts.map((doc) => ({
+                ...doc,
+                type: doc.type && doc.type.startsWith('cash_') ? doc.type : `cash_${doc.type || 'year_end_statement'}`,
+              }))
+            : [],
+        faSummary: auditArea === AUDIT_AREAS.FIXED_ASSETS ? faSummary : [],
+        faRisk: auditArea === AUDIT_AREAS.FIXED_ASSETS ? faRisk : null,
+        faAdditions: auditArea === AUDIT_AREAS.FIXED_ASSETS ? faAdditions : [],
+        faDisposals: auditArea === AUDIT_AREAS.FIXED_ASSETS ? faDisposals : [],
+        faArtifacts: [],
       };
 
       if (!isNewCaseCreation) {
@@ -1545,6 +1927,8 @@ function useCaseForm({ params }) {
     status,
     setStatus,
     statusOptions: STATUS_OPTIONS,
+    cashContext,
+    setCashContext,
   };
 
   const audience = {
@@ -1572,6 +1956,30 @@ function useCaseForm({ params }) {
     syncMappingsWithPaymentId,
     disbursementCsvInputRef,
     handleCsvImport,
+    auditArea,
+    cashOutstandingItems,
+    cashCutoffItems,
+    cashReconciliationMap,
+    handleOutstandingChange,
+    addOutstandingItem,
+    removeOutstandingItem,
+    handleCutoffChange,
+    addCutoffItem,
+    removeCutoffItem,
+    handleReconciliationMapChange,
+    addReconciliationMap,
+    removeReconciliationMap,
+    addFaClass,
+    addFaAddition,
+    addFaDisposal,
+    faSummary,
+    setFaSummary,
+    faRisk,
+    setFaRisk,
+    faAdditions,
+    setFaAdditions,
+    faDisposals,
+    setFaDisposals,
   };
 
   const attachments = {
@@ -1581,6 +1989,10 @@ function useCaseForm({ params }) {
     addReferenceDocument,
     removeReferenceDocument,
     handleReferenceDocFileSelect,
+    cashArtifacts,
+    handleCashArtifactChange,
+    handleCashArtifactFileSelect,
+    auditArea,
   };
 
   const answerKey = {
@@ -2140,25 +2552,188 @@ function TransactionsStep({ transactions, files }) {
     syncMappingsWithPaymentId,
     disbursementCsvInputRef,
     handleCsvImport,
+    auditArea,
+    cashOutstandingItems,
+    cashCutoffItems,
+    cashReconciliationMap,
+    handleOutstandingChange,
+    addOutstandingItem,
+    removeOutstandingItem,
+    handleCutoffChange,
+    addCutoffItem,
+    removeCutoffItem,
+    handleReconciliationMapChange,
+    addReconciliationMap,
+    removeReconciliationMap,
+    addFaClass,
+    addFaAddition,
+    addFaDisposal,
+    faSummary,
+    setFaSummary,
+    faRisk,
+    setFaRisk,
+    faAdditions,
+    setFaAdditions,
+    faDisposals,
+    setFaDisposals,
+    cashContext,
+    setCashContext,
   } = transactions;
   const { FILE_INPUT_ACCEPT, prettySupportedLabels, MAX_ARTIFACT_BYTES } = files;
+  const isCash = auditArea === AUDIT_AREAS.CASH;
+  const isFixedAssets = auditArea === AUDIT_AREAS.FIXED_ASSETS;
+  const handleCashContextChange = (field, value) => {
+    if (typeof setCashContext !== 'function') return;
+    setCashContext((prev) => {
+      const base =
+        prev ||
+        {
+          bookBalance: '',
+          bankBalance: '',
+          reconciliationDate: '',
+          simulateMathError: false,
+          confirmedBalance: '',
+          testingThreshold: '',
+          cutoffWindowDays: '',
+        };
+      const next = { ...base, [field]: value };
+      // Keep reportingDate in sync with reconciliationDate for legacy consumers.
+      if (field === 'reconciliationDate') {
+        next.reportingDate = value;
+      }
+      return next;
+    });
+  };
+  const safeCashContext =
+    cashContext || {
+      bookBalance: '',
+      bankBalance: '',
+      reconciliationDate: '',
+      simulateMathError: false,
+      confirmedBalance: '',
+      testingThreshold: '',
+      cutoffWindowDays: '',
+    };
 
   return (
     <div className="space-y-8">
       <StepIntro
-        title="Complete these tasks"
-        items={[
-          'Review each disbursement and confirm amount, payee, and date.',
-          'Attach supporting invoices for the transactions trainees will inspect.',
-          'Use CSV import if you have many disbursements to add at once.'
-        ]}
+      title="Complete these tasks"
+      items={
+        isCash
+          ? [
+                'Enter reconciliation context (book vs bank balance and the reconciliation/reporting date).',
+                'Capture the client’s Outstanding Check List (this is the ledger list trainees will test).',
+                'Add Cutoff Statement items (bank evidence students will trace from).',
+                'Use the Reconciliation Mapper to describe the intended behavior of each outstanding item and link it to cutoff evidence where applicable.',
+                'Use CSV import if you have many transactions to add at once.'
+              ]
+          : [
+                'Review each disbursement and confirm amount, payee, and date.',
+                'Attach supporting invoices for the transactions trainees will inspect.',
+                'Use CSV import if you have many disbursements to add at once.'
+              ]
+        }
         helper="Keep each card closed once the details are confirmed. This keeps the list scannable, especially for longer cases."
       />
+
+      {isCash ? (
+        <section className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-col gap-1">
+            <h3 className="text-base font-semibold text-gray-800">Cash Context</h3>
+            <p className="text-xs text-gray-500">
+              Provide the balances and key date trainees will reconcile against. The reconciliation date also serves as the reporting date.
+            </p>
+          </div>
+          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700">GL (Book) Balance</label>
+              <Input
+                type="number"
+                inputMode="decimal"
+                placeholder="e.g., 1250000"
+                value={safeCashContext.bookBalance}
+                onChange={(e) => handleCashContextChange('bookBalance', e.target.value)}
+                className="mt-2"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Bank Statement Balance</label>
+              <Input
+                type="number"
+                inputMode="decimal"
+                placeholder="e.g., 1240000"
+                value={safeCashContext.bankBalance}
+                onChange={(e) => handleCashContextChange('bankBalance', e.target.value)}
+                className="mt-2"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Reconciliation Date (also reporting date)</label>
+              <Input
+                type="date"
+                value={safeCashContext.reconciliationDate}
+                onChange={(e) => handleCashContextChange('reconciliationDate', e.target.value)}
+                className="mt-2"
+              />
+            </div>
+          </div>
+          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div className="flex items-center gap-2">
+              <input
+                id="simulateMathError"
+                type="checkbox"
+                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                checked={safeCashContext.simulateMathError}
+                onChange={(e) => handleCashContextChange('simulateMathError', e.target.checked)}
+              />
+              <label htmlFor="simulateMathError" className="text-sm font-medium text-gray-700">
+                Simulate Math/Transposition Error
+              </label>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Confirmed Balance (Bank Confirm)</label>
+              <Input
+                type="number"
+                inputMode="decimal"
+                placeholder="e.g., 1240000"
+                value={safeCashContext.confirmedBalance}
+                onChange={(e) => handleCashContextChange('confirmedBalance', e.target.value)}
+                className="mt-2"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Testing Threshold (materiality)</label>
+              <Input
+                type="number"
+                inputMode="decimal"
+                placeholder="e.g., 500"
+                value={safeCashContext.testingThreshold}
+                onChange={(e) => handleCashContextChange('testingThreshold', e.target.value)}
+                className="mt-2"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Cutoff Window (days after YE)</label>
+              <Input
+                type="number"
+                inputMode="decimal"
+                placeholder="e.g., 15"
+                value={safeCashContext.cutoffWindowDays}
+                onChange={(e) => handleCashContextChange('cutoffWindowDays', e.target.value)}
+                className="mt-2"
+              />
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section className="rounded-lg border border-gray-200 p-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
-            <h3 className="text-base font-semibold text-gray-800">Disbursements</h3>
+            <h3 className="text-base font-semibold text-gray-800">
+              {isCash ? 'Ledger Transactions' : isFixedAssets ? 'Fixed Asset Activity' : 'Disbursements'}
+            </h3>
             <p className="text-xs text-gray-500">
               Import a CSV or add entries manually. Answer keys stay hidden until you expand an item.
             </p>
@@ -2181,7 +2756,9 @@ function TransactionsStep({ transactions, files }) {
           </div>
         </div>
         <p className="mt-2 text-xs text-gray-500">
-          CSV format: PaymentID,Payee,Amount,PaymentDate (with header row). Dates should be YYYY-MM-DD.
+          {isCash
+            ? 'CSV format: Reference,Description,Amount,BookDate,Type (with header row). Dates should be YYYY-MM-DD.'
+            : 'CSV format: PaymentID,Payee,Amount,PaymentDate (with header row). Dates should be YYYY-MM-DD.'}
         </p>
         <div className="mt-4 space-y-4">
           {disbursements.map((item, index) => (
@@ -2189,6 +2766,7 @@ function TransactionsStep({ transactions, files }) {
               key={item._tempId}
               item={item}
               index={index}
+              auditArea={auditArea}
               onChange={handleDisbursementChange}
               onRemove={removeDisbursement}
               onAddMapping={addMappingToDisbursement}
@@ -2207,6 +2785,445 @@ function TransactionsStep({ transactions, files }) {
           </Button>
         </div>
       </section>
+
+      {isFixedAssets ? (
+        <section className="rounded-lg border border-gray-200 p-4 space-y-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-gray-800">Fixed Asset Rollforward Summary</h3>
+              <p className="text-xs text-gray-500">Ensure beginning + additions - disposals equals ending for each class.</p>
+            </div>
+            <Button onClick={addFaClass} variant="secondary" type="button">
+              <PlusCircle size={16} className="mr-1" /> Add Asset Class
+            </Button>
+          </div>
+          <div className="space-y-3">
+            {faSummary.map((row, index) => (
+              <div key={row._tempId} className="grid gap-3 rounded-xl border border-gray-200 bg-white p-4 md:grid-cols-5">
+                <Input
+                  placeholder="Asset Class"
+                  value={row.className}
+                  onChange={(e) =>
+                    setFaSummary((prev) =>
+                      prev.map((item, i) => (i === index ? { ...item, className: e.target.value } : item))
+                    )
+                  }
+                />
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  placeholder="Beginning Balance"
+                  value={row.beginningBalance}
+                  onChange={(e) =>
+                    setFaSummary((prev) =>
+                      prev.map((item, i) => (i === index ? { ...item, beginningBalance: e.target.value } : item))
+                    )
+                  }
+                />
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  placeholder="Additions"
+                  value={row.additions}
+                  onChange={(e) =>
+                    setFaSummary((prev) =>
+                      prev.map((item, i) => (i === index ? { ...item, additions: e.target.value } : item))
+                    )
+                  }
+                />
+                <Input
+                  type="number"
+                  inputMode="decimal"
+                  placeholder="Disposals"
+                  value={row.disposals}
+                  onChange={(e) =>
+                    setFaSummary((prev) =>
+                      prev.map((item, i) => (i === index ? { ...item, disposals: e.target.value } : item))
+                    )
+                  }
+                />
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    placeholder="Ending Balance"
+                    value={row.endingBalance}
+                    onChange={(e) =>
+                      setFaSummary((prev) =>
+                        prev.map((item, i) => (i === index ? { ...item, endingBalance: e.target.value } : item))
+                      )
+                    }
+                  />
+                  <Button
+                    onClick={() => setFaSummary((prev) => prev.filter((_, i) => i !== index))}
+                    size="icon"
+                    variant="ghost"
+                    type="button"
+                    className="text-red-600"
+                  >
+                    <Trash2 size={16} />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {isFixedAssets ? (
+        <section className="rounded-lg border border-gray-200 p-4 space-y-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-gray-800">Audit Risk Parameters</h3>
+              <p className="text-xs text-gray-500">Tolerable misstatement and sampling expectations for additions/disposals.</p>
+            </div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <Input
+              type="number"
+              inputMode="decimal"
+              placeholder="Tolerable Misstatement"
+              value={faRisk.tolerableMisstatement}
+              onChange={(e) => setFaRisk((prev) => ({ ...prev, tolerableMisstatement: e.target.value }))}
+            />
+            <Select
+              value={faRisk.strategy}
+              onChange={(e) => setFaRisk((prev) => ({ ...prev, strategy: e.target.value }))}
+              options={[
+                { value: 'all_over_tm', label: 'Test all items over TM' },
+                { value: 'sample_remaining', label: 'Sample remaining if balance > TM' },
+              ]}
+            />
+            <Input
+              type="number"
+              inputMode="decimal"
+              placeholder="Sample size (optional)"
+              value={faRisk.sampleSize}
+              onChange={(e) => setFaRisk((prev) => ({ ...prev, sampleSize: e.target.value }))}
+            />
+          </div>
+        </section>
+      ) : null}
+
+      {isFixedAssets ? (
+        <section className="rounded-lg border border-gray-200 p-4 space-y-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-gray-800">Additions Detail</h3>
+              <p className="text-xs text-gray-500">Build the population of capital expenditure items.</p>
+            </div>
+            <Button onClick={addFaAddition} variant="secondary" type="button">
+              <PlusCircle size={16} className="mr-1" /> Add Addition
+            </Button>
+          </div>
+          <div className="space-y-3">
+            {faAdditions.map((item, index) => (
+              <div key={item._tempId} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm space-y-3">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <Input
+                    placeholder="Vendor / Description"
+                    value={item.vendor}
+                    onChange={(e) =>
+                      setFaAdditions((prev) => prev.map((row, i) => (i === index ? { ...row, vendor: e.target.value } : row)))
+                    }
+                  />
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    placeholder="Amount"
+                    value={item.amount}
+                    onChange={(e) =>
+                      setFaAdditions((prev) => prev.map((row, i) => (i === index ? { ...row, amount: e.target.value } : row)))
+                    }
+                  />
+                  <Input
+                    type="date"
+                    placeholder="In-service date"
+                    value={item.inServiceDate}
+                    onChange={(e) =>
+                      setFaAdditions((prev) =>
+                        prev.map((row, i) => (i === index ? { ...row, inServiceDate: e.target.value } : row))
+                      )
+                    }
+                  />
+                  <Input
+                    placeholder="GL Account"
+                    value={item.glAccount}
+                    onChange={(e) =>
+                      setFaAdditions((prev) => prev.map((row, i) => (i === index ? { ...row, glAccount: e.target.value } : row)))
+                    }
+                  />
+                  <Select
+                    value={item.natureOfExpenditure}
+                    onChange={(e) =>
+                      setFaAdditions((prev) =>
+                        prev.map((row, i) => (i === index ? { ...row, natureOfExpenditure: e.target.value } : row))
+                      )
+                    }
+                    options={[
+                      { value: '', label: 'Nature of expenditure' },
+                      { value: 'capital_asset', label: 'Capital Asset' },
+                      { value: 'repair_expense', label: 'Repair / Expense' },
+                      { value: 'startup', label: 'Start-up Cost' },
+                    ]}
+                  />
+                  <Select
+                    value={item.properPeriod}
+                    onChange={(e) =>
+                      setFaAdditions((prev) =>
+                        prev.map((row, i) => (i === index ? { ...row, properPeriod: e.target.value } : row))
+                      )
+                    }
+                    options={[
+                      { value: '', label: 'Proper period' },
+                      { value: 'current', label: 'Current Period' },
+                      { value: 'prior', label: 'Prior Period' },
+                      { value: 'next', label: 'Next Period' },
+                    ]}
+                  />
+                </div>
+                <div className="flex justify-end">
+                  <Button
+                    onClick={() => setFaAdditions((prev) => prev.filter((_, i) => i !== index))}
+                    variant="ghost"
+                    type="button"
+                    className="text-sm text-red-600"
+                  >
+                    Remove
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {isFixedAssets ? (
+        <section className="rounded-lg border border-gray-200 p-4 space-y-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-gray-800">Disposals Detail</h3>
+              <p className="text-xs text-gray-500">Capture proceeds and NBV to evaluate gains/losses.</p>
+            </div>
+            <Button onClick={addFaDisposal} variant="secondary" type="button">
+              <PlusCircle size={16} className="mr-1" /> Add Disposal
+            </Button>
+          </div>
+          <div className="space-y-3">
+            {faDisposals.map((item, index) => (
+              <div key={item._tempId} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm space-y-3">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <Input
+                    placeholder="Asset ID / Description"
+                    value={item.assetId}
+                    onChange={(e) =>
+                      setFaDisposals((prev) =>
+                        prev.map((row, i) => (i === index ? { ...row, assetId: e.target.value } : row))
+                      )
+                    }
+                  />
+                  <Input
+                    placeholder="Description"
+                    value={item.description}
+                    onChange={(e) =>
+                      setFaDisposals((prev) =>
+                        prev.map((row, i) => (i === index ? { ...row, description: e.target.value } : row))
+                      )
+                    }
+                  />
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    placeholder="Proceeds"
+                    value={item.proceeds}
+                    onChange={(e) =>
+                      setFaDisposals((prev) =>
+                        prev.map((row, i) => (i === index ? { ...row, proceeds: e.target.value } : row))
+                      )
+                    }
+                  />
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    placeholder="NBV"
+                    value={item.nbv}
+                    onChange={(e) =>
+                      setFaDisposals((prev) =>
+                        prev.map((row, i) => (i === index ? { ...row, nbv: e.target.value } : row))
+                      )
+                    }
+                  />
+                </div>
+                <div className="flex justify-end">
+                  <Button
+                    onClick={() => setFaDisposals((prev) => prev.filter((_, i) => i !== index))}
+                    variant="ghost"
+                    type="button"
+                    className="text-sm text-red-600"
+                  >
+                    Remove
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+      {isCash ? (
+        <section className="rounded-lg border border-gray-200 p-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-gray-800">Outstanding Checks (Client List)</h3>
+              <p className="text-xs text-gray-500">
+                Enter the client’s reported outstanding items as of the reconciliation date. These form the “ledger” pane students will validate.
+              </p>
+            </div>
+            <Button onClick={addOutstandingItem} variant="secondary" type="button">
+              <PlusCircle size={16} className="mr-1" /> Add Outstanding Item
+            </Button>
+          </div>
+          <div className="mt-4 space-y-4">
+            {cashOutstandingItems.map((item, index) => (
+              <div key={item._tempId} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <Input
+                    placeholder="Reference #"
+                    value={item.reference}
+                    onChange={(e) => handleOutstandingChange(index, { reference: e.target.value })}
+                  />
+                  <Input
+                    placeholder="Description / Payee"
+                    value={item.payee}
+                    onChange={(e) => handleOutstandingChange(index, { payee: e.target.value })}
+                  />
+                  <Input
+                    type="date"
+                    placeholder="Book Date"
+                    value={item.issueDate}
+                    onChange={(e) => handleOutstandingChange(index, { issueDate: e.target.value })}
+                  />
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    placeholder="Amount"
+                    value={item.amount}
+                    onChange={(e) => handleOutstandingChange(index, { amount: e.target.value })}
+                  />
+                </div>
+                <div className="mt-3 flex justify-end">
+                  <Button onClick={() => removeOutstandingItem(index)} variant="ghost" type="button" className="text-sm text-red-600">
+                    Remove
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {isCash ? (
+        <section className="rounded-lg border border-gray-200 p-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-gray-800">Cutoff Statement Items (Evidence)</h3>
+              <p className="text-xs text-gray-500">
+                Add the transactions from the cutoff bank statement. Students will trace from these bank items to the ledger list.
+              </p>
+            </div>
+            <Button onClick={addCutoffItem} variant="secondary" type="button">
+              <PlusCircle size={16} className="mr-1" /> Add Cutoff Item
+            </Button>
+          </div>
+          <div className="mt-4 space-y-4">
+            {cashCutoffItems.map((item, index) => (
+              <div key={item._tempId} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  <Input
+                    placeholder="Reference #"
+                    value={item.reference}
+                    onChange={(e) => handleCutoffChange(index, { reference: e.target.value })}
+                  />
+                  <Input
+                    type="date"
+                    placeholder="Cleared Date"
+                    value={item.clearDate}
+                    onChange={(e) => handleCutoffChange(index, { clearDate: e.target.value })}
+                  />
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    placeholder="Amount"
+                    value={item.amount}
+                    onChange={(e) => handleCutoffChange(index, { amount: e.target.value })}
+                  />
+                </div>
+                <div className="mt-3 flex justify-end">
+                  <Button onClick={() => removeCutoffItem(index)} variant="ghost" type="button" className="text-sm text-red-600">
+                    Remove
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {isCash ? (
+        <section className="rounded-lg border border-gray-200 p-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-gray-800">Reconciliation Logic Mapper</h3>
+              <p className="text-xs text-gray-500">
+                Define the intended scenario for each outstanding item (clean, unrecorded, fictitious) and optionally pre-link to the related cutoff evidence.
+                This guides the Virtual Senior’s grading and helps students understand the expected flow.
+              </p>
+            </div>
+            <Button onClick={addReconciliationMap} variant="secondary" type="button">
+              <PlusCircle size={16} className="mr-1" /> Add Mapping
+            </Button>
+          </div>
+          <div className="mt-4 space-y-3">
+            {cashReconciliationMap.map((row, index) => (
+              <div key={row._tempId} className="rounded-lg border border-gray-200 bg-white p-3">
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <Select
+                    value={row.outstandingTempId}
+                    onChange={(event) => handleReconciliationMapChange(index, { outstandingTempId: event.target.value })}
+                    options={[
+                      { value: '', label: 'Select outstanding item…' },
+                      ...cashOutstandingItems.map((item) => ({
+                        value: item._tempId,
+                        label: item.reference || item.payee || 'Outstanding item',
+                      })),
+                    ]}
+                  />
+                  <Select
+                    value={row.scenarioType}
+                    onChange={(event) => handleReconciliationMapChange(index, { scenarioType: event.target.value })}
+                    options={[{ value: '', label: 'Choose scenario…' }, ...CASH_RECON_SCENARIOS]}
+                  />
+                  <Select
+                    value={row.cutoffTempId}
+                    onChange={(event) => handleReconciliationMapChange(index, { cutoffTempId: event.target.value })}
+                    options={[
+                      { value: '', label: 'Match to cutoff (optional)' },
+                      ...cashCutoffItems.map((item) => ({
+                        value: item._tempId,
+                        label: item.reference || item.clearDate || 'Cutoff item',
+                      })),
+                    ]}
+                  />
+                </div>
+                <div className="mt-2 flex justify-end">
+                  <Button onClick={() => removeReconciliationMap(index)} variant="ghost" type="button" className="text-sm text-red-600">
+                    Remove
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -2219,8 +3236,13 @@ function AttachmentsStep({ attachments, files }) {
     addReferenceDocument,
     removeReferenceDocument,
     handleReferenceDocFileSelect,
+    cashArtifacts,
+    handleCashArtifactChange,
+    handleCashArtifactFileSelect,
+    auditArea,
   } = attachments;
   const { FILE_INPUT_ACCEPT } = files;
+  const isCash = auditArea === AUDIT_AREAS.CASH;
 
   return (
     <div className="space-y-6">
@@ -2237,7 +3259,7 @@ function AttachmentsStep({ attachments, files }) {
       <section className="rounded-lg border border-gray-200 p-4">
         <h3 className="text-base font-semibold text-gray-800">Invoice Attachments</h3>
         <p className="mt-1 text-xs text-gray-500">
-          Each disbursement should have at least one supporting document. Use the Transactions step to add or remove files.
+          Each {isCash ? 'transaction' : 'disbursement'} should have at least one supporting document. Use the Transactions step to add or remove files.
         </p>
         <div className="mt-4 space-y-4">
           {disbursements.map((disbursement) => (
@@ -2275,10 +3297,84 @@ function AttachmentsStep({ attachments, files }) {
         </div>
       </section>
 
+      {isCash ? (
+        <section className="rounded-lg border border-gray-200 p-4">
+          <h3 className="text-base font-semibold text-gray-800">Cash Artifacts</h3>
+          <p className="mt-1 text-xs text-gray-500">
+            Upload the bank statement, bank confirmation, and cutoff statement the trainee will reference. Confirmation balance can be captured for grading.
+          </p>
+          <div className="mt-4 space-y-4">
+            {cashArtifacts.map((doc, index) => {
+              const label = CASH_ARTIFACT_TYPES.find((entry) => entry.value === doc.type)?.label || 'Cash Artifact';
+              const effectiveNeedsConfirm = doc.type === 'cash_bank_confirmation';
+              return (
+                <div key={doc._tempId} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">{label}</p>
+                      <p className="text-xs text-gray-500">{doc.fileName || 'No file selected'}</p>
+                    </div>
+                    <Input
+                      type="file"
+                      accept={FILE_INPUT_ACCEPT}
+                      onChange={(event) => handleCashArtifactFileSelect(index, event.target.files?.[0] || null)}
+                      className="sm:max-w-xs"
+                    />
+                  </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500">
+                        Display Name
+                      </label>
+                      <Input
+                        value={doc.fileName}
+                        onChange={(e) => handleCashArtifactChange(index, { fileName: e.target.value })}
+                        placeholder={`${label} file name`}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500">
+                        Storage Path or URL
+                      </label>
+                      <Input
+                        value={doc.storagePath || doc.downloadURL || ''}
+                        onChange={(e) =>
+                          handleCashArtifactChange(index, {
+                            storagePath: e.target.value,
+                            downloadURL: '',
+                          })
+                        }
+                        placeholder="gs:// or https://"
+                      />
+                    </div>
+                  </div>
+                  {effectiveNeedsConfirm ? (
+                    <div className="mt-3">
+                      <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500">
+                        Confirmed Balance (from confirmation)
+                      </label>
+                      <Input
+                        type="number"
+                        inputMode="decimal"
+                        placeholder="e.g., 1240000"
+                        value={doc.confirmedBalance || ''}
+                        onChange={(e) => handleCashArtifactChange(index, { confirmedBalance: e.target.value })}
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      ) : null}
+
       <section className="rounded-lg border border-gray-200 p-4">
         <h3 className="text-base font-semibold text-gray-800">Reference Documents</h3>
         <p className="mt-1 text-xs text-gray-500">
-          Provide supplemental files (e.g., AP aging, accrual schedules). Expand an item to configure download URLs or storage paths.
+          {isCash
+            ? 'Upload the bank statement or other global evidence trainees will reference. Mark key files so they are easy to find.'
+            : 'Provide supplemental files (e.g., AP aging, accrual schedules). Expand an item to configure download URLs or storage paths.'}
         </p>
         <div className="mt-4 space-y-4">
           {referenceDocuments.map((item, index) => (
@@ -2596,7 +3692,7 @@ export default function CaseFormPage({ params }) {
     () => [
       { id: 'basics', label: 'Basics', description: 'Name, status, audit area, and grouping' },
       { id: 'audience', label: 'Audience & Schedule', description: 'Visibility controls and timing' },
-      { id: 'transactions', label: 'Transactions', description: 'Disbursements and supporting invoices' },
+      { id: 'transactions', label: 'Data Entry', description: 'Balances, transactions, and mappings' },
       { id: 'attachments', label: 'Attachments', description: 'Invoice and reference files' },
       { id: 'answerKey', label: 'Answer Key', description: 'Correct classifications and rationale' },
       { id: 'review', label: 'Review & Submit', description: 'Final summary before publishing' },
@@ -2737,8 +3833,9 @@ export default function CaseFormPage({ params }) {
     const referenceDocs = Array.isArray(attachments.referenceDocuments)
       ? attachments.referenceDocuments
       : [];
+    const cashDocs = [];
     const referenceIssues = [];
-    referenceDocs.forEach((doc, index) => {
+    [...referenceDocs, ...cashDocs].forEach((doc, index) => {
       if (!doc) return;
       const hasAnyContent = Boolean(
         doc.clientSideFile || doc.fileName || doc.downloadURL || doc.storagePath
@@ -3117,6 +4214,7 @@ const RosterMultiSelect = ({ id, options, value, onChange, disabled, loading, pl
 const DisbursementItem = ({
   item,
   index,
+  auditArea,
   onChange,
   onRemove,
   onAddMapping,
@@ -3127,6 +4225,7 @@ const DisbursementItem = ({
   maxUploadBytes,
   prettySupportedLabels,
 }) => {
+  const isCash = auditArea === AUDIT_AREAS.CASH;
   const isNewItem = !item.paymentId && !item.payee && !item.amount && !item.paymentDate;
   const [expanded, setExpanded] = useState(isNewItem || index === 0);
 
@@ -3181,7 +4280,7 @@ const DisbursementItem = ({
 
   const summaryFields = [
     {
-      label: 'Payment ID',
+      label: isCash ? 'Reference #' : 'Payment ID',
       value: item.paymentId || 'Pending',
       editor: (
         <Input
@@ -3189,13 +4288,13 @@ const DisbursementItem = ({
           name="paymentId"
           value={item.paymentId}
           onChange={handleChange}
-          placeholder="Payment ID"
+          placeholder={isCash ? 'Check # / Ref #' : 'Payment ID'}
           required
         />
       ),
     },
     {
-      label: 'Payee',
+      label: isCash ? 'Description / Payee' : 'Payee',
       value: item.payee || 'Pending',
       editor: (
         <Input
@@ -3203,7 +4302,7 @@ const DisbursementItem = ({
           name="payee"
           value={item.payee}
           onChange={handleChange}
-          placeholder="Payee"
+          placeholder={isCash ? 'Description or payee' : 'Payee'}
           required
         />
       ),
@@ -3224,7 +4323,7 @@ const DisbursementItem = ({
       ),
     },
     {
-      label: 'Payment Date',
+      label: isCash ? 'Book Date' : 'Payment Date',
       value: item.paymentDate
         ? new Date(item.paymentDate).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
         : 'Pending',
@@ -3235,12 +4334,35 @@ const DisbursementItem = ({
           type="date"
           value={item.paymentDate}
           onChange={handleChange}
-          placeholder="Payment Date (YYYY-MM-DD)"
+          placeholder={isCash ? 'Book Date (YYYY-MM-DD)' : 'Payment Date (YYYY-MM-DD)'}
           required
         />
       ),
     },
   ];
+
+  if (isCash) {
+    summaryFields.splice(3, 0, {
+      label: 'Transaction Type',
+      value: item.transactionType || 'Pending',
+      editor: (
+        <Select
+          id={`${baseId}-transactionType`}
+          value={item.transactionType}
+          onChange={(event) => handleChange({ target: { name: 'transactionType', value: event.target.value } })}
+          options={[
+            { value: '', label: 'Choose type…' },
+            { value: 'check', label: 'Check' },
+            { value: 'deposit', label: 'Deposit' },
+            { value: 'wire', label: 'EFT / Wire' },
+            { value: 'fee', label: 'Bank Fee' },
+            { value: 'interest', label: 'Interest' },
+          ]}
+          className="w-full"
+        />
+      ),
+    });
+  }
 
   return (
     <div className="rounded-2xl border border-gray-200 bg-white shadow-sm transition hover:border-blue-200">
@@ -3320,67 +4442,107 @@ const DisbursementItem = ({
             <p className="text-xs text-gray-500 mb-3">
               Enter the factual evidence found in the document. The system compares this against the student's selections.
             </p>
-            <div className="grid grid-cols-1 gap-4 rounded-lg bg-gray-50 p-3 sm:grid-cols-2">
-              <div className="flex flex-col text-sm font-medium text-gray-700">
-                <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">
-                  Document Date (Invoice / Count Sheet)
-                </span>
-                <Input
-                  type="date"
-                  value={item.groundTruths?.invoiceDate || ''}
-                  onChange={(event) => handleGroundTruthChange('invoiceDate', event.target.value)}
-                />
+            {isCash ? (
+              <div className="grid grid-cols-1 gap-4 rounded-lg bg-gray-50 p-3 sm:grid-cols-2">
+                <div className="flex flex-col text-sm font-medium text-gray-700">
+                  <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Cleared Bank Date</span>
+                  <Input
+                    type="date"
+                    value={item.groundTruths?.clearedBankDate || ''}
+                    onChange={(event) => handleGroundTruthChange('clearedBankDate', event.target.value)}
+                  />
+                </div>
+                <div className="flex flex-col text-sm font-medium text-gray-700">
+                  <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Bank Amount</span>
+                  <Input
+                    type="number"
+                    placeholder="e.g., 500.00"
+                    value={
+                      item.groundTruths?.bankAmount !== undefined && item.groundTruths.bankAmount !== null
+                        ? item.groundTruths.bankAmount
+                        : ''
+                    }
+                    onChange={(event) => handleGroundTruthChange('bankAmount', event.target.value, { asNumber: true })}
+                  />
+                </div>
+                <div className="flex flex-col text-sm font-medium text-gray-700 sm:col-span-2">
+                  <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Status (optional override)</span>
+                  <Select
+                    value={item.groundTruths?.status || ''}
+                    onChange={(event) => handleGroundTruthChange('status', event.target.value)}
+                    options={[
+                      { value: '', label: 'Auto-detect' },
+                      { value: 'cleared', label: 'Cleared' },
+                      { value: 'outstanding', label: 'Outstanding' },
+                      { value: 'void', label: 'Void' },
+                      { value: 'nsf', label: 'NSF' },
+                    ]}
+                  />
+                </div>
               </div>
-              <div className="flex flex-col text-sm font-medium text-gray-700">
-                <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Service / Shipping Date</span>
-                <Input
-                  type="date"
-                  value={item.groundTruths?.servicePeriodEnd || ''}
-                  onChange={(event) => handleGroundTruthChange('servicePeriodEnd', event.target.value)}
-                />
+            ) : (
+              <div className="grid grid-cols-1 gap-4 rounded-lg bg-gray-50 p-3 sm:grid-cols-2">
+                <div className="flex flex-col text-sm font-medium text-gray-700">
+                  <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">
+                    Document Date (Invoice / Count Sheet)
+                  </span>
+                  <Input
+                    type="date"
+                    value={item.groundTruths?.invoiceDate || ''}
+                    onChange={(event) => handleGroundTruthChange('invoiceDate', event.target.value)}
+                  />
+                </div>
+                <div className="flex flex-col text-sm font-medium text-gray-700">
+                  <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Service / Shipping Date</span>
+                  <Input
+                    type="date"
+                    value={item.groundTruths?.servicePeriodEnd || ''}
+                    onChange={(event) => handleGroundTruthChange('servicePeriodEnd', event.target.value)}
+                  />
+                </div>
+                <div className="flex flex-col text-sm font-medium text-gray-700">
+                  <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">
+                    Actual Count (Inventory)
+                  </span>
+                  <Input
+                    type="number"
+                    placeholder="e.g., 95"
+                    value={
+                      item.groundTruths?.actualCount !== undefined && item.groundTruths.actualCount !== null
+                        ? item.groundTruths.actualCount
+                        : ''
+                    }
+                    onChange={(event) => handleGroundTruthChange('actualCount', event.target.value, { asNumber: true })}
+                  />
+                </div>
+                <div className="flex flex-col text-sm font-medium text-gray-700">
+                  <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">
+                    Confirmed Value (Cash / AR)
+                  </span>
+                  <Input
+                    type="number"
+                    placeholder="e.g., 50000"
+                    value={
+                      item.groundTruths?.confirmedValue !== undefined && item.groundTruths.confirmedValue !== null
+                        ? item.groundTruths.confirmedValue
+                        : ''
+                    }
+                    onChange={(event) =>
+                      handleGroundTruthChange('confirmedValue', event.target.value, { asNumber: true })
+                    }
+                  />
+                </div>
+                <div className="sm:col-span-2 flex flex-col text-sm font-medium text-gray-700">
+                  <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Condition / Notes</span>
+                  <Input
+                    type="text"
+                    placeholder="e.g., Damaged pallet, obsolete stock"
+                    value={item.groundTruths?.condition || ''}
+                    onChange={(event) => handleGroundTruthChange('condition', event.target.value)}
+                  />
+                </div>
               </div>
-              <div className="flex flex-col text-sm font-medium text-gray-700">
-                <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">
-                  Actual Count (Inventory)
-                </span>
-                <Input
-                  type="number"
-                  placeholder="e.g., 95"
-                  value={
-                    item.groundTruths?.actualCount !== undefined && item.groundTruths.actualCount !== null
-                      ? item.groundTruths.actualCount
-                      : ''
-                  }
-                  onChange={(event) => handleGroundTruthChange('actualCount', event.target.value, { asNumber: true })}
-                />
-              </div>
-              <div className="flex flex-col text-sm font-medium text-gray-700">
-                <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">
-                  Confirmed Value (Cash / AR)
-                </span>
-                <Input
-                  type="number"
-                  placeholder="e.g., 50000"
-                  value={
-                    item.groundTruths?.confirmedValue !== undefined && item.groundTruths.confirmedValue !== null
-                      ? item.groundTruths.confirmedValue
-                      : ''
-                  }
-                  onChange={(event) =>
-                    handleGroundTruthChange('confirmedValue', event.target.value, { asNumber: true })
-                  }
-                />
-              </div>
-              <div className="sm:col-span-2 flex flex-col text-sm font-medium text-gray-700">
-                <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Condition / Notes</span>
-                <Input
-                  type="text"
-                  placeholder="e.g., Damaged pallet, obsolete stock"
-                  value={item.groundTruths?.condition || ''}
-                  onChange={(event) => handleGroundTruthChange('condition', event.target.value)}
-                />
-              </div>
-            </div>
+            )}
           </div>
         </div>
       ) : null}

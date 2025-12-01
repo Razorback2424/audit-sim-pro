@@ -1,15 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { Timestamp } from 'firebase/firestore';
-import { storage, Button, useRoute, useAuth, useModal, appId } from '../AppCore';
+import { storage, Button, useRoute, useAuth, useModal, appId, Input, Textarea } from '../AppCore';
 import { subscribeToCase } from '../services/caseService';
 import { saveSubmission, subscribeToSubmission } from '../services/submissionService';
 import { saveProgress, subscribeProgressForCases } from '../services/progressService';
 import { Send, Loader2, ExternalLink, Download, CheckCircle2, XCircle, Info } from 'lucide-react';
 import { getClassificationFields, getFlowCopy } from '../constants/classificationFields';
-import { DEFAULT_AUDIT_AREA } from '../models/caseConstants';
+import { DEFAULT_AUDIT_AREA, AUDIT_AREAS } from '../models/caseConstants';
 import { currencyFormatter } from '../utils/formatters';
 import AuditItemCardFactory from '../components/trainee/AuditItemCardFactory';
+import CashReconciliationWorkbench from '../components/trainee/workspaces/CashReconciliationWorkbench';
 
 const FLOW_STEPS = Object.freeze({
   SELECTION: 'selection',
@@ -18,6 +19,7 @@ const FLOW_STEPS = Object.freeze({
 });
 
 const DEFAULT_WORKFLOW = [FLOW_STEPS.SELECTION, FLOW_STEPS.TESTING, FLOW_STEPS.RESULTS];
+const EXCEPTION_CLASSIFICATION_KEYS = new Set(['improperlyIncluded', 'improperlyExcluded']);
 
 const isInlinePreviewable = (contentType, fileNameOrPath) => {
   const normalizedType = typeof contentType === 'string' ? contentType.toLowerCase() : '';
@@ -207,6 +209,54 @@ const collectSupportingDocuments = (disbursement) => {
 
 const DEFAULT_FLOW_COPY_STATE = getFlowCopy(DEFAULT_AUDIT_AREA);
 
+const buildEmptyFixedAssetDraft = () => ({
+  leadScheduleTicks: {},
+  scopingDecision: null,
+  additionResponses: {},
+  disposalResponses: {},
+  analyticsResponse: {},
+});
+
+const normalizeFixedAssetDraft = (rawDraft) => {
+  if (!rawDraft || typeof rawDraft !== 'object') {
+    return buildEmptyFixedAssetDraft();
+  }
+  return {
+    leadScheduleTicks:
+      rawDraft.leadScheduleTicks && typeof rawDraft.leadScheduleTicks === 'object'
+        ? { ...rawDraft.leadScheduleTicks }
+        : {},
+    scopingDecision:
+      rawDraft.scopingDecision && typeof rawDraft.scopingDecision === 'object'
+        ? { ...rawDraft.scopingDecision }
+        : null,
+    additionResponses:
+      rawDraft.additionResponses && typeof rawDraft.additionResponses === 'object'
+        ? { ...rawDraft.additionResponses }
+        : {},
+    disposalResponses:
+      rawDraft.disposalResponses && typeof rawDraft.disposalResponses === 'object'
+        ? { ...rawDraft.disposalResponses }
+        : {},
+    analyticsResponse:
+      rawDraft.analyticsResponse && typeof rawDraft.analyticsResponse === 'object'
+        ? { ...rawDraft.analyticsResponse }
+        : {},
+  };
+};
+
+const areFixedAssetDraftsEqual = (left, right) => {
+  const a = normalizeFixedAssetDraft(left);
+  const b = normalizeFixedAssetDraft(right);
+  return (
+    JSON.stringify(a.leadScheduleTicks) === JSON.stringify(b.leadScheduleTicks) &&
+    JSON.stringify(a.scopingDecision) === JSON.stringify(b.scopingDecision) &&
+    JSON.stringify(a.additionResponses) === JSON.stringify(b.additionResponses) &&
+    JSON.stringify(a.disposalResponses) === JSON.stringify(b.disposalResponses) &&
+    JSON.stringify(a.analyticsResponse) === JSON.stringify(b.analyticsResponse)
+  );
+};
+
 const useSubmission = (caseId, userId) => {
   const [submission, setSubmission] = useState(null);
 
@@ -249,6 +299,7 @@ export default function TraineeCaseViewPage({ params }) {
   const [activeStep, setActiveStep] = useState(null);
   const [selectedDisbursements, setSelectedDisbursements] = useState({});
   const [classificationAmounts, setClassificationAmounts] = useState({});
+  const [fixedAssetDraft, setFixedAssetDraft] = useState(() => buildEmptyFixedAssetDraft());
   const [workspaceNotes, setWorkspaceNotes] = useState({});
   const [isLocked, setIsLocked] = useState(false);
   const [activeEvidenceId, setActiveEvidenceId] = useState(null);
@@ -257,9 +308,23 @@ export default function TraineeCaseViewPage({ params }) {
   const [activeEvidenceLoading, setActiveEvidenceLoading] = useState(false);
   const [downloadingReferences, setDownloadingReferences] = useState(false);
   const [isRetakeResetting, setIsRetakeResetting] = useState(false);
+  const [cashCanSubmit, setCashCanSubmit] = useState(false);
+  const [cashLinkMap, setCashLinkMap] = useState({});
+  const [cashAdjustments, setCashAdjustments] = useState([]);
+  const [cashSummaryDraft, setCashSummaryDraft] = useState({});
+  const [isScopingModalOpen, setIsScopingModalOpen] = useState(false);
+  const [scopingModalError, setScopingModalError] = useState('');
 
   const auditArea =
     (typeof caseData?.auditArea === 'string' && caseData.auditArea.trim()) || DEFAULT_AUDIT_AREA;
+
+  useEffect(() => {
+    if (auditArea === AUDIT_AREAS.CASH) {
+      setCashCanSubmit(false);
+    } else {
+      setCashCanSubmit(true);
+    }
+  }, [auditArea]);
   const classificationFields = useMemo(() => getClassificationFields(auditArea), [auditArea]);
   const classificationKeySet = useMemo(
     () => new Set(classificationFields.map(({ key }) => key)),
@@ -317,6 +382,7 @@ export default function TraineeCaseViewPage({ params }) {
   const activeStepRef = useRef(null);
   const selectionRef = useRef(selectedDisbursements);
   const classificationRef = useRef(classificationAmounts);
+  const fixedAssetDraftRef = useRef(fixedAssetDraft);
   const isLockedRef = useRef(false);
   const retakeHandledRef = useRef(false);
   const retakeResettingRef = useRef(false);
@@ -415,6 +481,41 @@ export default function TraineeCaseViewPage({ params }) {
     [classificationFields, classificationKeySet, normalizeAllocationShape, parseAmount]
   );
 
+  const requiresExceptionNote = useCallback(
+    (allocation) => {
+      if (!allocation) return false;
+      const normalized = normalizeAllocationShape(allocation);
+
+      if (normalized.mode === 'split') {
+        return classificationFields.some(({ key }) => {
+          if (!EXCEPTION_CLASSIFICATION_KEYS.has(key)) return false;
+          const value = parseAmount(normalized.splitValues[key]);
+          return Number.isFinite(value) && Math.abs(value) > 0;
+        });
+      }
+
+      return EXCEPTION_CLASSIFICATION_KEYS.has(normalized.singleClassification);
+    },
+    [classificationFields, normalizeAllocationShape, parseAmount]
+  );
+
+  const hasExceptionNote = useCallback((allocation, workspaceEntry) => {
+    const note =
+      (allocation && typeof allocation.notes === 'string' && allocation.notes) ||
+      (workspaceEntry && typeof workspaceEntry.workpaperNote === 'string' && workspaceEntry.workpaperNote) ||
+      (workspaceEntry && typeof workspaceEntry.notes === 'string' && workspaceEntry.notes) ||
+      '';
+    return note.trim().length > 5;
+  }, []);
+
+  const mapCashStatusToClassification = useCallback((status) => {
+    if (status === 'cleared') return 'properlyIncluded';
+    if (status === 'outstanding') return 'properlyExcluded';
+    if (status === 'void') return 'improperlyIncluded';
+    if (status === 'adjustment') return 'improperlyExcluded';
+    return '';
+  }, []);
+
   useEffect(() => {
     if (workflow.length > 0) {
       setActiveStep((prev) => {
@@ -439,6 +540,10 @@ export default function TraineeCaseViewPage({ params }) {
   }, [classificationAmounts]);
 
   useEffect(() => {
+    fixedAssetDraftRef.current = fixedAssetDraft;
+  }, [fixedAssetDraft]);
+
+  useEffect(() => {
     isLockedRef.current = isLocked;
   }, [isLocked]);
 
@@ -456,10 +561,15 @@ export default function TraineeCaseViewPage({ params }) {
     retakeHandledRef.current = true;
     setIsRetakeResetting(true);
     setIsLocked(false);
+    setCashLinkMap({});
+    setCashAdjustments([]);
+    setCashSummaryDraft({});
+    setCashCanSubmit(false);
     const initialWorkflowStep = firstWorkflowStep;
     setActiveStep(initialWorkflowStep);
     setSelectedDisbursements({});
     setClassificationAmounts({});
+    setFixedAssetDraft(buildEmptyFixedAssetDraft());
 
     const resetProgress = async () => {
       try {
@@ -478,6 +588,10 @@ export default function TraineeCaseViewPage({ params }) {
             draft: {
               selectedPaymentIds: [],
               classificationDraft: {},
+              fixedAssetDraft: buildEmptyFixedAssetDraft(),
+              cashLinkMap: {},
+              cashAdjustments: [],
+              cashSummary: {},
             },
           },
         });
@@ -585,6 +699,26 @@ export default function TraineeCaseViewPage({ params }) {
           setClassificationAmounts(normalizedClassifications);
         }
 
+        const nextFixedAssetDraft = normalizeFixedAssetDraft(entry.draft?.fixedAssetDraft);
+        if (!areFixedAssetDraftsEqual(fixedAssetDraftRef.current, nextFixedAssetDraft)) {
+          setFixedAssetDraft(nextFixedAssetDraft);
+        }
+
+        const nextCashLinks = entry.draft?.cashLinkMap && typeof entry.draft.cashLinkMap === 'object'
+          ? entry.draft.cashLinkMap
+          : {};
+        setCashLinkMap(nextCashLinks);
+
+        const nextCashAdjustments = Array.isArray(entry.draft?.cashAdjustments)
+          ? entry.draft.cashAdjustments
+          : [];
+        setCashAdjustments(nextCashAdjustments);
+
+        const nextCashSummary = entry.draft?.cashSummary && typeof entry.draft.cashSummary === 'object'
+          ? entry.draft.cashSummary
+          : {};
+        setCashSummaryDraft(nextCashSummary);
+
         const shouldLock = entry.state === 'submitted' || nextStep === resultsWorkflowStep;
         if (isLockedRef.current !== shouldLock) {
           setIsLocked(shouldLock);
@@ -604,10 +738,39 @@ export default function TraineeCaseViewPage({ params }) {
     workflow,
     firstWorkflowStep,
     resultsWorkflowStep,
+    areFixedAssetDraftsEqual,
+    normalizeFixedAssetDraft,
   ]);
 
-  const disbursementList = useMemo(
-    () => (Array.isArray(caseData?.disbursements) ? caseData.disbursements : []),
+  const cashOutstandingList = useMemo(() => {
+    if (auditArea !== AUDIT_AREAS.CASH) return [];
+    return Array.isArray(caseData?.cashOutstandingItems)
+      ? caseData.cashOutstandingItems.map((item, index) => ({
+          ...item,
+          paymentId:
+            item.paymentId ||
+            item.reference ||
+            item._tempId ||
+            item.id ||
+            `cash-ledger-${index + 1}`,
+          payee: item.payee || item.description || '',
+          paymentDate: item.issueDate || item.bookDate || item.paymentDate || '',
+        }))
+      : [];
+  }, [auditArea, caseData]);
+
+  const disbursementList = useMemo(() => {
+    if (auditArea === AUDIT_AREAS.CASH) {
+      return [...cashOutstandingList, ...cashAdjustments];
+    }
+    return Array.isArray(caseData?.disbursements) ? caseData.disbursements : [];
+  }, [auditArea, cashAdjustments, cashOutstandingList, caseData]);
+  const cashCutoffList = useMemo(
+    () => (Array.isArray(caseData?.cashCutoffItems) ? caseData.cashCutoffItems : []),
+    [caseData]
+  );
+  const cashArtifacts = useMemo(
+    () => (Array.isArray(caseData?.cashArtifacts) ? caseData.cashArtifacts : []),
     [caseData]
   );
 
@@ -642,6 +805,37 @@ export default function TraineeCaseViewPage({ params }) {
 
     return normalized;
   }, [caseData]);
+
+  const fixedAssetSummary = useMemo(
+    () => (Array.isArray(caseData?.faSummary) ? caseData.faSummary : []),
+    [caseData]
+  );
+
+  const fixedAssetRisk = useMemo(
+    () => (caseData?.faRisk && typeof caseData.faRisk === 'object' ? caseData.faRisk : {}),
+    [caseData]
+  );
+
+  const fixedAssetAdditions = useMemo(
+    () => (Array.isArray(caseData?.faAdditions) ? caseData.faAdditions : []),
+    [caseData]
+  );
+
+  const fixedAssetDisposals = useMemo(
+    () => (Array.isArray(caseData?.faDisposals) ? caseData.faDisposals : []),
+    [caseData]
+  );
+
+  const fixedAssetTotals = useMemo(() => {
+    const safeSum = (rows, key) =>
+      rows.reduce((sum, row) => sum + (Number(row?.[key]) || 0), 0);
+    return {
+      beginningBalance: safeSum(fixedAssetSummary, 'beginningBalance'),
+      additions: safeSum(fixedAssetSummary, 'additions'),
+      disposals: safeSum(fixedAssetSummary, 'disposals'),
+      endingBalance: safeSum(fixedAssetSummary, 'endingBalance'),
+    };
+  }, [fixedAssetSummary]);
 
   useEffect(() => {
     if (!caseData) return;
@@ -697,11 +891,14 @@ export default function TraineeCaseViewPage({ params }) {
   }, [disbursementList]);
 
   const selectedIds = useMemo(() => {
+    if (auditArea === AUDIT_AREAS.CASH || auditArea === AUDIT_AREAS.FIXED_ASSETS) {
+      return disbursementList.map((item) => item.paymentId).filter(Boolean);
+    }
     if (disbursementList.length === 0) {
       return Object.keys(selectedDisbursements).filter((id) => selectedDisbursements[id]);
     }
     return disbursementList.map((item) => item.paymentId).filter((id) => selectedDisbursements[id]);
-  }, [disbursementList, selectedDisbursements]);
+  }, [auditArea, disbursementList, selectedDisbursements]);
 
   const selectedDisbursementDetails = useMemo(
     () => selectedIds.map((id) => disbursementById.get(id)).filter(Boolean),
@@ -726,6 +923,28 @@ export default function TraineeCaseViewPage({ params }) {
 
   const allClassified =
     selectedDisbursementDetails.length > 0 && classifiedCount === selectedDisbursementDetails.length;
+
+  const exceptionNoteRequiredIds = useMemo(
+    () => {
+      if (auditArea === AUDIT_AREAS.CASH) return [];
+      return selectedDisbursementDetails
+        .map((item) => {
+          const allocation = classificationAmounts[item.paymentId] || createEmptyAllocation();
+          const needsNote = requiresExceptionNote(allocation);
+          const hasNote = hasExceptionNote(allocation, workspaceNotes[item.paymentId]);
+          return needsNote && !hasNote ? item.paymentId : null;
+        })
+        .filter(Boolean);
+    },
+    [
+      selectedDisbursementDetails,
+      classificationAmounts,
+      createEmptyAllocation,
+      requiresExceptionNote,
+      hasExceptionNote,
+      workspaceNotes,
+    ]
+  );
 
   const allEvidenceItems = useMemo(() => {
     const items = [];
@@ -968,11 +1187,15 @@ export default function TraineeCaseViewPage({ params }) {
         percentComplete,
         state: deriveStateFromProgress(step, percentComplete),
         step,
-        draft: {
-          selectedPaymentIds: selectedIds,
-          classificationDraft,
-        },
-      };
+      draft: {
+        selectedPaymentIds: selectedIds,
+        classificationDraft,
+        fixedAssetDraft,
+        cashLinkMap,
+        cashAdjustments,
+        cashSummary: cashSummaryDraft,
+      },
+    };
 
       if (progressSaveTimeoutRef.current) {
         clearTimeout(progressSaveTimeoutRef.current);
@@ -984,7 +1207,18 @@ export default function TraineeCaseViewPage({ params }) {
         });
       }, 600);
     },
-    [userId, caseId, activeStep, selectedIds, classifiedCount, classificationDraft]
+    [
+      userId,
+      caseId,
+      activeStep,
+      selectedIds,
+      classifiedCount,
+      classificationDraft,
+      fixedAssetDraft,
+      cashLinkMap,
+      cashAdjustments,
+      cashSummaryDraft,
+    ]
   );
 
   useEffect(() => {
@@ -1125,22 +1359,202 @@ export default function TraineeCaseViewPage({ params }) {
     }));
   };
 
+  const handleCashStatusUpdate = useCallback(
+    (ledgerId, updates = {}) => {
+      if (!ledgerId) return;
+      setClassificationAmounts((prev) => {
+        const current = prev[ledgerId] || createEmptyAllocation();
+        const nextStatus = updates.status ?? current.status ?? '';
+        const nextNote = updates.note ?? current.note ?? '';
+        const linkedBankItemId = updates.linkedBankItemId ?? current.linkedBankItemId ?? '';
+        const mappedClassification = mapCashStatusToClassification(nextStatus);
+        return {
+          ...prev,
+          [ledgerId]: {
+            ...current,
+            mode: 'single',
+            singleClassification: mappedClassification || current.singleClassification || '',
+            splitValues: createEmptySplitValues(),
+            status: nextStatus,
+            note: nextNote,
+            notes: nextNote,
+            linkedBankItemId,
+          },
+        };
+      });
+      if (updates.note) {
+        setWorkspaceNotes((prev) => ({
+          ...prev,
+          [ledgerId]: { ...(prev[ledgerId] || {}), workpaperNote: updates.note, status: updates.status },
+        }));
+      }
+    },
+    [createEmptyAllocation, createEmptySplitValues, mapCashStatusToClassification]
+  );
+
+  const handleCashLinkChange = useCallback(
+    (links) => {
+      const nextLinks = links && typeof links === 'object' ? links : {};
+      setCashLinkMap(nextLinks);
+      const ledgerWithLinks = new Set(Object.values(nextLinks));
+      setClassificationAmounts((prev) => {
+        const next = { ...prev };
+        Object.entries(next).forEach(([ledgerId, entry]) => {
+          if (entry?.linkedBankItemId && !ledgerWithLinks.has(ledgerId)) {
+            next[ledgerId] = { ...entry, linkedBankItemId: '' };
+          }
+        });
+        Object.entries(nextLinks).forEach(([bankId, ledgerId]) => {
+          const existing = next[ledgerId] || createEmptyAllocation();
+          next[ledgerId] = { ...existing, linkedBankItemId: bankId };
+        });
+        return next;
+      });
+    },
+    [createEmptyAllocation]
+  );
+
+  const handleCashAdjustmentCreation = useCallback(
+    (bankItem) => {
+      if (!bankItem) return;
+      const baseId =
+        bankItem.bankId ||
+        bankItem._tempId ||
+        bankItem.reference ||
+        bankItem.paymentId ||
+        `adjustment-${Date.now()}`;
+      let candidateId = baseId;
+      let suffix = 1;
+      while (disbursementById.has(candidateId)) {
+        candidateId = `${baseId}-${suffix}`;
+        suffix += 1;
+      }
+      const noteText = `Unrecorded item from cutoff: ${bankItem.reference || bankItem.bankId || candidateId}`;
+      const adjustment = {
+        paymentId: candidateId,
+        reference: bankItem.reference || candidateId,
+        payee: bankItem.payee || bankItem.description || bankItem.reference || '',
+        amount: bankItem.amount || 0,
+        paymentDate: bankItem.clearDate || bankItem.date || '',
+        _sourceBankId: bankItem.bankId || bankItem._tempId || bankItem.reference || '',
+      };
+      setCashAdjustments((prev) => [...prev, adjustment]);
+      setClassificationAmounts((prev) => ({
+        ...prev,
+        [candidateId]: {
+          ...createEmptyAllocation(),
+          mode: 'single',
+          singleClassification: 'improperlyExcluded',
+          status: 'adjustment',
+          note: noteText,
+          notes: noteText,
+          linkedBankItemId: bankItem.bankId || bankItem._tempId || bankItem.reference || '',
+        },
+      }));
+      setWorkspaceNotes((prev) => ({
+        ...prev,
+        [candidateId]: { ...(prev[candidateId] || {}), workpaperNote: noteText, status: 'adjustment' },
+      }));
+      setCashLinkMap((prev) => ({
+        ...prev,
+        [bankItem.bankId || bankItem._tempId || bankItem.reference || candidateId]: candidateId,
+      }));
+    },
+    [createEmptyAllocation, disbursementById]
+  );
+
+  const handleCashSummaryChange = useCallback((summary) => {
+    if (!summary || typeof summary !== 'object') return;
+    setCashSummaryDraft(summary);
+  }, []);
+
+  const toggleLeadScheduleTick = useCallback(
+    (cellKey) => {
+      if (!cellKey || isLocked) return;
+      setFixedAssetDraft((prev) => {
+        const next = normalizeFixedAssetDraft(prev);
+        const current = next.leadScheduleTicks[cellKey] || '';
+        const nextValue = current === 'verified' ? 'exception' : current === 'exception' ? '' : 'verified';
+        return {
+          ...next,
+          leadScheduleTicks: { ...next.leadScheduleTicks, [cellKey]: nextValue },
+        };
+      });
+    },
+    [isLocked]
+  );
+
+  const updateScopingDecision = useCallback((updates) => {
+    setFixedAssetDraft((prev) => {
+      const next = normalizeFixedAssetDraft(prev);
+      const currentDecision =
+        next.scopingDecision && typeof next.scopingDecision === 'object' ? next.scopingDecision : {};
+      return {
+        ...next,
+        scopingDecision: { ...currentDecision, ...updates },
+      };
+    });
+  }, []);
+
+  const upsertAdditionResponse = useCallback((additionId, updates) => {
+    if (!additionId) return;
+    setFixedAssetDraft((prev) => {
+      const next = normalizeFixedAssetDraft(prev);
+      const existing = next.additionResponses?.[additionId] || {};
+      return {
+        ...next,
+        additionResponses: {
+          ...next.additionResponses,
+          [additionId]: { ...existing, ...updates },
+        },
+      };
+    });
+  }, []);
+
+  const upsertDisposalResponse = useCallback((disposalId, updates) => {
+    if (!disposalId) return;
+    setFixedAssetDraft((prev) => {
+      const next = normalizeFixedAssetDraft(prev);
+      const existing = next.disposalResponses?.[disposalId] || {};
+      return {
+        ...next,
+        disposalResponses: {
+          ...next.disposalResponses,
+          [disposalId]: { ...existing, ...updates },
+        },
+      };
+    });
+  }, []);
+
+  const updateAnalyticsResponse = useCallback((updates) => {
+    setFixedAssetDraft((prev) => {
+      const next = normalizeFixedAssetDraft(prev);
+      const existing = next.analyticsResponse && typeof next.analyticsResponse === 'object' ? next.analyticsResponse : {};
+      return {
+        ...next,
+        analyticsResponse: { ...existing, ...updates },
+      };
+    });
+  }, []);
+
   const goToTestingStep = () => {
     if (isLocked) return;
-    if (selectedIds.length === 0) {
+    if (auditArea !== AUDIT_AREAS.CASH && selectedIds.length === 0) {
       showModal('Please select at least one disbursement to continue.', 'No Selection');
       return;
     }
-    const missingDocs = selectedEvidenceItems.filter(
-      (item) => !item?.hasLinkedDocument && !isEvidenceWorkflowLinked(item.paymentId)
-    );
-    if (missingDocs.length > 0) {
-      const missingList = Array.from(new Set(missingDocs.map((item) => item?.paymentId || 'Unknown ID'))).join(', ');
-      showModal(
-        `Support for the following selections is still pending:\n${missingList}\n\nPlease wait for the supporting documents before continuing.`,
-        'Support Not Ready'
+    if (auditArea !== AUDIT_AREAS.CASH) {
+      const missingDocs = selectedEvidenceItems.filter(
+        (item) => !item?.hasLinkedDocument && !isEvidenceWorkflowLinked(item.paymentId)
       );
-      return;
+      if (missingDocs.length > 0) {
+        const missingList = Array.from(new Set(missingDocs.map((item) => item?.paymentId || 'Unknown ID'))).join(', ');
+        showModal(
+          `Support for the following selections is still pending:\n${missingList}\n\nPlease wait for the supporting documents before continuing.`,
+          'Support Not Ready'
+        );
+        return;
+      }
     }
     setClassificationAmounts((prev) => {
       const next = { ...prev };
@@ -1157,11 +1571,280 @@ export default function TraineeCaseViewPage({ params }) {
     setActiveStep(targetStep);
   };
 
+  const handleSubmitFixedAsset = async () => {
+    if (!caseData || !userId) return;
+    const scopingDecision = normalizeFixedAssetDraft(fixedAssetDraft).scopingDecision || {};
+    const outcome = scopingDecision.outcome || '';
+    const additionsExceedTm = Boolean(scopingDecision.additionsExceedTm);
+    if (!outcome) {
+      showModal('Lock a testing strategy before submitting.', 'Strategy Required');
+      return;
+    }
+
+    if (outcome === 'requires_testing') {
+      const missingAdditions = [];
+      fixedAssetAdditions.forEach((item, index) => {
+        const additionId = item._tempId || item.vendor || item.description || `addition-${index + 1}`;
+        const response = fixedAssetDraft.additionResponses?.[additionId] || {};
+        if (!response.nature || !response.threshold || !response.usefulLife) {
+          missingAdditions.push(item.vendor || item.description || `Addition ${index + 1}`);
+        }
+      });
+
+      const missingDisposals = [];
+      fixedAssetDisposals.forEach((item, index) => {
+        const disposalId = item._tempId || item.assetId || item.description || `disposal-${index + 1}`;
+        const response = fixedAssetDraft.disposalResponses?.[disposalId] || {};
+        const hasCoreInputs =
+          response.proceeds !== undefined &&
+          response.cost !== undefined &&
+          response.accumulatedDepreciation !== undefined &&
+          response.recordedGainLoss !== undefined;
+        if (!hasCoreInputs) {
+          missingDisposals.push(item.assetId || item.description || `Disposal ${index + 1}`);
+        }
+      });
+
+      const analyticsComplete =
+        fixedAssetDraft.analyticsResponse &&
+        (fixedAssetDraft.analyticsResponse.conclusion === 'reasonable' ||
+          fixedAssetDraft.analyticsResponse.conclusion === 'investigate');
+
+      if (missingAdditions.length > 0) {
+        showModal(
+          `Add details for: ${missingAdditions.join(', ')} (nature, threshold, and useful life tests).`,
+          'Additions Incomplete'
+        );
+        return;
+      }
+      if (missingDisposals.length > 0) {
+        showModal(
+          `Complete the disposal calculator for: ${missingDisposals.join(', ')} (proceeds, cost, accumulated depreciation, recorded gain/loss).`,
+          'Disposals Incomplete'
+        );
+        return;
+      }
+      if (!analyticsComplete) {
+        showModal('Record a conclusion on depreciation reasonableness.', 'Analytics Incomplete');
+        return;
+      }
+    }
+
+    const caseTitle = caseData?.title || caseData?.caseName || 'Audit Case';
+    const virtualSeniorFeedback = [];
+    let gradeOverride = 100;
+    if (outcome === 'insufficient_scope') {
+      gradeOverride = 0;
+      virtualSeniorFeedback.push({
+        paymentId: 'scope',
+        notes: ['Virtual Senior: Additions exceed TM but you chose no testing. Scope is insufficient.'],
+      });
+    }
+    if (outcome === 'no_testing' && !additionsExceedTm) {
+      virtualSeniorFeedback.push({
+        paymentId: 'scope',
+        notes: ['Additions are under TM, so no further testing was required.'],
+      });
+    }
+
+    try {
+      if (progressSaveTimeoutRef.current) {
+        clearTimeout(progressSaveTimeoutRef.current);
+      }
+
+      await saveSubmission(userId, caseId, {
+        caseId,
+        caseName: caseTitle,
+        selectedPaymentIds: [],
+        disbursementClassifications: {},
+        expectedClassifications: {},
+        workspaceNotes,
+        status: 'submitted',
+        submittedAt: Timestamp.now(),
+        fixedAssetResponses: {
+          leadScheduleTicks: fixedAssetDraft.leadScheduleTicks || {},
+          scopingDecision,
+          additionResponses: fixedAssetDraft.additionResponses || {},
+          disposalResponses: fixedAssetDraft.disposalResponses || {},
+          analyticsResponse: fixedAssetDraft.analyticsResponse || {},
+          summaryTotals: fixedAssetTotals,
+        },
+        grade: gradeOverride,
+        gradedAt: Timestamp.now(),
+        virtualSeniorFeedback,
+      });
+
+      await saveProgress({
+        appId,
+        uid: userId,
+        caseId,
+        patch: {
+          percentComplete: 100,
+          state: 'submitted',
+          step: resultsWorkflowStep,
+          draft: {
+            selectedPaymentIds: [],
+            classificationDraft: {},
+            fixedAssetDraft,
+          },
+        },
+      });
+
+      setIsLocked(true);
+      setActiveStep(resultsWorkflowStep);
+    } catch (error) {
+      console.error('Error saving fixed asset submission:', error);
+      showModal('Error saving submission: ' + error.message, 'Error');
+    }
+  };
+
+  const handleSubmitCash = async () => {
+    if (!caseData || !userId) return;
+    const cashContext = caseData.cashContext || {};
+    const statusRequiresNote = (status) => status === 'outstanding' || status === 'void' || status === 'adjustment';
+    const ledgerStatuses = {};
+    const missing = [];
+
+    disbursementList.forEach((item) => {
+      const entry = classificationAmounts[item.paymentId] || {};
+      const status = entry.status || '';
+      const linkedBankItemId =
+        entry.linkedBankItemId ||
+        (cashLinkMap && Object.entries(cashLinkMap).find(([, ledgerId]) => ledgerId === item.paymentId)?.[0]) ||
+        '';
+      const note =
+        entry.note ||
+        entry.notes ||
+        entry.workpaperNote ||
+        workspaceNotes[item.paymentId]?.workpaperNote ||
+        workspaceNotes[item.paymentId]?.notes ||
+        '';
+      if (!status) {
+        missing.push(item.paymentId);
+      }
+      if (status === 'cleared' && !linkedBankItemId) {
+        missing.push(item.paymentId);
+      }
+      if (statusRequiresNote(status) && !note.trim()) {
+        missing.push(item.paymentId);
+      }
+      ledgerStatuses[item.paymentId] = { status, note, linkedBankItemId };
+    });
+
+    if (!cashCanSubmit) {
+      showModal(
+        'Variance must be zero before you can submit. Link items and adjust statuses until the reconciliation balances.',
+        'Reconciliation Not Balanced'
+      );
+      return;
+    }
+
+    if (missing.length > 0) {
+      const unique = Array.from(new Set(missing.filter(Boolean)));
+      showModal(
+        `Add required statuses, links, or notes for: ${unique.join(', ')}.`,
+        'Cash Items Incomplete'
+      );
+      return;
+    }
+
+    const allocationPayload = {};
+    disbursementList.forEach((disbursement) => {
+      const allocation = classificationAmounts[disbursement.paymentId];
+      if (!allocation) return;
+      allocationPayload[disbursement.paymentId] = computeAllocationTotals(disbursement, allocation);
+    });
+
+    const documents = [];
+    const workspacePayload = disbursementList.reduce((acc, item) => {
+      const existing = workspaceNotes[item.paymentId] || {};
+      const note = classificationAmounts[item.paymentId]?.note;
+      if (note && !existing.workpaperNote) {
+        acc[item.paymentId] = { ...existing, workpaperNote: note };
+      } else {
+        acc[item.paymentId] = existing;
+      }
+      return acc;
+    }, {});
+
+    const cashSummaryPayload = {
+      ...(cashSummaryDraft || {}),
+      bookBalance: cashContext.bookBalance ?? '',
+      bankBalance: cashContext.bankBalance ?? cashContext.confirmedBalance ?? '',
+    };
+
+    const caseTitle = caseData.title || caseData.caseName || 'Audit Case';
+
+    try {
+      if (progressSaveTimeoutRef.current) {
+        clearTimeout(progressSaveTimeoutRef.current);
+      }
+
+      await saveSubmission(userId, caseId, {
+        caseId,
+        caseName: caseTitle,
+        selectedPaymentIds: selectedIds,
+        retrievedDocuments: documents,
+        disbursementClassifications: allocationPayload,
+        expectedClassifications: {},
+        workspaceNotes: workspacePayload,
+        status: 'submitted',
+        submittedAt: Timestamp.now(),
+        cashLinkMap,
+        cashAdjustments,
+        cashSummary: cashSummaryPayload,
+        cashLedgerStatuses: ledgerStatuses,
+      });
+
+      await saveProgress({
+        appId,
+        uid: userId,
+        caseId,
+        patch: {
+          percentComplete: 100,
+          state: 'submitted',
+          step: resultsWorkflowStep,
+          draft: {
+            selectedPaymentIds: selectedIds,
+            classificationDraft: classificationAmounts,
+            fixedAssetDraft,
+            cashLinkMap,
+            cashAdjustments,
+            cashSummary: cashSummaryDraft,
+          },
+        },
+      });
+
+      setIsLocked(true);
+      setActiveStep(resultsWorkflowStep);
+    } catch (error) {
+      console.error('Error saving cash submission:', error);
+      showModal('Error saving submission: ' + error.message, 'Error');
+    }
+  };
+
   const handleSubmitTesting = async () => {
+    if (auditArea === AUDIT_AREAS.FIXED_ASSETS) {
+      await handleSubmitFixedAsset();
+      return;
+    }
+    if (auditArea === AUDIT_AREAS.CASH) {
+      await handleSubmitCash();
+      return;
+    }
     if (!caseData || !userId || selectedIds.length === 0) return;
 
     const allocationPayload = {};
     const invalidAllocations = [];
+    if (exceptionNoteRequiredIds.length > 0) {
+      showModal(
+        `Please add supporting notes for the following disbursements before submitting: ${exceptionNoteRequiredIds.join(
+          ', '
+        )}.`,
+        'Notes Required'
+      );
+      return;
+    }
 
     selectedDisbursementDetails.forEach((disbursement) => {
       const allocation = classificationAmounts[disbursement.paymentId];
@@ -1243,6 +1926,7 @@ export default function TraineeCaseViewPage({ params }) {
           draft: {
             selectedPaymentIds: selectedIds,
             classificationDraft: classificationAmounts,
+            fixedAssetDraft,
           },
         },
       });
@@ -1552,71 +2236,833 @@ export default function TraineeCaseViewPage({ params }) {
     );
   };
 
-  const renderSelectionStep = () => (
-    <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-4">
-      <div>
-        <h2 className="text-2xl font-semibold text-gray-800">Step 1 — Select Disbursements</h2>
-        <p className="text-sm text-gray-500">
-          Choose which disbursements you want to test. You will review supporting documents on the next step.
-        </p>
-      </div>
+  const renderFixedAssetSelectionStep = () => {
+    const leadTicks = fixedAssetDraft.leadScheduleTicks || {};
+    const totalTickTargets = ['total:beginningBalance', 'total:additions', 'total:disposals', 'total:endingBalance'];
+    const totalsTicked = totalTickTargets.every((key) => leadTicks[key]);
+    const scopingDraft = normalizeFixedAssetDraft(fixedAssetDraft).scopingDecision || {};
+    const tmValue = scopingDraft.tmInput ?? fixedAssetRisk?.tolerableMisstatement ?? '';
+    const additionsValue = fixedAssetTotals.additions || 0;
+    const tmNumber = Number(tmValue);
+    const additionsExceedTm = Number.isFinite(tmNumber) ? additionsValue > tmNumber : false;
+    const studentPlan = scopingDraft.studentPlan || '';
+    const rationale = scopingDraft.rationale || '';
+    const outcome = scopingDraft.outcome || '';
+    const leadCellClass = (cellKey) => {
+      const state = leadTicks[cellKey];
+      if (state === 'verified') return 'border-emerald-200 bg-emerald-50 text-emerald-800';
+      if (state === 'exception') return 'border-rose-200 bg-rose-50 text-rose-800';
+      return 'border-gray-200 bg-gray-50 text-gray-700';
+    };
 
-      {disbursementList.length === 0 ? (
-        <p className="text-gray-500">No disbursements are available for this case.</p>
-      ) : (
-        <div className="space-y-3">
-          {disbursementList.map((d) => (
-            <div
-              key={d.paymentId}
-              className="flex items-center p-4 border border-gray-200 rounded-md hover:bg-gray-50 transition-colors"
-            >
-              <input
-                type="checkbox"
-                id={`cb-${d.paymentId}`}
-                checked={!!selectedDisbursements[d.paymentId]}
-                onChange={() => handleSelectionChange(d.paymentId)}
-                disabled={isLocked}
-                className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 mr-4 cursor-pointer disabled:cursor-not-allowed"
-              />
-              <label
-                htmlFor={`cb-${d.paymentId}`}
-                className="flex-grow grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-1 cursor-pointer"
+    const renderScopingModal = () => {
+      if (!isScopingModalOpen) return null;
+      const planLabel =
+        studentPlan === 'testing' ? 'Proceed to testing' : studentPlan === 'no_testing' ? 'No testing' : '—';
+      const handleConfirmScopingDecision = () => {
+        if (!studentPlan) {
+          setScopingModalError('Choose a testing strategy before continuing.');
+          return;
+        }
+        const nextOutcome =
+          studentPlan === 'no_testing'
+            ? additionsExceedTm
+              ? 'insufficient_scope'
+              : 'no_testing'
+            : 'requires_testing';
+        setScopingModalError('');
+        setFixedAssetDraft((prev) => {
+          const base = normalizeFixedAssetDraft(prev);
+          return {
+            ...base,
+            scopingDecision: {
+              ...base.scopingDecision,
+              tmInput: tmValue,
+              additionsTotal: additionsValue,
+              additionsExceedTm,
+              studentPlan,
+              rationale,
+              outcome: nextOutcome,
+              decidedAt: new Date().toISOString(),
+            },
+          };
+        });
+        setIsScopingModalOpen(false);
+        setActiveStep(FLOW_STEPS.TESTING);
+      };
+
+      return (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 px-4">
+          <div className="w-full max-w-3xl rounded-lg bg-white shadow-xl">
+            <div className="flex items-start justify-between border-b border-gray-200 px-6 py-4">
+              <div>
+                <p className="text-sm font-semibold text-blue-700 uppercase tracking-wide">Testing Strategy Selector</p>
+                <h3 className="text-lg font-bold text-gray-900">Decide whether testing is required</h3>
+              </div>
+              <button
+                type="button"
+                className="text-gray-500 hover:text-gray-700"
+                onClick={() => {
+                  setIsScopingModalOpen(false);
+                  setScopingModalError('');
+                }}
               >
-                <span className="text-sm text-gray-700">
-                  <strong className="font-medium">ID:</strong> {d.paymentId}
-                </span>
-                <span className="text-sm text-gray-700">
-                  <strong className="font-medium">Payee:</strong> {d.payee}
-                </span>
-                <span className="text-sm text-gray-700">
-                  <strong className="font-medium">Amount:</strong> {currencyFormatter.format(Number(d.amount) || 0)}
-                </span>
-                <span className="text-sm text-gray-700">
-                  <strong className="font-medium">Date:</strong> {d.paymentDate}
-                </span>
-                {d.expectedClassification ? (
-                  <span className="text-xs text-gray-500">
-                    Expected classification: {d.expectedClassification}
-                  </span>
-                ) : null}
-              </label>
+                ✕
+              </button>
             </div>
-          ))}
-        </div>
-      )}
+            <div className="space-y-5 px-6 py-5">
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="block text-sm font-medium text-gray-700">
+                  Tolerable Misstatement
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    className="mt-1"
+                    value={tmValue}
+                    onChange={(event) => updateScopingDecision({ tmInput: event.target.value })}
+                  />
+                </label>
+                <div className="rounded-lg border border-indigo-100 bg-indigo-50 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">System check</p>
+                  <p className="mt-1 text-sm text-indigo-900">
+                    Is Total Additions ({currencyFormatter.format(additionsValue)}) {'>'}{' '}
+                    TM ({tmValue ? currencyFormatter.format(Number(tmValue) || 0) : 'enter TM'})?
+                  </p>
+                  <p className="mt-1 text-sm font-semibold text-indigo-800">
+                    {additionsExceedTm ? 'Yes — testing expected.' : 'No — testing may not be required.'}
+                  </p>
+                </div>
+              </div>
 
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-2">
-        <Button variant="secondary" onClick={() => navigate('/trainee')}>
-          Back to Cases
-        </Button>
-        <Button onClick={goToTestingStep} disabled={selectedIds.length === 0 || isLocked}>
-          Continue to Classification
-        </Button>
+              <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 space-y-3">
+                <p className="text-sm font-semibold text-gray-800">Your decision</p>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                    <input
+                      type="radio"
+                      checked={studentPlan === 'testing'}
+                      onChange={() => updateScopingDecision({ studentPlan: 'testing' })}
+                    />
+                    Proceed to detailed testing
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-gray-700">
+                    <input
+                      type="radio"
+                      checked={studentPlan === 'no_testing'}
+                      onChange={() => updateScopingDecision({ studentPlan: 'no_testing' })}
+                    />
+                    No testing required
+                  </label>
+                  <span className="text-xs text-gray-500">Virtual Senior expects testing when additions exceed TM.</span>
+                </div>
+                <Textarea
+                  placeholder="Document your rationale (e.g., why testing is or is not required)."
+                  value={rationale}
+                  onChange={(event) => updateScopingDecision({ rationale: event.target.value })}
+                  rows={3}
+                />
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  <p className="font-semibold">Outcome preview</p>
+                  <p className="mt-1">
+                    Plan: {planLabel}.{' '}
+                    {additionsExceedTm && studentPlan === 'no_testing'
+                      ? 'Virtual Senior will flag insufficient scope.'
+                      : studentPlan
+                      ? 'Decision will be recorded when you lock the strategy.'
+                      : 'Choose a strategy to continue.'}
+                  </p>
+                </div>
+                {scopingModalError ? (
+                  <div className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                    {scopingModalError}
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="flex justify-end gap-3">
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setIsScopingModalOpen(false);
+                    setScopingModalError('');
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button onClick={handleConfirmScopingDecision}>Lock Strategy</Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    return (
+      <div className="relative">
+        {renderScopingModal()}
+        <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-5">
+          <div className="flex flex-col gap-2">
+            <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Lead Schedule</p>
+            <h2 className="text-2xl font-semibold text-gray-800">Tick and tie the rollforward before testing</h2>
+            <p className="text-sm text-gray-500">
+              Click each balance to mark it as verified (green) or not agreed (red). Summary totals must be ticked
+              before you choose your testing strategy.
+            </p>
+          </div>
+
+          {fixedAssetSummary.length === 0 ? (
+            <p className="text-gray-600 text-sm">
+              No rollforward data available. Contact your instructor before proceeding.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">
+                      Asset Class
+                    </th>
+                    <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">
+                      Beg Bal
+                    </th>
+                    <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">
+                      Additions
+                    </th>
+                    <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">
+                      Disposals
+                    </th>
+                    <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">
+                      End Bal
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {fixedAssetSummary.map((row, index) => {
+                    const rowKey = row.className || `class-${index + 1}`;
+                    const renderCell = (fieldKey, value) => {
+                      const cellKey = `${rowKey}:${fieldKey}`;
+                      return (
+                        <td key={cellKey} className="px-3 py-2">
+                          <button
+                            type="button"
+                            onClick={() => toggleLeadScheduleTick(cellKey)}
+                            className={`w-full rounded-md border px-3 py-2 text-right transition ${leadCellClass(cellKey)}`}
+                            aria-label={`Tick ${row.className || rowKey} ${fieldKey}`}
+                          >
+                            <div className="flex items-center justify-between text-[11px] uppercase tracking-wide">
+                              <span>{leadTicks[cellKey] === 'exception' ? 'Does not agree' : 'Tick'}</span>
+                              {leadTicks[cellKey] === 'verified' ? (
+                                <CheckCircle2 size={14} />
+                              ) : leadTicks[cellKey] === 'exception' ? (
+                                <XCircle size={14} />
+                              ) : null}
+                            </div>
+                            <div className="text-base font-semibold">
+                              {currencyFormatter.format(Number(value) || 0)}
+                            </div>
+                          </button>
+                        </td>
+                      );
+                    };
+
+                    return (
+                      <tr key={rowKey}>
+                        <td className="px-3 py-2 font-semibold text-gray-800">{row.className || `Class ${index + 1}`}</td>
+                        {renderCell('beginningBalance', row.beginningBalance)}
+                        {renderCell('additions', row.additions)}
+                        {renderCell('disposals', row.disposals)}
+                        {renderCell('endingBalance', row.endingBalance)}
+                      </tr>
+                    );
+                  })}
+                  <tr className="bg-slate-50 font-semibold text-gray-900">
+                    <td className="px-3 py-2">Total</td>
+                    {['beginningBalance', 'additions', 'disposals', 'endingBalance'].map((col) => {
+                      const cellKey = `total:${col}`;
+                      const value = fixedAssetTotals[col] || 0;
+                      return (
+                        <td key={cellKey} className="px-3 py-2">
+                          <button
+                            type="button"
+                            onClick={() => toggleLeadScheduleTick(cellKey)}
+                            className={`w-full rounded-md border px-3 py-2 text-right transition ${leadCellClass(cellKey)}`}
+                            aria-label={`Tick total ${col}`}
+                          >
+                            <div className="flex items-center justify-between text-[11px] uppercase tracking-wide">
+                              <span>Summary total</span>
+                              {leadTicks[cellKey] === 'verified' ? (
+                                <CheckCircle2 size={14} />
+                              ) : leadTicks[cellKey] === 'exception' ? (
+                                <XCircle size={14} />
+                              ) : null}
+                            </div>
+                            <div className="text-base font-semibold">{currencyFormatter.format(value)}</div>
+                          </button>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <div className="flex flex-col gap-3 rounded-lg border border-gray-100 bg-gray-50 px-4 py-3 md:flex-row md:items-center md:justify-between">
+            <div className="space-y-1 text-sm text-gray-700">
+              <p className="font-semibold text-gray-800">Tickmark legend</p>
+              <p>
+                <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800 mr-2">
+                  Verified
+                </span>
+                <span className="inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-800">
+                  Does not agree
+                </span>
+              </p>
+              <p className="text-xs text-gray-500">Totals must be ticked before you can choose a testing strategy.</p>
+            </div>
+            <div className="flex flex-col items-start gap-2 md:items-end">
+              <div className="text-xs font-semibold uppercase tracking-wide text-gray-600">Strategy status</div>
+              <div className="rounded-full border border-indigo-200 bg-indigo-50 px-3 py-1 text-sm font-semibold text-indigo-800">
+                {outcome === 'requires_testing'
+                  ? 'Testing unlocked'
+                  : outcome === 'no_testing'
+                  ? 'No testing required'
+                  : outcome === 'insufficient_scope'
+                  ? 'Insufficient scope'
+                  : 'Pending strategy'}
+              </div>
+              <div className="text-xs text-gray-500">
+                TM: {tmValue ? currencyFormatter.format(Number(tmValue) || 0) : 'enter TM'} | Additions:{' '}
+                {currencyFormatter.format(additionsValue)}
+              </div>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-2">
+            <Button variant="secondary" onClick={() => navigate('/trainee')}>
+              Back to Cases
+            </Button>
+            <Button
+              onClick={() => {
+                setIsScopingModalOpen(true);
+                setScopingModalError('');
+              }}
+              disabled={isLocked || !totalsTicked || fixedAssetSummary.length === 0}
+            >
+              Open Testing Strategy Selector
+            </Button>
+          </div>
+        </div>
       </div>
-    </div>
+    );
+  };
+
+  const renderSelectionStep = () => (
+    auditArea === AUDIT_AREAS.FIXED_ASSETS ? (
+      renderFixedAssetSelectionStep()
+    ) : (
+      <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-4">
+        <div>
+          <h2 className="text-2xl font-semibold text-gray-800">Step 1 — Select Disbursements</h2>
+          <p className="text-sm text-gray-500">
+            Choose which disbursements you want to test. You will review supporting documents on the next step.
+          </p>
+        </div>
+
+        {disbursementList.length === 0 ? (
+          <p className="text-gray-500">No disbursements are available for this case.</p>
+        ) : (
+          <div className="space-y-3">
+            {disbursementList.map((d, index) => {
+              const displayId = d.paymentId || d.reference || d._tempId || d.id || `item-${index + 1}`;
+              const displayDate = d.paymentDate || d.issueDate || d.bookDate || '';
+              return (
+                <div
+                  key={displayId}
+                  className="flex items-center p-4 border border-gray-200 rounded-md hover:bg-gray-50 transition-colors"
+                >
+                <input
+                  type="checkbox"
+                  id={`cb-${displayId}`}
+                  checked={!!selectedDisbursements[displayId]}
+                  onChange={() => handleSelectionChange(displayId)}
+                  disabled={isLocked}
+                  className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 mr-4 cursor-pointer disabled:cursor-not-allowed"
+                />
+                <label
+                  htmlFor={`cb-${displayId}`}
+                  className="flex-grow grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-1 cursor-pointer"
+                >
+                  <span className="text-sm text-gray-700">
+                    <strong className="font-medium">ID:</strong> {displayId}
+                  </span>
+                  <span className="text-sm text-gray-700">
+                    <strong className="font-medium">Payee:</strong> {d.payee || d.reference || '—'}
+                  </span>
+                  <span className="text-sm text-gray-700">
+                    <strong className="font-medium">Amount:</strong> {currencyFormatter.format(Number(d.amount) || 0)}
+                  </span>
+                  <span className="text-sm text-gray-700">
+                    <strong className="font-medium">Date:</strong> {displayDate}
+                  </span>
+                  {d.expectedClassification ? (
+                    <span className="text-xs text-gray-500">
+                      Expected classification: {d.expectedClassification}
+                    </span>
+                  ) : null}
+                </label>
+              </div>
+              );
+            })}
+          </div>
+        )}
+
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-2">
+          <Button variant="secondary" onClick={() => navigate('/trainee')}>
+            Back to Cases
+          </Button>
+          <Button onClick={goToTestingStep} disabled={selectedIds.length === 0 || isLocked}>
+            Continue to Classification
+          </Button>
+        </div>
+      </div>
+    )
   );
 
+  const renderFixedAssetTestingStep = () => {
+    const scopingDecision = normalizeFixedAssetDraft(fixedAssetDraft).scopingDecision || {};
+    const outcome = scopingDecision.outcome || '';
+    const additionsExceedTm = Boolean(scopingDecision.additionsExceedTm);
+    const tmValue = scopingDecision.tmInput ?? fixedAssetRisk?.tolerableMisstatement ?? '';
+
+    if (!outcome) {
+      return (
+        <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-3">
+          <h2 className="text-2xl font-semibold text-gray-800">Lock your testing strategy</h2>
+          <p className="text-sm text-gray-600">
+            Finish the rollforward tickmarking and open the Testing Strategy Selector before starting work.
+          </p>
+          <div className="mt-4">
+            <Button variant="secondary" onClick={() => setActiveStep(firstWorkflowStep)}>
+              Return to Lead Schedule
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    const scopingSummaryCard = (
+      <div className="bg-indigo-50 border border-indigo-200 rounded-lg px-4 py-3 flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">Scoping checkpoint</p>
+          <p className="text-sm text-indigo-900">
+            Additions: {currencyFormatter.format(fixedAssetTotals.additions || 0)} · TM:{' '}
+            {tmValue ? currencyFormatter.format(Number(tmValue) || 0) : 'not entered'}
+          </p>
+          <p className="text-xs text-indigo-800">
+            Outcome: {outcome === 'requires_testing'
+              ? 'Testing required'
+              : outcome === 'no_testing'
+              ? 'No testing required'
+              : 'Insufficient scope'}
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" onClick={() => setActiveStep(firstWorkflowStep)}>
+            Edit Strategy
+          </Button>
+        </div>
+      </div>
+    );
+
+    if (outcome !== 'requires_testing') {
+      return (
+        <div className="space-y-4">
+          {scopingSummaryCard}
+          <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-3">
+            <h3 className="text-xl font-semibold text-gray-800">
+              {outcome === 'no_testing' && !additionsExceedTm
+                ? 'No further testing required'
+                : 'Virtual Senior: scope failed'}
+            </h3>
+            <p className="text-sm text-gray-600">
+              {outcome === 'no_testing' && !additionsExceedTm
+                ? 'You concluded testing is unnecessary because additions are under tolerable misstatement.'
+                : 'Additions exceed tolerable misstatement, so skipping testing will be flagged as insufficient scope.'}
+            </p>
+            <div className="flex gap-3">
+              <Button variant="secondary" onClick={() => setActiveStep(firstWorkflowStep)}>
+                Back
+              </Button>
+              <Button onClick={handleSubmitFixedAsset}>Record Decision and Finish</Button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    const capitalizationThreshold =
+      Number(fixedAssetRisk.capitalizationThreshold || fixedAssetRisk.tolerableMisstatement || 0) || 0;
+
+    return (
+      <div className="space-y-6">
+        {scopingSummaryCard}
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Capitalization Policy</p>
+            <h3 className="text-lg font-semibold text-gray-800">Keep the policy visible while testing</h3>
+            <p className="mt-1 text-sm text-gray-600">
+              Use the client policy to benchmark nature, threshold, and useful life conclusions.
+            </p>
+            {referenceDocuments.length > 0 ? (
+              <div className="mt-3 flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  onClick={() =>
+                    handleViewDocument({
+                      fileName: referenceDocuments[0].fileName,
+                      storagePath: referenceDocuments[0].storagePath,
+                      downloadURL: referenceDocuments[0].downloadURL,
+                    })
+                  }
+                >
+                  Open {referenceDocuments[0].fileName}
+                </Button>
+                {referenceDocuments.length > 1 ? (
+                  <Button variant="ghost" onClick={handleDownloadAllReferences}>
+                    Download all reference docs
+                  </Button>
+                ) : null}
+              </div>
+            ) : (
+              <p className="mt-2 text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">
+                No policy document linked. Check the Reference Materials section.
+              </p>
+            )}
+          </div>
+          <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Invoice Viewer</p>
+            <h3 className="text-lg font-semibold text-gray-800">Reference tray for source documents</h3>
+            <p className="mt-1 text-sm text-gray-600">
+              Use the existing document viewer to open each invoice while you record conclusions below.
+            </p>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              {renderEvidenceList(selectedEvidenceItems)}
+              {renderEvidenceViewer(selectedEvidenceItems)}
+            </div>
+          </div>
+        </div>
+
+        <section className="space-y-3 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-col gap-1">
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Additions workbench</p>
+            <h3 className="text-lg font-semibold text-gray-800">Nature, threshold, and useful life tests</h3>
+          </div>
+          {fixedAssetAdditions.length === 0 ? (
+            <p className="text-sm text-gray-600">No additions were provided for this case.</p>
+          ) : (
+            <div className="space-y-3">
+              {fixedAssetAdditions.map((item, index) => {
+                const additionId = item._tempId || item.vendor || item.description || `addition-${index + 1}`;
+                const response = fixedAssetDraft.additionResponses?.[additionId] || {};
+                const amountNumber = Number(item.amount) || 0;
+                const autoThreshold = capitalizationThreshold > 0 ? amountNumber >= capitalizationThreshold : null;
+                return (
+                  <div key={additionId} className="rounded-md border border-gray-200 p-3 bg-gray-50">
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="font-semibold text-gray-800">{item.vendor || 'Addition'}</p>
+                        <p className="text-xs text-gray-500">
+                          {item.description || 'No description'} · In-service: {item.inServiceDate || '—'}
+                        </p>
+                      </div>
+                      <div className="text-sm font-semibold text-gray-900">
+                        {currencyFormatter.format(amountNumber)}
+                      </div>
+                    </div>
+                    <div className="mt-3 grid gap-3 md:grid-cols-3">
+                      <div>
+                        <label className="text-xs font-semibold text-gray-700">Nature test</label>
+                        <select
+                          className="mt-1 w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                          value={response.nature || ''}
+                          onChange={(event) => upsertAdditionResponse(additionId, { nature: event.target.value })}
+                        >
+                          <option value="">Select...</option>
+                          <option value="capital_asset">Capital Asset</option>
+                          <option value="repair_expense">Repair / Expense</option>
+                          <option value="startup">Start-up / Other</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold text-gray-700">
+                          Threshold test {capitalizationThreshold ? `(>${currencyFormatter.format(capitalizationThreshold)})` : ''}
+                        </label>
+                        <select
+                          className="mt-1 w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                          value={response.threshold || ''}
+                          onChange={(event) => upsertAdditionResponse(additionId, { threshold: event.target.value })}
+                        >
+                          <option value="">Select...</option>
+                          <option value="over_threshold">Cost exceeds threshold</option>
+                          <option value="under_threshold">Cost under threshold</option>
+                        </select>
+                        {autoThreshold !== null ? (
+                          <p className="mt-1 text-[11px] text-gray-500">
+                            System check: {autoThreshold ? 'Above' : 'Below'} threshold based on amount.
+                          </p>
+                        ) : null}
+                      </div>
+                      <div>
+                        <label className="text-xs font-semibold text-gray-700">Useful life test</label>
+                        <select
+                          className="mt-1 w-full rounded-md border border-gray-300 px-2 py-2 text-sm"
+                          value={response.usefulLife || ''}
+                          onChange={(event) => upsertAdditionResponse(additionId, { usefulLife: event.target.value })}
+                        >
+                          <option value="">Select...</option>
+                          <option value="appropriate">Appropriate</option>
+                          <option value="too_short">Too short</option>
+                          <option value="too_long">Too long</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="mt-3 grid gap-3 md:grid-cols-3">
+                      <Input
+                        placeholder="Proposed debit account"
+                        value={response.debitAccount || ''}
+                        onChange={(event) =>
+                          upsertAdditionResponse(additionId, { debitAccount: event.target.value })
+                        }
+                      />
+                      <Input
+                        placeholder="Proposed credit account"
+                        value={response.creditAccount || ''}
+                        onChange={(event) =>
+                          upsertAdditionResponse(additionId, { creditAccount: event.target.value })
+                        }
+                      />
+                      <Input
+                        placeholder="Adjustment amount"
+                        type="number"
+                        inputMode="decimal"
+                        value={response.adjustmentAmount || ''}
+                        onChange={(event) =>
+                          upsertAdditionResponse(additionId, { adjustmentAmount: event.target.value })
+                        }
+                      />
+                    </div>
+                    <Textarea
+                      className="mt-3"
+                      placeholder="Workpaper note or proposed reclassification entry"
+                      value={response.note || ''}
+                      onChange={(event) => upsertAdditionResponse(additionId, { note: event.target.value })}
+                      rows={3}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        <section className="space-y-3 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-col gap-1">
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Disposals workbench</p>
+            <h3 className="text-lg font-semibold text-gray-800">Re-perform gain/loss calculation</h3>
+          </div>
+          {fixedAssetDisposals.length === 0 ? (
+            <p className="text-sm text-gray-600">No disposals provided for this case.</p>
+          ) : (
+            <div className="space-y-3">
+              {fixedAssetDisposals.map((item, index) => {
+                const disposalId = item._tempId || item.assetId || item.description || `disposal-${index + 1}`;
+                const response = fixedAssetDraft.disposalResponses?.[disposalId] || {};
+                const proceeds = Number(response.proceeds ?? item.proceeds ?? 0);
+                const cost = Number(response.cost ?? item.cost ?? 0);
+                const accDep = Number(response.accumulatedDepreciation ?? 0);
+                const recordedGainLoss = Number(response.recordedGainLoss ?? 0);
+                const calculatedGainLoss = proceeds - (cost - accDep);
+                const variance =
+                  response.recordedGainLoss !== undefined ? calculatedGainLoss - recordedGainLoss : null;
+                return (
+                  <div key={disposalId} className="rounded-md border border-gray-200 p-3 bg-gray-50 space-y-3">
+                    <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="font-semibold text-gray-800">{item.assetId || item.description || 'Disposal'}</p>
+                        <p className="text-xs text-gray-500">{item.description || 'No description provided.'}</p>
+                      </div>
+                      <div className="text-sm text-gray-600">
+                        NBV: {item.nbv ? currencyFormatter.format(Number(item.nbv) || 0) : '—'}
+                      </div>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-4">
+                      <label className="text-xs font-semibold text-gray-700 flex flex-col gap-1">
+                        Proceeds (per bank)
+                        <Input
+                          type="number"
+                          inputMode="decimal"
+                          value={response.proceeds ?? item.proceeds ?? ''}
+                          onChange={(event) => upsertDisposalResponse(disposalId, { proceeds: event.target.value })}
+                        />
+                      </label>
+                      <label className="text-xs font-semibold text-gray-700 flex flex-col gap-1">
+                        Cost per schedule
+                        <Input
+                          type="number"
+                          inputMode="decimal"
+                          value={response.cost ?? item.cost ?? ''}
+                          onChange={(event) => upsertDisposalResponse(disposalId, { cost: event.target.value })}
+                        />
+                      </label>
+                      <label className="text-xs font-semibold text-gray-700 flex flex-col gap-1">
+                        Accumulated dep
+                        <Input
+                          type="number"
+                          inputMode="decimal"
+                          value={response.accumulatedDepreciation ?? ''}
+                          onChange={(event) =>
+                            upsertDisposalResponse(disposalId, { accumulatedDepreciation: event.target.value })
+                          }
+                        />
+                      </label>
+                      <label className="text-xs font-semibold text-gray-700 flex flex-col gap-1">
+                        Recorded gain/loss
+                        <Input
+                          type="number"
+                          inputMode="decimal"
+                          value={response.recordedGainLoss ?? ''}
+                          onChange={(event) =>
+                            upsertDisposalResponse(disposalId, { recordedGainLoss: event.target.value })
+                          }
+                        />
+                      </label>
+                    </div>
+                    <div className="flex flex-col gap-1 text-sm text-gray-700">
+                      <p className="font-semibold">
+                        Calculated gain/loss: {currencyFormatter.format(calculatedGainLoss || 0)}
+                      </p>
+                      {variance !== null ? (
+                        <p className={Math.abs(variance) > 1 ? 'text-rose-700' : 'text-emerald-700'}>
+                          Variance vs recorded: {currencyFormatter.format(variance)}
+                        </p>
+                      ) : null}
+                    </div>
+                    <Textarea
+                      className="mt-2"
+                      placeholder="Document proposed adjustment or support"
+                      value={response.note || ''}
+                      onChange={(event) => upsertDisposalResponse(disposalId, { note: event.target.value })}
+                      rows={3}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        <section className="space-y-3 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
+          <div className="flex flex-col gap-1">
+            <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Depreciation analytics</p>
+            <h3 className="text-lg font-semibold text-gray-800">Recalculate expected expense</h3>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2">
+              <p className="text-xs font-semibold text-indigo-700 uppercase tracking-wide">Total asset base</p>
+              <p className="text-lg font-semibold text-indigo-900">
+                {currencyFormatter.format(fixedAssetTotals.endingBalance || fixedAssetTotals.beginningBalance || 0)}
+              </p>
+            </div>
+            <div className="rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2">
+              <p className="text-xs font-semibold text-indigo-700 uppercase tracking-wide">Weighted average life</p>
+              <p className="text-lg font-semibold text-indigo-900">
+                {fixedAssetRisk.weightedAverageLife || fixedAssetDraft.analyticsResponse?.weightedAverageLife || '—'} years
+              </p>
+            </div>
+            <div className="rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2">
+              <p className="text-xs font-semibold text-indigo-700 uppercase tracking-wide">Suggested expectation</p>
+              <p className="text-lg font-semibold text-indigo-900">
+                {(() => {
+                  const life =
+                    Number(fixedAssetDraft.analyticsResponse?.weightedAverageLife) ||
+                    Number(fixedAssetRisk.weightedAverageLife) ||
+                    0;
+                  const baseAmount = fixedAssetTotals.endingBalance || fixedAssetTotals.beginningBalance || 0;
+                  const expected = life > 0 ? baseAmount / life : 0;
+                  return currencyFormatter.format(expected || 0);
+                })()}
+              </p>
+            </div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <label className="text-xs font-semibold text-gray-700 flex flex-col gap-1">
+              Your expected expense
+              <Input
+                type="number"
+                inputMode="decimal"
+                value={fixedAssetDraft.analyticsResponse?.expectedExpense || ''}
+                onChange={(event) => updateAnalyticsResponse({ expectedExpense: event.target.value })}
+              />
+            </label>
+            <label className="text-xs font-semibold text-gray-700 flex flex-col gap-1">
+              Client recorded expense
+              <Input
+                type="number"
+                inputMode="decimal"
+                value={fixedAssetDraft.analyticsResponse?.recordedExpense || ''}
+                onChange={(event) => updateAnalyticsResponse({ recordedExpense: event.target.value })}
+              />
+            </label>
+            <div className="flex flex-col">
+              <label className="text-xs font-semibold text-gray-700 mb-1">Conclusion</label>
+              <div className="flex gap-3">
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="radio"
+                    checked={fixedAssetDraft.analyticsResponse?.conclusion === 'reasonable'}
+                    onChange={() => updateAnalyticsResponse({ conclusion: 'reasonable' })}
+                  />
+                  Reasonable (within 5%)
+                </label>
+                <label className="flex items-center gap-2 text-sm text-gray-700">
+                  <input
+                    type="radio"
+                    checked={fixedAssetDraft.analyticsResponse?.conclusion === 'investigate'}
+                    onChange={() => updateAnalyticsResponse({ conclusion: 'investigate' })}
+                  />
+                  Investigate (>5% variance)
+                </label>
+              </div>
+            </div>
+          </div>
+          <Textarea
+            className="mt-2"
+            placeholder="Analytics note"
+            value={fixedAssetDraft.analyticsResponse?.note || ''}
+            onChange={(event) => updateAnalyticsResponse({ note: event.target.value })}
+            rows={3}
+          />
+        </section>
+
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <Button variant="secondary" onClick={() => setActiveStep(firstWorkflowStep)} disabled={isLocked}>
+            Back to Lead Schedule
+          </Button>
+          <Button onClick={handleSubmitFixedAsset} disabled={isLocked}>
+            <Send size={18} className="inline mr-2" /> Submit Fixed Asset Testing
+          </Button>
+        </div>
+      </div>
+    );
+  };
+
   const renderTestingStep = () => {
+    if (auditArea === AUDIT_AREAS.FIXED_ASSETS) {
+      return renderFixedAssetTestingStep();
+    }
+    const isCashCase = auditArea === AUDIT_AREAS.CASH;
     const missingDocuments = selectedEvidenceItems.filter(
       (item) => !item?.hasLinkedDocument && !isEvidenceWorkflowLinked(item.paymentId)
     );
@@ -1642,7 +3088,7 @@ export default function TraineeCaseViewPage({ params }) {
           ) : null}
         </div>
 
-        {selectedIds.length === 0 ? (
+        {selectedIds.length === 0 && !isCashCase ? (
           <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 text-sm text-gray-600">
             You do not have any disbursements selected. Return to the selection step to add them before testing.
             <div className="mt-4">
@@ -1650,6 +3096,25 @@ export default function TraineeCaseViewPage({ params }) {
                 Back to Selection
               </Button>
             </div>
+          </div>
+        ) : isCashCase ? (
+          <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-4">
+            <CashReconciliationWorkbench
+              ledgerItems={cashOutstandingList}
+              cutoffItems={cashCutoffList}
+              artifacts={cashArtifacts}
+              cashContext={caseData?.cashContext || {}}
+              classificationAmounts={classificationAmounts}
+              links={cashLinkMap}
+              adjustments={cashAdjustments}
+              summaryDraft={cashSummaryDraft}
+              onUpdateStatus={handleCashStatusUpdate}
+              onLinkChange={handleCashLinkChange}
+              onVarianceChange={(ready) => setCashCanSubmit(ready)}
+              onProposeAdjustment={handleCashAdjustmentCreation}
+              onSummaryChange={handleCashSummaryChange}
+              isLocked={isLocked}
+            />
           </div>
         ) : (
           <>
@@ -1661,6 +3126,15 @@ export default function TraineeCaseViewPage({ params }) {
 
             <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
               <h3 className="text-xl font-semibold text-gray-800 mb-4">Allocate Each Disbursement</h3>
+              {exceptionNoteRequiredIds.length > 0 ? (
+                <div className="mb-4 border border-amber-300 bg-amber-50 text-amber-800 text-sm rounded-md px-4 py-3">
+                  <p className="font-semibold">Notes required for proposed adjustments.</p>
+                  <p className="mt-1">
+                    Add workpaper notes for:{' '}
+                    <span className="font-medium">{exceptionNoteRequiredIds.join(', ')}</span> before submitting.
+                  </p>
+                </div>
+              ) : null}
               <div className="space-y-4">
                 {selectedDisbursementDetails.map((item) => {
                   const allocation = normalizeAllocationShape(
@@ -1703,7 +3177,15 @@ export default function TraineeCaseViewPage({ params }) {
               <Button variant="secondary" onClick={() => setActiveStep(firstWorkflowStep)} disabled={isLocked}>
                 Back to Selection
               </Button>
-              <Button onClick={handleSubmitTesting} disabled={!allClassified || isLocked}>
+              <Button
+                onClick={handleSubmitTesting}
+                disabled={
+                  isLocked ||
+                  exceptionNoteRequiredIds.length > 0 ||
+                  (!isCashCase && !allClassified) ||
+                  (isCashCase && !cashCanSubmit)
+                }
+              >
                 <Send size={18} className="inline mr-2" /> Submit Responses
               </Button>
             </div>
@@ -1714,6 +3196,89 @@ export default function TraineeCaseViewPage({ params }) {
   };
 
   const renderResultsStep = () => {
+    if (auditArea === AUDIT_AREAS.FIXED_ASSETS) {
+      const latestAttempt =
+        Array.isArray(submission?.attempts) && submission.attempts.length > 0
+          ? submission.attempts[submission.attempts.length - 1]
+          : submission;
+      const fixedAssetResponses = latestAttempt?.fixedAssetResponses || {};
+      const scopingDecision = fixedAssetResponses.scopingDecision || fixedAssetDraft.scopingDecision || {};
+      const outcome = scopingDecision.outcome || 'Pending';
+      const tmValue = scopingDecision.tmInput ?? fixedAssetRisk?.tolerableMisstatement ?? '';
+      const additionsTotal = fixedAssetResponses.summaryTotals?.additions ?? fixedAssetTotals.additions;
+      const gradeValue = typeof submission?.grade === 'number' ? submission.grade : null;
+      const seniorFeedbackList = Array.isArray(submission?.virtualSeniorFeedback)
+        ? submission.virtualSeniorFeedback
+        : [];
+
+      return (
+        <div className="space-y-4">
+          <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-3">
+            <h2 className="text-2xl font-semibold text-gray-800">Fixed Asset Results</h2>
+            <p className="text-sm text-gray-600">Your testing strategy and recalculations are captured below.</p>
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">Outcome</p>
+                <p className="text-lg font-semibold text-indigo-900">
+                  {outcome === 'requires_testing'
+                    ? 'Testing completed'
+                    : outcome === 'no_testing'
+                    ? 'No testing required'
+                    : outcome === 'insufficient_scope'
+                    ? 'Insufficient scope'
+                    : 'Pending'}
+                </p>
+              </div>
+              <div className="rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">Additions vs TM</p>
+                <p className="text-lg font-semibold text-indigo-900">
+                  {currencyFormatter.format(additionsTotal || 0)} vs {tmValue ? currencyFormatter.format(Number(tmValue) || 0) : '—'}
+                </p>
+              </div>
+              <div className="rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-indigo-700">Virtual Senior grade</p>
+                <p className="text-lg font-semibold text-indigo-900">{gradeValue !== null ? `${gradeValue.toFixed(1)} / 100` : 'Pending'}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-3">
+            <h3 className="text-xl font-semibold text-gray-800">What you documented</h3>
+            <ul className="text-sm text-gray-700 space-y-2">
+              <li>Lead schedule tickmarks recorded for {Object.keys(fixedAssetResponses.leadScheduleTicks || {}).length} cells.</li>
+              <li>
+                Additions reviewed: {Object.keys(fixedAssetResponses.additionResponses || {}).length} /{' '}
+                {fixedAssetAdditions.length || 0}
+              </li>
+              <li>
+                Disposals recalculated: {Object.keys(fixedAssetResponses.disposalResponses || {}).length} /{' '}
+                {fixedAssetDisposals.length || 0}
+              </li>
+              <li>
+                Analytics conclusion:{' '}
+                {fixedAssetResponses.analyticsResponse?.conclusion
+                  ? fixedAssetResponses.analyticsResponse.conclusion === 'reasonable'
+                    ? 'Reasonable'
+                    : 'Investigate'
+                  : 'Not recorded'}
+              </li>
+            </ul>
+          </div>
+
+          {seniorFeedbackList.length > 0 ? (
+            <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-3">
+              <h4 className="text-lg font-semibold text-gray-800">Virtual Senior Notes</h4>
+              <ul className="list-disc pl-5 space-y-2 text-sm text-gray-700">
+                {seniorFeedbackList.map((item, idx) => (
+                  <li key={item.paymentId || idx}>{Array.isArray(item.notes) ? item.notes.join(' ') : item.notes}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      );
+    }
+
     const formatClassificationLabel = (key) =>
       classificationFields.find((field) => field.key === key)?.label || key || 'Not specified';
 

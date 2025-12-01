@@ -5,6 +5,7 @@ export const AUDIT_AREAS = Object.freeze({
   INVENTORY: 'inventory',
   CASH: 'cash',
   PAYROLL: 'payroll',
+  FIXED_ASSETS: 'fixed_assets',
 });
 
 export const DEFAULT_AUDIT_AREA = AUDIT_AREAS.GENERAL;
