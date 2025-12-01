@@ -52,6 +52,12 @@ const CASH_ARTIFACT_TYPES = [
   { value: 'cash_bank_confirmation', label: 'Bank Confirmation' },
   { value: 'cash_cutoff_statement', label: 'Cutoff Statement' },
 ];
+const WORKPAPER_LAYOUT_OPTIONS = [
+  { value: 'two_pane', label: 'Two Pane (evidence + grid)' },
+  { value: 'cash_recon', label: 'Cash Reconciliation (bank vs ledger)' },
+  { value: 'fixed_assets', label: 'Fixed Assets (rollforward + testing)' },
+  { value: 'inventory_two_pane', label: 'Inventory (two-pane preset)' },
+];
 const buildSingleAnswerKey = (classification, amountValue, explanation = '') => {
   const sanitizedAmount = Number(amountValue) || 0;
   const next = {
@@ -231,6 +237,11 @@ function useCaseForm({ params }) {
     answerKeySingleClassification: DEFAULT_ANSWER_KEY_CLASSIFICATION,
     answerKey: buildSingleAnswerKey(null, 0, ''),
     mappings: [],
+    trapType: '',
+    requiredAssertions: [],
+    errorReasons: [],
+    shouldFlag: false,
+    validator: { type: '', config: {} },
   });
   const initialOutstandingItem = () => ({
     _tempId: getUUID(),
@@ -250,6 +261,22 @@ function useCaseForm({ params }) {
     outstandingTempId: '',
     cutoffTempId: '',
     scenarioType: '',
+  });
+  const initialInstruction = () => ({
+    title: '',
+    moduleCode: '',
+    hook: { headline: '', risk: '', body: '' },
+    visualAsset: { type: 'VIDEO', source_id: '', alt: '' },
+    heuristic: { rule_text: '', reminder: '' },
+    gateCheck: {
+      question: '',
+      success_message: '',
+      failure_message: '',
+      options: [
+        { id: 'opt1', text: '', correct: false, feedback: '' },
+        { id: 'opt2', text: '', correct: true, feedback: '' },
+      ],
+    },
   });
 const initialMapping = () => ({
   _tempId: getUUID(),
@@ -276,6 +303,8 @@ const initialMapping = () => ({
   const [caseName, setCaseName] = useState('');
   const [publicVisible, setPublicVisible] = useState(true);
   const [auditArea, setAuditArea] = useState(DEFAULT_AUDIT_AREA);
+  const [layoutType, setLayoutType] = useState('two_pane');
+  const [layoutConfigRaw, setLayoutConfigRaw] = useState('');
   const classificationFields = useMemo(() => getClassificationFields(auditArea), [auditArea]);
   const answerKeyLabels = useMemo(() => {
     const map = { ...ANSWER_KEY_LABELS };
@@ -353,6 +382,7 @@ const [cashContext, setCashContext] = useState({
   const [referenceDocuments, setReferenceDocuments] = useState([initialReferenceDocument()]);
   const [loading, setLoading] = useState(false);
   const [originalCaseData, setOriginalCaseData] = useState(null);
+  const [instruction, setInstruction] = useState(initialInstruction());
 
   const disbursementCsvInputRef = useRef(null);
 
@@ -504,6 +534,11 @@ const [cashContext, setCashContext] = useState({
                 ? data.faDisposals.map((entry) => ({ _tempId: getUUID(), ...entry }))
                 : [initialFaDisposal()]
             );
+            if (data.instruction) {
+              setInstruction(data.instruction);
+            } else {
+              setInstruction(initialInstruction());
+            }
             const baseDisbursements =
               data.disbursements?.map((d) => {
                 const draft = {
@@ -552,17 +587,25 @@ const [cashContext, setCashContext] = useState({
               });
             });
 
-            const disbursementsWithMappings = baseDisbursements.map((d) => {
-              const mappingsForPayment = mappingGroups.get((d.paymentId || '').trim()) || [];
-              return {
-                ...d,
-                mappings: mappingsForPayment.map((mapping) => ({
-                  ...mapping,
-                  disbursementTempId: d._tempId,
-                  paymentId: d.paymentId,
-                })),
-              };
-            });
+          const disbursementsWithMappings = baseDisbursements.map((d) => {
+            const mappingsForPayment = mappingGroups.get((d.paymentId || '').trim()) || [];
+            return {
+              ...d,
+              mappings: mappingsForPayment.map((mapping) => ({
+                ...mapping,
+                disbursementTempId: d._tempId,
+                paymentId: d.paymentId,
+              })),
+              trapType: d.trapType || '',
+              requiredAssertions: Array.isArray(d.requiredAssertions) ? d.requiredAssertions : [],
+              errorReasons: Array.isArray(d.errorReasons) ? d.errorReasons : [],
+              shouldFlag: Boolean(d.shouldFlag),
+              validator:
+                d.validator && typeof d.validator === 'object'
+                  ? { type: d.validator.type || '', config: d.validator.config || {} }
+                  : { type: '', config: {} },
+            };
+          });
 
             setDisbursements(disbursementsWithMappings);
             setReferenceDocuments(
@@ -583,6 +626,23 @@ const [cashContext, setCashContext] = useState({
               typeof data.auditArea === 'string' && data.auditArea.trim()
                 ? data.auditArea.trim()
                 : DEFAULT_AUDIT_AREA
+            );
+            const inferredLayout =
+              data?.workpaper?.layoutType ||
+              (data.auditArea === AUDIT_AREAS.CASH
+                ? 'cash_recon'
+                : data.auditArea === AUDIT_AREAS.FIXED_ASSETS
+                ? 'fixed_assets'
+                : 'two_pane');
+            setLayoutType(inferredLayout);
+            const incomingLayoutConfig =
+              data?.workpaper && typeof data.workpaper.layoutConfig === 'object' && data.workpaper.layoutConfig !== null
+                ? data.workpaper.layoutConfig
+                : {};
+            setLayoutConfigRaw(
+              Object.keys(incomingLayoutConfig).length > 0
+                ? JSON.stringify(incomingLayoutConfig, null, 2)
+                : ''
             );
             const existingGroupId = typeof data.caseGroupId === 'string' ? data.caseGroupId.trim() : '';
             if (existingGroupId && CASE_GROUP_VALUES.includes(existingGroupId)) {
@@ -638,6 +698,9 @@ const [cashContext, setCashContext] = useState({
       });
       setFaAdditions([initialFaAddition()]);
       setFaDisposals([initialFaDisposal()]);
+      setInstruction(initialInstruction());
+      setLayoutType('two_pane');
+      setLayoutConfigRaw('');
       setOriginalCaseData(null);
       setAuditArea(DEFAULT_AUDIT_AREA);
       setCaseGroupSelection('__none');
@@ -1735,6 +1798,8 @@ const [cashContext, setCashContext] = useState({
         const tempCaseData = {
           caseName,
           title: caseName,
+          workpaper: { layoutType, layoutConfig: parsedLayoutConfig },
+          instruction,
           disbursements: disbursements.map(({ _tempId, mappings, ...rest }) => rest),
           invoiceMappings: [],
           referenceDocuments: [],
@@ -1852,6 +1917,8 @@ const [cashContext, setCashContext] = useState({
       const caseDataPayload = {
         caseName,
         title: caseName,
+        workpaper: { layoutType, layoutConfig: parsedLayoutConfig },
+        instruction,
         disbursements: disbursementPayload,
         invoiceMappings: finalInvoiceMappings,
         referenceDocuments: finalReferenceDocuments,
@@ -1918,6 +1985,11 @@ const [cashContext, setCashContext] = useState({
     setCaseName,
     auditArea,
     setAuditArea,
+    layoutType,
+    setLayoutType,
+    workpaperLayoutOptions: WORKPAPER_LAYOUT_OPTIONS,
+    layoutConfigRaw,
+    setLayoutConfigRaw,
     auditAreaSelectOptions,
     caseGroupSelection,
     setCaseGroupSelection,
@@ -2003,6 +2075,11 @@ const [cashContext, setCashContext] = useState({
     answerKeyClassificationOptions,
   };
 
+  const instructionData = {
+    instruction,
+    setInstruction,
+  };
+
   const files = {
     FILE_INPUT_ACCEPT,
     prettySupportedLabels,
@@ -2017,6 +2094,7 @@ const [cashContext, setCashContext] = useState({
     transactions,
     attachments,
     answerKey,
+    instructionData,
     files,
     actions: { handleSubmit, goBack },
   };
@@ -2335,6 +2413,11 @@ function CaseBasicsStep({ basics }) {
     setCaseName,
     auditArea,
     setAuditArea,
+    layoutType,
+    setLayoutType,
+    workpaperLayoutOptions,
+    layoutConfigRaw,
+    setLayoutConfigRaw,
     auditAreaSelectOptions,
     caseGroupSelection,
     setCaseGroupSelection,
@@ -2373,7 +2456,7 @@ function CaseBasicsStep({ basics }) {
         <p className="mt-1 text-xs text-gray-500">Trainees see this title on their dashboard.</p>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
         <div>
           <label htmlFor="auditArea" className="block text-sm font-medium text-gray-700">
             Audit Area
@@ -2386,6 +2469,35 @@ function CaseBasicsStep({ basics }) {
             className="mt-2"
           />
           <p className="mt-1 text-xs text-gray-500">Used for filtering and reporting.</p>
+        </div>
+        <div>
+          <label htmlFor="layoutType" className="block text-sm font-medium text-gray-700">
+            Workpaper Layout
+          </label>
+          <Select
+            id="layoutType"
+            value={layoutType}
+            onChange={(e) => setLayoutType(e.target.value)}
+            options={workpaperLayoutOptions}
+            className="mt-2"
+          />
+          <p className="mt-1 text-xs text-gray-500">Choose the cockpit pattern (two-pane, cash recon, fixed assets).</p>
+        </div>
+        <div>
+          <label htmlFor="layoutConfig" className="block text-sm font-medium text-gray-700">
+            Layout Config (JSON, optional)
+          </label>
+          <Textarea
+            id="layoutConfig"
+            value={layoutConfigRaw}
+            onChange={(e) => setLayoutConfigRaw(e.target.value)}
+            rows={layoutConfigRaw && layoutConfigRaw.length > 120 ? 6 : 3}
+            placeholder='e.g., { "leftPanel": "pdf", "rightPanel": "grid" }'
+            className="mt-2"
+          />
+          <p className="mt-1 text-xs text-gray-500">
+            Use to define panel behavior (e.g., evidence on left, work grid on right). Leave blank for defaults.
+          </p>
         </div>
         <div>
           <label htmlFor="caseStatus" className="block text-sm font-medium text-gray-700">
@@ -2430,6 +2542,252 @@ function CaseBasicsStep({ basics }) {
           <p className="mt-1 text-xs text-gray-500">Use a lowercase slug that matches your reporting conventions.</p>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function InstructionStep({ instructionData }) {
+  const { instruction, setInstruction } = instructionData;
+
+  const update = (field, value) => {
+    setInstruction((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const updateNested = (parent, field, value) => {
+    setInstruction((prev) => ({
+      ...prev,
+      [parent]: { ...(prev[parent] || {}), [field]: value },
+    }));
+  };
+
+  const updateOption = (index, field, value) => {
+    setInstruction((prev) => {
+      const currentOptions = Array.isArray(prev.gateCheck?.options) ? prev.gateCheck.options : [];
+      const newOptions = [...currentOptions];
+      newOptions[index] = { ...(newOptions[index] || {}), [field]: value };
+      return {
+        ...prev,
+        gateCheck: { ...(prev.gateCheck || {}), options: newOptions },
+      };
+    });
+  };
+
+  const addOption = () => {
+    setInstruction((prev) => ({
+      ...prev,
+      gateCheck: {
+        ...(prev.gateCheck || {}),
+        options: [
+          ...(Array.isArray(prev.gateCheck?.options) ? prev.gateCheck.options : []),
+          { id: `opt${Date.now()}`, text: '', correct: false, feedback: '' },
+        ],
+      },
+    }));
+  };
+
+  const removeOption = (index) => {
+    setInstruction((prev) => ({
+      ...prev,
+      gateCheck: {
+        ...(prev.gateCheck || {}),
+        options: (Array.isArray(prev.gateCheck?.options) ? prev.gateCheck.options : []).filter(
+          (_, i) => i !== index
+        ),
+      },
+    }));
+  };
+
+  const options = Array.isArray(instruction?.gateCheck?.options)
+    ? instruction.gateCheck.options
+    : [];
+
+  return (
+    <div className="space-y-8">
+      <StepIntro
+        title="Configure the Briefing Room"
+        items={[
+          'Set the context: Why does this audit task matter?',
+          'Define the Golden Rule (Heuristic) the trainee must learn.',
+          'Set the Gate Question that blocks entry until mastered.',
+        ]}
+      />
+
+      <section className="rounded-lg border border-gray-200 bg-white p-4">
+        <h3 className="mb-3 text-base font-semibold text-gray-800">Module Identity</h3>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Instruction Title</label>
+            <Input
+              value={instruction?.title || ''}
+              onChange={(e) => update('title', e.target.value)}
+              placeholder="e.g. Search for Unrecorded Liabilities"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Module Code</label>
+            <Input
+              value={instruction?.moduleCode || ''}
+              onChange={(e) => update('moduleCode', e.target.value)}
+              placeholder="e.g. SURL-101"
+            />
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-gray-200 bg-white p-4">
+        <h3 className="mb-3 text-base font-semibold text-gray-800">The Hook (Context)</h3>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Headline</label>
+            <Input
+              value={instruction?.hook?.headline || ''}
+              onChange={(e) => updateNested('hook', 'headline', e.target.value)}
+              placeholder="e.g. The Silent Profit Killer"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Risk Statement</label>
+            <Input
+              value={instruction?.hook?.risk || ''}
+              onChange={(e) => updateNested('hook', 'risk', e.target.value)}
+              placeholder="e.g. Risk of Material Misstatement (Completeness)"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Body Text</label>
+            <Textarea
+              value={instruction?.hook?.body || ''}
+              onChange={(e) => updateNested('hook', 'body', e.target.value)}
+              rows={3}
+              placeholder="Explain the 'Why'..."
+            />
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-gray-200 bg-white p-4">
+        <h3 className="mb-3 text-base font-semibold text-gray-800">Visual Asset</h3>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Asset Type</label>
+            <Select
+              value={instruction?.visualAsset?.type || 'VIDEO'}
+              onChange={(e) => updateNested('visualAsset', 'type', e.target.value)}
+              options={[
+                { value: 'VIDEO', label: 'YouTube Video' },
+                { value: 'IMAGE', label: 'Image URL' },
+              ]}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Source ID / URL</label>
+            <Input
+              value={instruction?.visualAsset?.source_id || instruction?.visualAsset?.url || ''}
+              onChange={(e) => updateNested('visualAsset', 'source_id', e.target.value)}
+              placeholder={
+                (instruction?.visualAsset?.type || 'VIDEO') === 'VIDEO'
+                  ? 'YouTube ID (e.g. dQw4w9WgXcQ)'
+                  : 'https://...'
+              }
+            />
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-gray-200 bg-white p-4">
+        <h3 className="mb-3 text-base font-semibold text-gray-800">The Golden Rule</h3>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Rule Text</label>
+            <Textarea
+              value={instruction?.heuristic?.rule_text || ''}
+              onChange={(e) => updateNested('heuristic', 'rule_text', e.target.value)}
+              placeholder="e.g. Service Date is King. Ignore the Invoice Date."
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Reminder / Tip</label>
+            <Input
+              value={instruction?.heuristic?.reminder || ''}
+              onChange={(e) => updateNested('heuristic', 'reminder', e.target.value)}
+              placeholder="Short tip shown during the sim"
+            />
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-lg border border-gray-200 bg-white p-4">
+        <h3 className="mb-3 text-base font-semibold text-gray-800">Gate Check (Protocol Quiz)</h3>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Question</label>
+            <Textarea
+              value={instruction?.gateCheck?.question || ''}
+              onChange={(e) => updateNested('gateCheck', 'question', e.target.value)}
+              placeholder="Scenario question to test understanding..."
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label className="block text-sm font-medium text-gray-700">Options</label>
+            {options.map((opt, idx) => (
+              <div key={opt?.id || idx} className="flex items-start gap-2 rounded border bg-gray-50 p-2">
+                <input
+                  type="radio"
+                  name="correctOption"
+                  checked={!!opt?.correct}
+                  onChange={() => {
+                    const newOptions = options.map((o, i) => ({ ...(o || {}), correct: i === idx }));
+                    updateNested('gateCheck', 'options', newOptions);
+                  }}
+                  className="mt-3 h-4 w-4 text-blue-600"
+                />
+                <div className="flex-1 space-y-2">
+                  <Input
+                    value={opt?.text || ''}
+                    onChange={(e) => updateOption(idx, 'text', e.target.value)}
+                    placeholder="Option text"
+                  />
+                  <Input
+                    value={opt?.feedback || ''}
+                    onChange={(e) => updateOption(idx, 'feedback', e.target.value)}
+                    placeholder="Feedback if selected"
+                    className="text-xs"
+                  />
+                </div>
+                <Button
+                  variant="secondary"
+                  onClick={() => removeOption(idx)}
+                  type="button"
+                  className="text-red-500"
+                >
+                  <Trash2 size={16} />
+                </Button>
+              </div>
+            ))}
+            <Button variant="secondary" onClick={addOption} type="button" className="text-sm">
+              <PlusCircle size={14} className="mr-1" /> Add Option
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Success Message</label>
+              <Input
+                value={instruction?.gateCheck?.success_message || ''}
+                onChange={(e) => updateNested('gateCheck', 'success_message', e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Failure Message</label>
+              <Input
+                value={instruction?.gateCheck?.failure_message || ''}
+                onChange={(e) => updateNested('gateCheck', 'failure_message', e.target.value)}
+              />
+            </div>
+          </div>
+        </div>
+      </section>
     </div>
   );
 }
@@ -3679,6 +4037,7 @@ export default function CaseFormPage({ params }) {
     meta: { isEditing },
     status: { loading },
     basics,
+    instructionData,
     audience,
     transactions,
     attachments,
@@ -3691,6 +4050,7 @@ export default function CaseFormPage({ params }) {
   const steps = useMemo(
     () => [
       { id: 'basics', label: 'Basics', description: 'Name, status, audit area, and grouping' },
+      { id: 'instruction', label: 'Instruction', description: 'Briefing, Video, and Gate Check' },
       { id: 'audience', label: 'Audience & Schedule', description: 'Visibility controls and timing' },
       { id: 'transactions', label: 'Data Entry', description: 'Balances, transactions, and mappings' },
       { id: 'attachments', label: 'Attachments', description: 'Invoice and reference files' },
@@ -3962,10 +4322,11 @@ export default function CaseFormPage({ params }) {
 
           <form onSubmit={handleSubmit} className="space-y-10">
             {activeStep === 0 ? <CaseBasicsStep basics={basics} /> : null}
-            {activeStep === 1 ? <AudienceScheduleStep audience={audience} /> : null}
-            {activeStep === 2 ? <TransactionsStep transactions={transactions} files={files} /> : null}
-            {activeStep === 3 ? <AttachmentsStep attachments={attachments} files={files} /> : null}
-            {activeStep === 4 ? (
+            {activeStep === 1 ? <InstructionStep instructionData={instructionData} /> : null}
+            {activeStep === 2 ? <AudienceScheduleStep audience={audience} /> : null}
+            {activeStep === 3 ? <TransactionsStep transactions={transactions} files={files} /> : null}
+            {activeStep === 4 ? <AttachmentsStep attachments={attachments} files={files} /> : null}
+            {activeStep === 5 ? (
               <AnswerKeyStep
                 disbursements={answerKey.disbursements}
                 onUpdate={answerKey.updateAnswerKeyForDisbursement}
@@ -3974,7 +4335,7 @@ export default function CaseFormPage({ params }) {
                 classificationOptions={answerKey.answerKeyClassificationOptions}
               />
             ) : null}
-            {activeStep === 5 ? (
+            {activeStep === 6 ? (
               <ReviewStep
                 summaryData={summaryData}
                 reviewChecklist={reviewChecklist}
@@ -4250,6 +4611,39 @@ const DisbursementItem = ({
     }
   };
 
+  const handleArrayFieldChange = (field, rawValue) => {
+    const parts = String(rawValue || '')
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    onChange(index, { ...item, [field]: parts });
+  };
+
+  const handleCheckboxChange = (field, checked) => {
+    onChange(index, { ...item, [field]: checked });
+  };
+
+  const handleValidatorChange = (field, value) => {
+    onChange(index, {
+      ...item,
+      validator: {
+        ...(item.validator || {}),
+        [field]: value,
+        config: { ...(item.validator?.config || {}) },
+      },
+    });
+  };
+
+  const handleValidatorConfigChange = (key, value) => {
+    onChange(index, {
+      ...item,
+      validator: {
+        ...(item.validator || {}),
+        config: { ...(item.validator?.config || {}), [key]: value },
+      },
+    });
+  };
+
   const handleGroundTruthChange = (field, value, { asNumber = false } = {}) => {
     const nextTruths = { ...(item.groundTruths || {}) };
     let normalizedValue = value;
@@ -4269,6 +4663,10 @@ const DisbursementItem = ({
   };
   const baseId = item._tempId || item.paymentId || `disbursement-${index}`;
   const mappings = item.mappings || [];
+  const requiredAssertionsInput = Array.isArray(item.requiredAssertions)
+    ? item.requiredAssertions.join(', ')
+    : '';
+  const errorReasonsInput = Array.isArray(item.errorReasons) ? item.errorReasons.join(', ') : '';
 
   const formatAmount = (value) => {
     const numberValue = Number(value);
@@ -4397,6 +4795,82 @@ const DisbursementItem = ({
 
       {expanded ? (
         <div className="space-y-4 border-t border-gray-100 p-4">
+          <div className="rounded-lg border border-gray-200 bg-white p-4">
+            <h4 className="text-sm font-semibold text-gray-800 mb-2">Trap & Assertions</h4>
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="flex flex-col text-sm font-medium text-gray-700">
+                <label className="mb-1 text-xs uppercase tracking-wide text-gray-500">Trap Type</label>
+                <Input
+                  value={item.trapType || ''}
+                  onChange={(event) => onChange(index, { ...item, trapType: event.target.value })}
+                  placeholder="e.g., cutoff, existence, classification"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  id={`${baseId}-shouldFlag`}
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                  checked={!!item.shouldFlag}
+                  onChange={(event) => handleCheckboxChange('shouldFlag', event.target.checked)}
+                />
+                <label htmlFor={`${baseId}-shouldFlag`} className="text-sm font-medium text-gray-700">
+                  Expected outcome is to flag as exception
+                </label>
+              </div>
+            </div>
+            <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
+              <div className="flex flex-col text-sm font-medium text-gray-700">
+                <label className="mb-1 text-xs uppercase tracking-wide text-gray-500">Required Assertions</label>
+                <Input
+                  value={requiredAssertionsInput}
+                  onChange={(event) => handleArrayFieldChange('requiredAssertions', event.target.value)}
+                  placeholder="Comma-separated (e.g., cutoff, completeness)"
+                />
+              </div>
+              <div className="flex flex-col text-sm font-medium text-gray-700">
+                <label className="mb-1 text-xs uppercase tracking-wide text-gray-500">Error Reasons</label>
+                <Input
+                  value={errorReasonsInput}
+                  onChange={(event) => handleArrayFieldChange('errorReasons', event.target.value)}
+                  placeholder="Comma-separated (e.g., date, amount, authorization)"
+                />
+              </div>
+            </div>
+            <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div className="flex flex-col text-sm font-medium text-gray-700">
+                <label className="mb-1 text-xs uppercase tracking-wide text-gray-500">Validator Type</label>
+                <Select
+                  value={item.validator?.type || ''}
+                  onChange={(event) => handleValidatorChange('type', event.target.value)}
+                  options={[
+                    { value: '', label: 'None (manual grading)' },
+                    { value: 'cutoff', label: 'Cutoff date check' },
+                    { value: 'match_amount', label: 'Amount match' },
+                  ]}
+                />
+              </div>
+              <div className="flex flex-col text-sm font-medium text-gray-700">
+                <label className="mb-1 text-xs uppercase tracking-wide text-gray-500">Validator Config: toleranceDays</label>
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  value={item.validator?.config?.toleranceDays ?? ''}
+                  onChange={(event) => handleValidatorConfigChange('toleranceDays', event.target.value)}
+                  placeholder="e.g., 5"
+                />
+              </div>
+              <div className="flex flex-col text-sm font-medium text-gray-700">
+                <label className="mb-1 text-xs uppercase tracking-wide text-gray-500">Validator Config: expectedStatus</label>
+                <Input
+                  value={item.validator?.config?.expectedStatus ?? ''}
+                  onChange={(event) => handleValidatorConfigChange('expectedStatus', event.target.value)}
+                  placeholder="e.g., cleared"
+                />
+              </div>
+            </div>
+          </div>
+
           <div className="rounded-lg border border-blue-100 bg-blue-50/40 p-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>

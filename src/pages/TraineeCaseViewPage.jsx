@@ -11,14 +11,22 @@ import { DEFAULT_AUDIT_AREA, AUDIT_AREAS } from '../models/caseConstants';
 import { currencyFormatter } from '../utils/formatters';
 import AuditItemCardFactory from '../components/trainee/AuditItemCardFactory';
 import CashReconciliationWorkbench from '../components/trainee/workspaces/CashReconciliationWorkbench';
+import WorkpaperRenderer from '../components/trainee/WorkpaperRenderer';
+import InstructionView from '../components/InstructionView';
 
 const FLOW_STEPS = Object.freeze({
+  INSTRUCTION: 'instruction',
   SELECTION: 'selection',
   TESTING: 'testing',
   RESULTS: 'results',
 });
 
-const DEFAULT_WORKFLOW = [FLOW_STEPS.SELECTION, FLOW_STEPS.TESTING, FLOW_STEPS.RESULTS];
+const DEFAULT_WORKFLOW = [
+  FLOW_STEPS.INSTRUCTION,
+  FLOW_STEPS.SELECTION,
+  FLOW_STEPS.TESTING,
+  FLOW_STEPS.RESULTS,
+];
 const EXCEPTION_CLASSIFICATION_KEYS = new Set(['improperlyIncluded', 'improperlyExcluded']);
 
 const isInlinePreviewable = (contentType, fileNameOrPath) => {
@@ -317,6 +325,19 @@ export default function TraineeCaseViewPage({ params }) {
 
   const auditArea =
     (typeof caseData?.auditArea === 'string' && caseData.auditArea.trim()) || DEFAULT_AUDIT_AREA;
+  const layoutType = useMemo(() => {
+    if (caseData?.workpaper?.layoutType) return caseData.workpaper.layoutType;
+    if (auditArea === AUDIT_AREAS.CASH) return 'cash_recon';
+    if (auditArea === AUDIT_AREAS.FIXED_ASSETS) return 'fixed_assets';
+    return 'two_pane';
+  }, [caseData, auditArea]);
+  const layoutConfig = useMemo(
+    () =>
+      caseData?.workpaper && typeof caseData.workpaper.layoutConfig === 'object'
+        ? caseData.workpaper.layoutConfig || {}
+        : {},
+    [caseData]
+  );
 
   useEffect(() => {
     if (auditArea === AUDIT_AREAS.CASH) {
@@ -364,12 +385,23 @@ export default function TraineeCaseViewPage({ params }) {
   );
 
   const workflow = useMemo(() => {
-    if (Array.isArray(caseData?.workflow) && caseData.workflow.length > 0) {
-      return caseData.workflow;
+    const rawWorkflow =
+      Array.isArray(caseData?.workflow) && caseData.workflow.length > 0
+        ? caseData.workflow
+        : DEFAULT_WORKFLOW;
+    const normalized = [];
+    const seen = new Set();
+    rawWorkflow.forEach((step) => {
+      if (!step || seen.has(step)) return;
+      seen.add(step);
+      normalized.push(step);
+    });
+    if (!seen.has(FLOW_STEPS.INSTRUCTION)) {
+      return [FLOW_STEPS.INSTRUCTION, ...normalized];
     }
-    return DEFAULT_WORKFLOW;
+    return normalized;
   }, [caseData]);
-  const firstWorkflowStep = useMemo(() => workflow[0] ?? FLOW_STEPS.SELECTION, [workflow]);
+  const firstWorkflowStep = useMemo(() => workflow[0] ?? FLOW_STEPS.INSTRUCTION, [workflow]);
   const resultsWorkflowStep = useMemo(() => {
     if (workflow.includes(FLOW_STEPS.RESULTS)) {
       return FLOW_STEPS.RESULTS;
@@ -455,6 +487,55 @@ export default function TraineeCaseViewPage({ params }) {
     },
     [classificationFields, classificationKeySet, normalizeAllocationShape, parseAmount]
   );
+
+  const deriveImmediateFeedbackForItem = useCallback((disbursement) => {
+    const messages = [];
+    if (!disbursement) return messages;
+
+    const validatorType = disbursement.validator?.type;
+    const config = disbursement.validator?.config || {};
+
+    if (validatorType === 'cutoff') {
+      const serviceEndRaw = disbursement.groundTruths?.servicePeriodEnd || disbursement.groundTruths?.invoiceDate;
+      const paymentDateRaw = disbursement.paymentDate;
+      if (serviceEndRaw && paymentDateRaw) {
+        const serviceDate = new Date(serviceEndRaw);
+        const paymentDate = new Date(paymentDateRaw);
+        if (!Number.isNaN(serviceDate.getTime()) && !Number.isNaN(paymentDate.getTime())) {
+          const diffDays = Math.round((paymentDate.getTime() - serviceDate.getTime()) / (1000 * 60 * 60 * 24));
+          const toleranceDays = Number(config.toleranceDays) || 0;
+          if (diffDays > toleranceDays) {
+            messages.push(
+              `Service ended ${diffDays} day${diffDays === 1 ? '' : 's'} before the recorded date — revisit cutoff.`
+            );
+          }
+        }
+      }
+    } else if (validatorType === 'match_amount') {
+      const expected = Number(disbursement.groundTruths?.confirmedValue || disbursement.amount);
+      const recorded = Number(disbursement.amount);
+      if (Number.isFinite(expected) && Number.isFinite(recorded)) {
+        const delta = Math.abs(expected - recorded);
+        const threshold = Number(config.tolerance || 0);
+        if (delta > threshold) {
+          messages.push(`Amount differs from evidence by ${currencyFormatter.format(delta)} — investigate the variance.`);
+        }
+      }
+    }
+
+    const invoiceDateRaw = disbursement.groundTruths?.invoiceDate;
+    const paymentDateRaw = disbursement.paymentDate;
+    if (invoiceDateRaw && paymentDateRaw) {
+      const invoiceDate = new Date(invoiceDateRaw);
+      const paymentDate = new Date(paymentDateRaw);
+      if (!Number.isNaN(invoiceDate.getTime()) && !Number.isNaN(paymentDate.getTime())) {
+        if (invoiceDate.getTime() > paymentDate.getTime()) {
+          messages.push('Invoice date is after book date — check if support is misdated.');
+        }
+      }
+    }
+    return messages;
+  }, [currencyFormatter]);
 
   const isAllocationComplete = useCallback(
     (disbursement, allocation) => {
@@ -1292,6 +1373,17 @@ export default function TraineeCaseViewPage({ params }) {
     }));
   }, []);
 
+  const handleRationaleSelection = useCallback((paymentId, field, value) => {
+    if (!paymentId || !field) return;
+    setWorkspaceNotes((prev) => ({
+      ...prev,
+      [paymentId]: {
+        ...(prev[paymentId] || {}),
+        [field]: value,
+      },
+    }));
+  }, []);
+
   const handleNoteChange = useCallback(
     (paymentId, noteText) => {
       if (isLocked) return;
@@ -1836,6 +1928,7 @@ export default function TraineeCaseViewPage({ params }) {
 
     const allocationPayload = {};
     const invalidAllocations = [];
+    const missingRationale = [];
     if (exceptionNoteRequiredIds.length > 0) {
       showModal(
         `Please add supporting notes for the following disbursements before submitting: ${exceptionNoteRequiredIds.join(
@@ -1852,6 +1945,16 @@ export default function TraineeCaseViewPage({ params }) {
         invalidAllocations.push(disbursement.paymentId);
         return;
       }
+      const requiresAssertions =
+        Array.isArray(disbursement.requiredAssertions) && disbursement.requiredAssertions.length > 0;
+      const requiresReasons = Array.isArray(disbursement.errorReasons) && disbursement.errorReasons.length > 0;
+      const rationale = workspaceNotes[disbursement.paymentId] || {};
+      if (requiresAssertions && !rationale.assertionSelection) {
+        missingRationale.push(disbursement.paymentId);
+      }
+      if (requiresReasons && !rationale.reasonSelection) {
+        missingRationale.push(disbursement.paymentId);
+      }
       const totals = computeAllocationTotals(disbursement, allocation);
       const entry = {};
       classificationFields.forEach(({ key }) => {
@@ -1867,6 +1970,13 @@ export default function TraineeCaseViewPage({ params }) {
           ', '
         )}.`,
         'Incomplete Classification'
+      );
+      return;
+    }
+    if (missingRationale.length > 0) {
+      showModal(
+        `Select an assertion and reason for: ${Array.from(new Set(missingRationale)).join(', ')}.`,
+        'Rationale Required'
       );
       return;
     }
@@ -2557,6 +2667,19 @@ export default function TraineeCaseViewPage({ params }) {
     );
   };
 
+  const renderInstructionStep = () => {
+    const instructionData = caseData?.instruction || {};
+    return (
+      <InstructionView
+        instructionData={instructionData}
+        onStartSimulation={() => {
+          setActiveStep(FLOW_STEPS.SELECTION);
+          enqueueProgressSave(FLOW_STEPS.SELECTION);
+        }}
+      />
+    );
+  };
+
   const renderSelectionStep = () => (
     auditArea === AUDIT_AREAS.FIXED_ASSETS ? (
       renderFixedAssetSelectionStep()
@@ -3058,11 +3181,51 @@ export default function TraineeCaseViewPage({ params }) {
     );
   };
 
-  const renderTestingStep = () => {
-    if (auditArea === AUDIT_AREAS.FIXED_ASSETS) {
-      return renderFixedAssetTestingStep();
-    }
-    const isCashCase = auditArea === AUDIT_AREAS.CASH;
+  const renderCashTestingStep = () => (
+    <div className="space-y-6">
+      <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-3">
+        <div>
+          <h2 className="text-2xl font-semibold text-gray-800">Step 2 — Classify Results</h2>
+          <p className="text-sm text-gray-500">{testingIntro}</p>
+        </div>
+      </div>
+      <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-4">
+        <CashReconciliationWorkbench
+          ledgerItems={cashOutstandingList}
+          cutoffItems={cashCutoffList}
+          artifacts={cashArtifacts}
+          cashContext={caseData?.cashContext || {}}
+          classificationAmounts={classificationAmounts}
+          links={cashLinkMap}
+          adjustments={cashAdjustments}
+          summaryDraft={cashSummaryDraft}
+          onUpdateStatus={handleCashStatusUpdate}
+          onLinkChange={handleCashLinkChange}
+          onVarianceChange={(ready) => setCashCanSubmit(ready)}
+          onProposeAdjustment={handleCashAdjustmentCreation}
+          onSummaryChange={handleCashSummaryChange}
+          isLocked={isLocked}
+        />
+      </div>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-2">
+        <Button variant="secondary" onClick={() => setActiveStep(firstWorkflowStep)} disabled={isLocked}>
+          Back to Selection
+        </Button>
+        <Button onClick={handleSubmitTesting} disabled={isLocked || !cashCanSubmit}>
+          <Send size={18} className="inline mr-2" /> Submit Responses
+        </Button>
+      </div>
+    </div>
+  );
+
+  const renderTwoPaneTestingStep = () => {
+    const showEvidencePanels = layoutConfig.showEvidence !== false;
+    const showWorkPanels = layoutConfig.showWork !== false;
+    const showReferenceBanner = layoutConfig.hideReferenceBanner ? false : true;
+    const showImmediateFeedback = layoutConfig.showImmediateFeedback !== false;
+    const evidenceOnLeft =
+      layoutConfig.evidencePosition === 'left' || layoutConfig.evidencePosition === undefined || layoutConfig.evidencePosition === null;
+
     const missingDocuments = selectedEvidenceItems.filter(
       (item) => !item?.hasLinkedDocument && !isEvidenceWorkflowLinked(item.paymentId)
     );
@@ -3073,9 +3236,7 @@ export default function TraineeCaseViewPage({ params }) {
         <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-3">
           <div>
             <h2 className="text-2xl font-semibold text-gray-800">Step 2 — Classify Results</h2>
-            <p className="text-sm text-gray-500">
-              {testingIntro}
-            </p>
+            <p className="text-sm text-gray-500">{testingIntro}</p>
           </div>
           {missingPaymentIds.length > 0 ? (
             <div className="border border-amber-300 bg-amber-50 text-amber-800 text-sm rounded-md px-4 py-3">
@@ -3088,7 +3249,7 @@ export default function TraineeCaseViewPage({ params }) {
           ) : null}
         </div>
 
-        {selectedIds.length === 0 && !isCashCase ? (
+        {selectedIds.length === 0 ? (
           <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 text-sm text-gray-600">
             You do not have any disbursements selected. Return to the selection step to add them before testing.
             <div className="mt-4">
@@ -3097,81 +3258,130 @@ export default function TraineeCaseViewPage({ params }) {
               </Button>
             </div>
           </div>
-        ) : isCashCase ? (
-          <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-4">
-            <CashReconciliationWorkbench
-              ledgerItems={cashOutstandingList}
-              cutoffItems={cashCutoffList}
-              artifacts={cashArtifacts}
-              cashContext={caseData?.cashContext || {}}
-              classificationAmounts={classificationAmounts}
-              links={cashLinkMap}
-              adjustments={cashAdjustments}
-              summaryDraft={cashSummaryDraft}
-              onUpdateStatus={handleCashStatusUpdate}
-              onLinkChange={handleCashLinkChange}
-              onVarianceChange={(ready) => setCashCanSubmit(ready)}
-              onProposeAdjustment={handleCashAdjustmentCreation}
-              onSummaryChange={handleCashSummaryChange}
-              isLocked={isLocked}
-            />
-          </div>
         ) : (
           <>
-            {renderReferenceDownloadsBanner()}
-            <div className="grid gap-6 md:grid-cols-2">
-              {renderEvidenceList(selectedEvidenceItems)}
-              {renderEvidenceViewer(selectedEvidenceItems)}
-            </div>
-
-            <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
-              <h3 className="text-xl font-semibold text-gray-800 mb-4">Allocate Each Disbursement</h3>
-              {exceptionNoteRequiredIds.length > 0 ? (
-                <div className="mb-4 border border-amber-300 bg-amber-50 text-amber-800 text-sm rounded-md px-4 py-3">
-                  <p className="font-semibold">Notes required for proposed adjustments.</p>
-                  <p className="mt-1">
-                    Add workpaper notes for:{' '}
-                    <span className="font-medium">{exceptionNoteRequiredIds.join(', ')}</span> before submitting.
-                  </p>
-                </div>
-              ) : null}
-              <div className="space-y-4">
-                {selectedDisbursementDetails.map((item) => {
-                  const allocation = normalizeAllocationShape(
-                    classificationAmounts[item.paymentId] || createEmptyAllocation()
-                  );
-                  const totals = computeAllocationTotals(item, allocation);
-                  const totalEntered = classificationFields.reduce((sum, { key }) => {
-                    const value = totals[key];
-                    return sum + (Number.isFinite(value) ? value : 0);
-                  }, 0);
-                  const amountNumber = Number(item.amount) || 0;
-                  const totalsMatch = Math.abs(totalEntered - amountNumber) <= 0.01;
-                  const itemId = item.id || item.paymentId;
-
-                  return (
-                    <AuditItemCardFactory
-                      key={itemId}
-                      item={{ ...item, id: itemId }}
-                      allocation={allocation}
-                      classificationFields={classificationFields}
-                      splitAllocationHint={splitAllocationHint}
-                      singleAllocationHint={singleAllocationHint}
-                      isLocked={isLocked}
-                      onSplitToggle={handleSplitToggle}
-                      onClassificationChange={handleSingleClassificationChange}
-                      onSplitAmountChange={handleSplitAmountChange}
-                      totalEntered={totalEntered}
-                      totalsMatch={totalsMatch}
-                      pdfViewerState={pdfViewerState}
-                      onUpdate={handleWorkspaceUpdate}
-                      onNoteChange={handleNoteChange}
-                      workspaceState={workspaceNotes[itemId]}
-                    />
-                  );
-                })}
+            {showReferenceBanner ? renderReferenceDownloadsBanner() : null}
+            {showEvidencePanels ? (
+              <div className="grid gap-6 md:grid-cols-2">
+                {evidenceOnLeft ? (
+                  <>
+                    {renderEvidenceList(selectedEvidenceItems)}
+                    {renderEvidenceViewer(selectedEvidenceItems)}
+                  </>
+                ) : (
+                  <>
+                    {renderEvidenceViewer(selectedEvidenceItems)}
+                    {renderEvidenceList(selectedEvidenceItems)}
+                  </>
+                )}
               </div>
-            </div>
+            ) : null}
+
+            {showWorkPanels ? (
+              <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
+                <h3 className="text-xl font-semibold text-gray-800 mb-4">Allocate Each Disbursement</h3>
+                {exceptionNoteRequiredIds.length > 0 ? (
+                  <div className="mb-4 border border-amber-300 bg-amber-50 text-amber-800 text-sm rounded-md px-4 py-3">
+                    <p className="font-semibold">Notes required for proposed adjustments.</p>
+                    <p className="mt-1">
+                      Add workpaper notes for:{' '}
+                      <span className="font-medium">{exceptionNoteRequiredIds.join(', ')}</span> before submitting.
+                    </p>
+                  </div>
+                ) : null}
+                <div className="space-y-4">
+                  {selectedDisbursementDetails.map((item) => {
+                    const allocation = normalizeAllocationShape(
+                      classificationAmounts[item.paymentId] || createEmptyAllocation()
+                    );
+                    const totals = computeAllocationTotals(item, allocation);
+                    const totalEntered = classificationFields.reduce((sum, { key }) => {
+                      const value = totals[key];
+                      return sum + (Number.isFinite(value) ? value : 0);
+                    }, 0);
+                    const amountNumber = Number(item.amount) || 0;
+                    const totalsMatch = Math.abs(totalEntered - amountNumber) <= 0.01;
+                    const itemId = item.id || item.paymentId;
+                    const immediateFeedback = deriveImmediateFeedbackForItem(item);
+
+                    return (
+                      <div key={itemId} className="space-y-2">
+                        {showImmediateFeedback && immediateFeedback.length > 0 ? (
+                          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                            {immediateFeedback.map((msg, idx) => (
+                              <p key={`${itemId}-feedback-${idx}`}>{msg}</p>
+                            ))}
+                          </div>
+                        ) : null}
+                        {(Array.isArray(item.requiredAssertions) && item.requiredAssertions.length > 0) ||
+                        (Array.isArray(item.errorReasons) && item.errorReasons.length > 0) ? (
+                          <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-3 text-xs text-blue-900 space-y-2">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-blue-700">
+                              Rationale (Assertion & Reason)
+                            </p>
+                            {Array.isArray(item.requiredAssertions) && item.requiredAssertions.length > 0 ? (
+                              <label className="flex flex-col gap-1">
+                                <span>Select assertion</span>
+                                <select
+                                  className="rounded-md border border-blue-200 p-1 text-sm"
+                                  value={workspaceNotes[itemId]?.assertionSelection || ''}
+                                  onChange={(event) =>
+                                    handleRationaleSelection(itemId, 'assertionSelection', event.target.value)
+                                  }
+                                >
+                                  <option value="">Choose assertion…</option>
+                                  {item.requiredAssertions.map((assertion) => (
+                                    <option key={assertion} value={assertion}>
+                                      {assertion}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                            ) : null}
+                            {Array.isArray(item.errorReasons) && item.errorReasons.length > 0 ? (
+                              <label className="flex flex-col gap-1">
+                                <span>Select reason</span>
+                                <select
+                                  className="rounded-md border border-blue-200 p-1 text-sm"
+                                  value={workspaceNotes[itemId]?.reasonSelection || ''}
+                                  onChange={(event) =>
+                                    handleRationaleSelection(itemId, 'reasonSelection', event.target.value)
+                                  }
+                                >
+                                  <option value="">Choose reason…</option>
+                                  {item.errorReasons.map((reason) => (
+                                    <option key={reason} value={reason}>
+                                      {reason}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        <AuditItemCardFactory
+                          item={{ ...item, id: itemId }}
+                          allocation={allocation}
+                          classificationFields={classificationFields}
+                          splitAllocationHint={splitAllocationHint}
+                          singleAllocationHint={singleAllocationHint}
+                          isLocked={isLocked}
+                          onSplitToggle={handleSplitToggle}
+                          onClassificationChange={handleSingleClassificationChange}
+                          onSplitAmountChange={handleSplitAmountChange}
+                          totalEntered={totalEntered}
+                          totalsMatch={totalsMatch}
+                          pdfViewerState={pdfViewerState}
+                          onUpdate={handleWorkspaceUpdate}
+                          onNoteChange={handleNoteChange}
+                          workspaceState={workspaceNotes[itemId]}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            ) : null}
 
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-2">
               <Button variant="secondary" onClick={() => setActiveStep(firstWorkflowStep)} disabled={isLocked}>
@@ -3179,12 +3389,7 @@ export default function TraineeCaseViewPage({ params }) {
               </Button>
               <Button
                 onClick={handleSubmitTesting}
-                disabled={
-                  isLocked ||
-                  exceptionNoteRequiredIds.length > 0 ||
-                  (!isCashCase && !allClassified) ||
-                  (isCashCase && !cashCanSubmit)
-                }
+                disabled={isLocked || exceptionNoteRequiredIds.length > 0 || !allClassified}
               >
                 <Send size={18} className="inline mr-2" /> Submit Responses
               </Button>
@@ -3192,6 +3397,23 @@ export default function TraineeCaseViewPage({ params }) {
           </>
         )}
       </div>
+    );
+  };
+
+  const renderTestingStep = () => {
+    const renderers = {
+      fixed_assets: renderFixedAssetTestingStep,
+      cash_recon: renderCashTestingStep,
+      two_pane: renderTwoPaneTestingStep,
+    };
+
+    return (
+      <WorkpaperRenderer
+        layoutType={layoutType}
+        layoutConfig={layoutConfig}
+        renderers={renderers}
+        fallbackRenderer={renderTwoPaneTestingStep}
+      />
     );
   };
 
@@ -3510,7 +3732,9 @@ export default function TraineeCaseViewPage({ params }) {
   };
 
   let stepContent = null;
-  if (activeStep === FLOW_STEPS.SELECTION) {
+  if (activeStep === FLOW_STEPS.INSTRUCTION) {
+    stepContent = renderInstructionStep();
+  } else if (activeStep === FLOW_STEPS.SELECTION) {
     stepContent = renderSelectionStep();
   } else if (activeStep === FLOW_STEPS.TESTING) {
     stepContent = renderTestingStep();

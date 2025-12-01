@@ -1,4 +1,4 @@
-import { DEFAULT_AUDIT_AREA, DEFAULT_ITEM_TYPE } from './caseConstants';
+import { DEFAULT_AUDIT_AREA, DEFAULT_ITEM_TYPE, AUDIT_AREAS } from './caseConstants';
 
 /**
  * @typedef {import('firebase/firestore').Timestamp} FirestoreTimestamp
@@ -43,14 +43,18 @@ import { DEFAULT_AUDIT_AREA, DEFAULT_ITEM_TYPE } from './caseConstants';
  * @property {string} [description]
  * @property {string} [notes]
  * @property {Record<string, any>} [meta]
+ * @property {string} [trapType]
  * @property {AuditEvidencePoint[]} [evidencePoints]
  * @property {string} [auditArea]
  * @property {string[]} [requiredAssertions]
+ * @property {string[]} [errorReasons]
+ * @property {boolean} [shouldFlag]
  * @property {'low' | 'medium' | 'high'} [riskLevel]
  * @property {{ allowVouching?: boolean, allowTracing?: boolean }} [directionalFlags]
  * @property {boolean} [hasAnswerKey]
  * @property {GroundTruths} [groundTruths]
- */
+ * @property {{ type?: string, config?: Record<string, any> }} [validator] - client-side validation rule
+*/
 
 /**
  * @typedef {Object} CaseReferenceDocument
@@ -58,6 +62,22 @@ import { DEFAULT_AUDIT_AREA, DEFAULT_ITEM_TYPE } from './caseConstants';
  * @property {string|null} [storagePath]
  * @property {string|null} [downloadURL]
  * @property {string|null} [contentType]
+ */
+
+/**
+ * @typedef {Object} CaseInstruction
+ * @property {string} title
+ * @property {string} moduleCode
+ * @property {{ headline: string, body: string, risk: string }} hook
+ * @property {{ type: 'VIDEO'|'IMAGE', source_id?: string, url?: string }} visualAsset
+ * @property {{ rule_text: string, reminder?: string }} heuristic
+ * @property {{ question: string, options: Array<{ id: string, text: string, correct: boolean }>, success_message?: string, failure_message?: string }} gateCheck
+ */
+
+/**
+ * @typedef {Object} CaseWorkpaper
+ * @property {string} [layoutType]
+ * @property {Record<string, any>} [layoutConfig]
  */
 
 /**
@@ -77,6 +97,8 @@ import { DEFAULT_AUDIT_AREA, DEFAULT_ITEM_TYPE } from './caseConstants';
  * @property {CaseReferenceDocument[]} [referenceDocuments]
  * @property {string} auditArea
  * @property {string|null} [caseGroupId]
+ * @property {CaseWorkpaper} [workpaper]
+ * @property {CaseInstruction} [instruction]
  */
 
 export {}; // eslint-disable-line
@@ -147,9 +169,34 @@ export const toCaseModel = (id, data) => {
       typeof sanitizedCase?.caseGroupId === 'string' && sanitizedCase.caseGroupId.trim()
         ? sanitizedCase.caseGroupId.trim()
         : null,
+    workpaper:
+      sanitizedCase?.workpaper && typeof sanitizedCase.workpaper === 'object'
+        ? {
+            ...sanitizedCase.workpaper,
+            layoutType:
+              sanitizedCase.workpaper.layoutType ||
+              (sanitizedCase?.auditArea === AUDIT_AREAS.CASH
+                ? 'cash_recon'
+                : sanitizedCase?.auditArea === AUDIT_AREAS.FIXED_ASSETS
+                ? 'fixed_assets'
+                : 'two_pane'),
+            layoutConfig:
+              sanitizedCase.workpaper.layoutConfig && typeof sanitizedCase.workpaper.layoutConfig === 'object'
+                ? sanitizedCase.workpaper.layoutConfig
+                : {},
+          }
+        : {
+            layoutType:
+              sanitizedCase?.auditArea === AUDIT_AREAS.CASH
+                ? 'cash_recon'
+                : sanitizedCase?.auditArea === AUDIT_AREAS.FIXED_ASSETS
+                ? 'fixed_assets'
+                : 'two_pane',
+            layoutConfig: {},
+          },
     workflow:
       Array.isArray(sanitizedCase?.workflow) && sanitizedCase.workflow.length > 0
         ? sanitizedCase.workflow
-        : ['selection', 'testing', 'results'],
+        : ['instruction', 'selection', 'testing', 'results'],
   };
 };
