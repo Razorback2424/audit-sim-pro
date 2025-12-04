@@ -89,8 +89,8 @@ export const FirestorePaths = {
   USER_PROFILE: (userId) => `artifacts/${appId}/users/${userId}/userProfileData/profile`,
   CASES_COLLECTION: () => `artifacts/${appId}/public/data/cases`,
   CASE_DOCUMENT: (caseId) => `artifacts/${appId}/public/data/cases/${caseId}`,
-  CASE_KEYS_COLLECTION: () => `artifacts/${appId}/private/case_keys`,
-  CASE_KEYS_DOCUMENT: (caseId) => `artifacts/${appId}/private/case_keys/${caseId}`,
+  CASE_KEYS_COLLECTION: () => `artifacts/${appId}/private/data/case_keys`,
+  CASE_KEYS_DOCUMENT: (caseId) => `artifacts/${appId}/private/data/case_keys/${caseId}`,
   USERS_COLLECTION: () => `artifacts/${appId}/users`,
   USER_SUBMISSIONS_COLLECTION: (appIdValue, userId) =>
     `artifacts/${appIdValue}/users/${userId}/caseSubmissions`,

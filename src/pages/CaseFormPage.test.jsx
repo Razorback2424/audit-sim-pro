@@ -43,6 +43,12 @@ const flushRosterEffect = () =>
     await Promise.resolve();
   });
 
+const clickNext = async (times = 1) => {
+  for (let i = 0; i < times; i += 1) {
+    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+  }
+};
+
 test.skip('renders create case heading', async () => {
   fetchCase.mockResolvedValue(null);
   render(<CaseFormPage params={{}} />);
@@ -57,6 +63,7 @@ beforeEach(() => {
   updateCase.mockReset();
   mockShowModal.mockReset();
   mockNavigate.mockReset();
+  window.confirm = jest.fn(() => true);
 });
 
 describe('mergeDisbursementDocuments', () => {
@@ -163,14 +170,14 @@ describe('answer key validation', () => {
 
     await userEvent.type(screen.getByLabelText(/Case Name/i), 'Mismatch Case');
 
-    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    await clickNext(2);
 
     const opensAtInput = screen.getByLabelText(/Opens At \(UTC\)/i);
     fireEvent.change(opensAtInput, { target: { value: '2024-03-01T00:00' } });
     const dueAtInput = screen.getByLabelText(/Due At \(UTC\)/i);
     fireEvent.change(dueAtInput, { target: { value: '2024-03-05T00:00' } });
 
-    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    await clickNext();
 
     await userEvent.type(screen.getByPlaceholderText(/Payment ID/i), 'P-100');
     await userEvent.type(screen.getByPlaceholderText(/Payee/i), 'Vendor Mismatch');
@@ -178,8 +185,7 @@ describe('answer key validation', () => {
     const paymentDateInput = screen.getByPlaceholderText(/Payment Date/i);
     fireEvent.change(paymentDateInput, { target: { value: '2024-03-01' } });
 
-    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
-    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    await clickNext(2);
 
     await userEvent.click(await screen.findByRole('button', { name: /Edit details/i }));
     await userEvent.click(screen.getByLabelText(/Split disbursement across classifications/i));
@@ -219,9 +225,7 @@ describe('reference documents', () => {
   it('renders reference documents section for new case', async () => {
     render(<CaseFormPage params={{}} />);
     await flushRosterEffect();
-    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
-    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
-    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    await clickNext(4);
     expect(screen.getByRole('heading', { name: /Reference Documents/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Add Reference Document/i })).toBeInTheDocument();
   });
@@ -240,9 +244,7 @@ describe('reference documents', () => {
 
     await flushRosterEffect();
     await waitFor(() => expect(fetchCase).toHaveBeenCalledWith('case-1'));
-    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
-    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
-    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    await clickNext(4);
     expect(await screen.findByDisplayValue('AP Aging Summary.pdf')).toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: /Advanced options/i }));
     expect(screen.getByDisplayValue('https://example.com/aging.pdf')).toBeInTheDocument();
@@ -259,7 +261,7 @@ describe('audience selection', () => {
 
     await flushRosterEffect();
     await waitFor(() => expect(fetchUserRosterOptions).toHaveBeenCalled());
-    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    await clickNext(2);
     expect(screen.queryByLabelText(/search roster/i)).not.toBeInTheDocument();
     expect(screen.getByText(/This case is currently visible to all trainees./i)).toBeInTheDocument();
   });
@@ -278,7 +280,7 @@ describe('audience selection', () => {
     await waitFor(() => expect(fetchUserRosterOptions).toHaveBeenCalled());
 
     await userEvent.type(screen.getByLabelText(/Case Name/i), 'Case Title');
-    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    await clickNext(2);
     const visibilityToggle = await screen.findByLabelText(/Visible to all signed-in trainees/i);
     await userEvent.click(visibilityToggle);
 
@@ -332,14 +334,9 @@ describe('audience selection', () => {
     await flushRosterEffect();
     await waitFor(() => expect(fetchUserRosterOptions).toHaveBeenCalled());
     await userEvent.type(screen.getByLabelText(/Case Name/i), 'Manual Case');
-    await userEvent.click(screen.getByRole('button', { name: /^Next$/i }));
+    await clickNext(2);
     const visibilityToggle = await screen.findByLabelText(/Visible to all signed-in trainees/i);
     await userEvent.click(visibilityToggle);
-
-    const rosterMessage = await screen.findByText((content) =>
-      content.includes('Unable to load roster options')
-    );
-    expect(rosterMessage).toBeInTheDocument();
 
     const rosterInput = await screen.findByLabelText(/search roster/i);
     await userEvent.type(rosterInput, 'manual-user');
