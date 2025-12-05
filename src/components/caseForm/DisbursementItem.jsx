@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, PlusCircle, Trash2 } from 'lucide-react';
 import { Input, Button, Select } from '../../AppCore';
 import { AUDIT_AREAS } from '../../models/caseConstants';
@@ -7,6 +7,7 @@ import {
   buildSingleAnswerKey,
   extractAnswerKeyMeta,
 } from '../../utils/caseFormHelpers';
+import { TAG_FIELDS, normalizeTagInput } from '../../services/tagService';
 
 const InvoiceMappingInline = ({ mapping, disbursementTempId, onRemove, onFileSelect, acceptValue }) => {
   const fileInputId = `mapping-file-${mapping._tempId}`;
@@ -81,6 +82,161 @@ const InvoiceMappingInline = ({ mapping, disbursementTempId, onRemove, onFileSel
   );
 };
 
+const CreatableMultiTagSelect = ({
+  id,
+  values,
+  options,
+  placeholder,
+  onChange,
+  onCreate,
+  field,
+  label,
+  single = false,
+}) => {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const normalizedOptions = useMemo(() => (Array.isArray(options) ? options : []), [options]);
+  const selectedValues = useMemo(() => (Array.isArray(values) ? values : []), [values]);
+  const selectedSet = useMemo(() => new Set(selectedValues.map((val) => val.toLowerCase())), [selectedValues]);
+
+  const filtered = useMemo(() => {
+    const trimmed = query.trim().toLowerCase();
+    return normalizedOptions
+      .filter((option) => !selectedSet.has(option.toLowerCase()))
+      .filter((option) => !trimmed || option.toLowerCase().includes(trimmed))
+      .slice(0, 8);
+  }, [normalizedOptions, query, selectedSet]);
+
+  const requestCreate = async (tagValue) => {
+    if (typeof onCreate !== 'function') return tagValue;
+    const confirmCreate = window.confirm(
+      `Create new global tag "${tagValue}"? This will be available to all instructors.`
+    );
+    if (!confirmCreate) return null;
+    setCreating(true);
+    try {
+      const createdTag = await onCreate(field, tagValue);
+      return createdTag || tagValue;
+    } catch (err) {
+      console.error(`[${label || 'tag'}] Failed to create tag`, err);
+      return null;
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const addTag = async (rawValue) => {
+    const { resolved, matchedExisting } = normalizeTagInput(rawValue, normalizedOptions);
+    if (!resolved) return;
+    const lowerResolved = resolved.toLowerCase();
+    const alreadySelected = selectedSet.has(lowerResolved);
+    const nextBase = single ? [] : selectedValues;
+    if (alreadySelected) {
+      setQuery('');
+      setOpen(false);
+      return;
+    }
+    if (matchedExisting) {
+      onChange([...nextBase, matchedExisting]);
+      setQuery('');
+      setOpen(false);
+      return;
+    }
+    const createdTag = await requestCreate(resolved);
+    if (createdTag) {
+      onChange([...nextBase, createdTag]);
+      setQuery('');
+      setOpen(false);
+    }
+  };
+
+  const removeTag = (tag) => {
+    onChange(selectedValues.filter((item) => item !== tag));
+  };
+
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-2 rounded-md border border-gray-300 px-2 py-2 focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-200">
+        {selectedValues.map((tag) => (
+          <span
+            key={tag}
+            className="flex items-center gap-1 rounded-full bg-blue-50 px-2 py-1 text-xs text-blue-700"
+          >
+            <span>{tag}</span>
+            <button
+              type="button"
+              className="text-blue-600 hover:text-blue-800"
+              aria-label={`Remove ${tag}`}
+              onClick={() => removeTag(tag)}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+        <input
+          id={id}
+          value={query}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              addTag(query);
+            }
+            if (event.key === ',' && query.trim()) {
+              event.preventDefault();
+              addTag(query);
+            }
+            if (event.key === 'Backspace' && !query && selectedValues.length > 0) {
+              removeTag(selectedValues[selectedValues.length - 1]);
+            }
+          }}
+          placeholder={selectedValues.length === 0 ? placeholder : ''}
+          className="flex-1 border-none bg-transparent text-sm text-gray-700 outline-none"
+          aria-autocomplete="list"
+          role="combobox"
+          aria-haspopup="listbox"
+          aria-expanded={open}
+          aria-controls={`${id}-options`}
+        />
+      </div>
+      {creating ? <p className="mt-1 text-xs text-gray-500">Saving new tag…</p> : null}
+      {open ? (
+        <ul
+          id={`${id}-options`}
+          role="listbox"
+          className="relative z-10 mt-1 max-h-48 overflow-auto rounded-md border border-gray-200 bg-white shadow-lg"
+        >
+          {filtered.length > 0 ? (
+            filtered.map((option) => (
+              <li key={option}>
+                <button
+                  type="button"
+                  className="flex w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-blue-50"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => addTag(option)}
+                >
+                  {option}
+                </button>
+              </li>
+            ))
+          ) : (
+            <li className="px-3 py-2 text-sm text-gray-500">No matches. Press Enter to create.</li>
+          )}
+          <li className="px-3 py-2 text-xs text-gray-500">
+            Press Enter to select or create “{query.trim() || '…'}”.
+          </li>
+        </ul>
+      ) : null}
+    </div>
+  );
+};
+
 const DisbursementItem = ({
   item,
   index,
@@ -95,6 +251,9 @@ const DisbursementItem = ({
   maxUploadBytes,
   prettySupportedLabels,
   standardAssertions,
+  availableSkillTags = [],
+  availableErrorReasons = [],
+  onAddGlobalTag,
 }) => {
   const isCash = auditArea === AUDIT_AREAS.CASH;
   const isNewItem = !item.paymentId && !item.payee && !item.amount && !item.paymentDate;
@@ -122,25 +281,23 @@ const DisbursementItem = ({
     }
   };
 
-  const handleArrayFieldChange = (field, rawValue) => {
-    const parts = String(rawValue || '')
-      .split(',')
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-    onChange(index, { ...item, [field]: parts });
-  };
-
   const handleCheckboxChange = (field, checked) => {
     onChange(index, { ...item, [field]: checked });
   };
 
   const handleValidatorChange = (field, value) => {
+    const nextConfig = { ...(item.validator?.config || {}) };
+    if (field === 'type') {
+      if (value === 'cutoff') {
+        nextConfig.toleranceDays = 0;
+      }
+    }
     onChange(index, {
       ...item,
       validator: {
         ...(item.validator || {}),
         [field]: value,
-        config: { ...(item.validator?.config || {}) },
+        config: nextConfig,
       },
     });
   };
@@ -174,9 +331,15 @@ const DisbursementItem = ({
   };
   const baseId = item._tempId || item.paymentId || `disbursement-${index}`;
   const mappings = item.mappings || [];
-  const errorReasonsInput = Array.isArray(item.errorReasons) ? item.errorReasons.join(', ') : '';
+  const errorReasonValues = Array.isArray(item.errorReasons) ? item.errorReasons : [];
+  const skillCategoryValues = Array.isArray(item.trapType)
+    ? item.trapType
+    : item.trapType
+    ? [item.trapType]
+    : [];
   const hasAdvancedData =
-    !!item.trapType ||
+    (Array.isArray(skillCategoryValues) && skillCategoryValues.length > 0) ||
+    (Array.isArray(item.correctAssertions) && item.correctAssertions.length > 0) ||
     (Array.isArray(item.requiredAssertions) && item.requiredAssertions.length > 0) ||
     !!item.validator?.type ||
     !!item.groundTruths;
@@ -186,8 +349,12 @@ const DisbursementItem = ({
     setShowTrapLogic(hasAdvancedData);
   }, [hasAdvancedData]);
 
-  const toggleAssertion = (assertionLabel) => {
-    const currentList = Array.isArray(item.requiredAssertions) ? item.requiredAssertions : [];
+  const toggleCorrectAssertion = (assertionLabel) => {
+    const currentList = Array.isArray(item.correctAssertions)
+      ? item.correctAssertions
+      : Array.isArray(item.requiredAssertions)
+      ? item.requiredAssertions
+      : [];
     let newList;
 
     if (currentList.includes(assertionLabel)) {
@@ -196,7 +363,22 @@ const DisbursementItem = ({
       newList = [...currentList, assertionLabel];
     }
 
-    onChange(index, { ...item, requiredAssertions: newList });
+    onChange(index, { ...item, correctAssertions: newList, requiredAssertions: newList });
+  };
+
+  const handleCreateGlobalTag = async (field, value) => {
+    if (typeof onAddGlobalTag !== 'function') {
+      return value;
+    }
+    return onAddGlobalTag({ field, value });
+  };
+
+  const handleSkillCategoryChange = (values) => {
+    onChange(index, { ...item, trapType: values });
+  };
+
+  const handleErrorReasonsChange = (values) => {
+    onChange(index, { ...item, errorReasons: values });
   };
 
   const formatAmount = (value) => {
@@ -205,6 +387,108 @@ const DisbursementItem = ({
       return numberValue.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
     return value || 'Pending';
+  };
+
+  const renderTransactionDetails = () => {
+    switch (auditArea) {
+      case AUDIT_AREAS.CASH:
+        return (
+          <div className="grid grid-cols-1 gap-4 rounded-lg bg-gray-50 p-3 sm:grid-cols-2">
+            <div className="flex flex-col text-sm font-medium text-gray-700">
+              <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Bank Statement Date</span>
+              <Input
+                type="date"
+                value={item.groundTruths?.clearedBankDate || ''}
+                onChange={(event) => handleGroundTruthChange('clearedBankDate', event.target.value)}
+              />
+            </div>
+            <div className="flex flex-col text-sm font-medium text-gray-700">
+              <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Bank Cleared Amount</span>
+              <Input
+                type="number"
+                placeholder="e.g., 500.00"
+                value={
+                  item.groundTruths?.bankAmount !== undefined && item.groundTruths.bankAmount !== null
+                    ? item.groundTruths.bankAmount
+                    : ''
+                }
+                onChange={(event) => handleGroundTruthChange('bankAmount', event.target.value, { asNumber: true })}
+              />
+            </div>
+            <div className="flex flex-col text-sm font-medium text-gray-700 sm:col-span-2">
+              <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Status (optional override)</span>
+              <Select
+                value={item.groundTruths?.status || ''}
+                onChange={(event) => handleGroundTruthChange('status', event.target.value)}
+                options={[
+                  { value: '', label: 'Auto-detect' },
+                  { value: 'cleared', label: 'Cleared' },
+                  { value: 'outstanding', label: 'Outstanding' },
+                  { value: 'void', label: 'Void' },
+                  { value: 'nsf', label: 'NSF' },
+                ]}
+              />
+            </div>
+          </div>
+        );
+      case AUDIT_AREAS.INVENTORY:
+        return (
+          <div className="grid grid-cols-1 gap-4 rounded-lg bg-gray-50 p-3 sm:grid-cols-2">
+            <div className="flex flex-col text-sm font-medium text-gray-700">
+              <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Physical Count Quantity</span>
+              <Input
+                type="number"
+                placeholder="e.g., 95"
+                value={
+                  item.groundTruths?.actualCount !== undefined && item.groundTruths.actualCount !== null
+                    ? item.groundTruths.actualCount
+                    : ''
+                }
+                onChange={(event) => handleGroundTruthChange('actualCount', event.target.value, { asNumber: true })}
+              />
+            </div>
+            <div className="flex flex-col text-sm font-medium text-gray-700">
+              <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Condition / Notes</span>
+              <Input
+                type="text"
+                placeholder="e.g., Damaged pallet, obsolete stock"
+                value={item.groundTruths?.condition || ''}
+                onChange={(event) => handleGroundTruthChange('condition', event.target.value)}
+              />
+            </div>
+          </div>
+        );
+      case AUDIT_AREAS.PAYABLES:
+      default:
+        return (
+          <div className="grid grid-cols-1 gap-4 rounded-lg bg-gray-50 p-3 sm:grid-cols-3">
+            <div className="flex flex-col text-sm font-medium text-gray-700">
+              <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Invoice Date</span>
+              <Input
+                type="date"
+                value={item.groundTruths?.invoiceDate || ''}
+                onChange={(event) => handleGroundTruthChange('invoiceDate', event.target.value)}
+              />
+            </div>
+            <div className="flex flex-col text-sm font-medium text-gray-700">
+              <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Service / Shipping / Receiving Date</span>
+              <Input
+                type="date"
+                value={item.groundTruths?.serviceDate || ''}
+                onChange={(event) => handleGroundTruthChange('serviceDate', event.target.value)}
+              />
+            </div>
+            <div className="flex flex-col text-sm font-medium text-gray-700">
+              <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Service Period End</span>
+              <Input
+                type="date"
+                value={item.groundTruths?.servicePeriodEnd || ''}
+                onChange={(event) => handleGroundTruthChange('servicePeriodEnd', event.target.value)}
+              />
+            </div>
+          </div>
+        );
+    }
   };
 
   const summaryFields = [
@@ -335,24 +619,32 @@ const DisbursementItem = ({
                 className="sr-only peer"
               />
               <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-              <span className="ml-3 text-sm font-medium text-gray-900">Configure Trap &amp; Grading Logic</span>
+              <span className="ml-3 text-sm font-medium text-gray-900">Design Grading Logic</span>
             </label>
             <span className="text-xs text-gray-500">
-              Enable for items needing specific feedback or automated validation.
+              Enable when you want the Virtual Senior to guide and grade this item.
             </span>
           </div>
 
           {showTrapLogic ? (
             <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
               <div className="rounded-lg border border-gray-200 bg-white p-4">
-                <h4 className="text-sm font-semibold text-gray-800 mb-2">Trap & Assertions</h4>
+                <h4 className="text-sm font-semibold text-gray-800 mb-2">Grading Logic</h4>
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div className="flex flex-col text-sm font-medium text-gray-700">
-                    <label className="mb-1 text-xs uppercase tracking-wide text-gray-500">Trap Type</label>
-                    <Input
-                      value={item.trapType || ''}
-                      onChange={(event) => onChange(index, { ...item, trapType: event.target.value })}
-                      placeholder="e.g., cutoff, existence, classification"
+                    <label className="mb-1 text-xs uppercase tracking-wide text-gray-500">Skill Categories</label>
+                    <span className="text-xs text-gray-500 mb-1">
+                      Tag for analytics (e.g., Completeness, Fraud). Stored as trapType (multiple allowed).
+                    </span>
+                    <CreatableMultiTagSelect
+                      id={`${baseId}-skillCategory`}
+                      values={skillCategoryValues}
+                      options={availableSkillTags}
+                      placeholder="Select or create skill categories"
+                      onChange={handleSkillCategoryChange}
+                      onCreate={handleCreateGlobalTag}
+                      field={TAG_FIELDS.SKILL_CATEGORIES}
+                      label="Skill Category"
                     />
                   </div>
                   <div className="flex items-center gap-2">
@@ -371,18 +663,21 @@ const DisbursementItem = ({
                 <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div className="flex flex-col text-sm font-medium text-gray-700">
                     <label className="mb-2 text-xs uppercase tracking-wide text-gray-500">
-                      Required Assertions (Student Options)
+                      Correct Assertions (Answer Key)
                     </label>
+                    <p className="text-xs text-gray-500 mb-2">
+                      Students always see the standard assertions list. Check the ones that are correct for this item.
+                    </p>
                     <div className="grid grid-cols-2 gap-2 rounded-md border border-gray-200 bg-gray-50 p-2">
                       {standardAssertions.map((option) => {
-                        const isChecked = (item.requiredAssertions || []).includes(option);
+                        const isChecked = (item.correctAssertions || []).includes(option);
                         return (
                           <label key={option} className="flex items-center gap-2 cursor-pointer">
                             <input
                               type="checkbox"
                               className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                               checked={isChecked}
-                              onChange={() => toggleAssertion(option)}
+                              onChange={() => toggleCorrectAssertion(option)}
                             />
                             <span className={`text-xs ${isChecked ? 'font-semibold text-blue-700' : 'text-gray-600'}`}>
                               {option}
@@ -394,38 +689,36 @@ const DisbursementItem = ({
                   </div>
                   <div className="flex flex-col text-sm font-medium text-gray-700">
                     <label className="mb-1 text-xs uppercase tracking-wide text-gray-500">Error Reasons</label>
-                    <Input
-                      value={errorReasonsInput}
-                      onChange={(event) => handleArrayFieldChange('errorReasons', event.target.value)}
-                      placeholder="Comma-separated (e.g., date, amount, authorization)"
+                    <CreatableMultiTagSelect
+                      id={`${baseId}-errorReasons`}
+                      values={errorReasonValues}
+                      options={availableErrorReasons}
+                      placeholder="Select or create error reasons"
+                      onChange={handleErrorReasonsChange}
+                      onCreate={handleCreateGlobalTag}
+                      field={TAG_FIELDS.ERROR_REASONS}
+                      label="Error Reasons"
                     />
                   </div>
                 </div>
-                <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div className="flex flex-col text-sm font-medium text-gray-700">
-                    <label className="mb-1 text-xs uppercase tracking-wide text-gray-500">Validator Type</label>
+                    <label className="mb-1 text-xs uppercase tracking-wide text-gray-500">Auto-Grade Rule</label>
                     <Select
                       value={item.validator?.type || ''}
                       onChange={(event) => handleValidatorChange('type', event.target.value)}
                       options={[
-                        { value: '', label: 'None (manual grading)' },
-                        { value: 'cutoff', label: 'Cutoff date check' },
-                        { value: 'match_amount', label: 'Amount match' },
+                        { value: '', label: 'Manual grading only' },
+                        { value: 'cutoff', label: 'Auto-Check Dates (use for cutoff)' },
+                        { value: 'match_amount', label: 'Auto-Check Amounts (use for accuracy)' },
                       ]}
                     />
+                    <p className="text-xs text-gray-500 mt-1">
+                      Robot graders apply these checks instantly. Date checks assume zero tolerance behind the scenes.
+                    </p>
                   </div>
                   <div className="flex flex-col text-sm font-medium text-gray-700">
-                    <label className="mb-1 text-xs uppercase tracking-wide text-gray-500">Validator Config: toleranceDays</label>
-                    <Input
-                      type="number"
-                      inputMode="numeric"
-                      value={item.validator?.config?.toleranceDays ?? ''}
-                      onChange={(event) => handleValidatorConfigChange('toleranceDays', event.target.value)}
-                      placeholder="e.g., 5"
-                    />
-                  </div>
-                  <div className="flex flex-col text-sm font-medium text-gray-700">
-                    <label className="mb-1 text-xs uppercase tracking-wide text-gray-500">Validator Config: expectedStatus</label>
+                    <label className="mb-1 text-xs uppercase tracking-wide text-gray-500">Status Override (optional)</label>
                     <Input
                       value={item.validator?.config?.expectedStatus ?? ''}
                       onChange={(event) => handleValidatorConfigChange('expectedStatus', event.target.value)}
@@ -476,111 +769,12 @@ const DisbursementItem = ({
               </div>
 
               <div className="mt-4 border-t border-gray-100 pt-4">
-                <h4 className="text-sm font-semibold text-gray-800 mb-2">Virtual Senior Ground Truths</h4>
+                <h4 className="text-sm font-semibold text-gray-800 mb-2">Transaction Details (Virtual Senior)</h4>
                 <p className="text-xs text-gray-500 mb-3">
-                  Enter the factual evidence found in the document. The system compares this against the student's selections.
+                  Capture the key fact pattern the Virtual Senior will compare against the trainee&apos;s work.
+                  Fields adapt based on the audit area.
                 </p>
-                {isCash ? (
-                  <div className="grid grid-cols-1 gap-4 rounded-lg bg-gray-50 p-3 sm:grid-cols-2">
-                    <div className="flex flex-col text-sm font-medium text-gray-700">
-                      <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Cleared Bank Date</span>
-                      <Input
-                        type="date"
-                        value={item.groundTruths?.clearedBankDate || ''}
-                        onChange={(event) => handleGroundTruthChange('clearedBankDate', event.target.value)}
-                      />
-                    </div>
-                    <div className="flex flex-col text-sm font-medium text-gray-700">
-                      <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Bank Amount</span>
-                      <Input
-                        type="number"
-                        placeholder="e.g., 500.00"
-                        value={
-                          item.groundTruths?.bankAmount !== undefined && item.groundTruths.bankAmount !== null
-                            ? item.groundTruths.bankAmount
-                            : ''
-                        }
-                        onChange={(event) => handleGroundTruthChange('bankAmount', event.target.value, { asNumber: true })}
-                      />
-                    </div>
-                    <div className="flex flex-col text-sm font-medium text-gray-700 sm:col-span-2">
-                      <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Status (optional override)</span>
-                      <Select
-                        value={item.groundTruths?.status || ''}
-                        onChange={(event) => handleGroundTruthChange('status', event.target.value)}
-                        options={[
-                          { value: '', label: 'Auto-detect' },
-                          { value: 'cleared', label: 'Cleared' },
-                          { value: 'outstanding', label: 'Outstanding' },
-                          { value: 'void', label: 'Void' },
-                          { value: 'nsf', label: 'NSF' },
-                        ]}
-                      />
-                    </div>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 gap-4 rounded-lg bg-gray-50 p-3 sm:grid-cols-2">
-                    <div className="flex flex-col text-sm font-medium text-gray-700">
-                      <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">
-                        Document Date (Invoice / Count Sheet)
-                      </span>
-                      <Input
-                        type="date"
-                        value={item.groundTruths?.invoiceDate || ''}
-                        onChange={(event) => handleGroundTruthChange('invoiceDate', event.target.value)}
-                      />
-                    </div>
-                    <div className="flex flex-col text-sm font-medium text-gray-700">
-                      <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Service / Shipping Date</span>
-                      <Input
-                        type="date"
-                        value={item.groundTruths?.servicePeriodEnd || ''}
-                        onChange={(event) => handleGroundTruthChange('servicePeriodEnd', event.target.value)}
-                      />
-                    </div>
-                    <div className="flex flex-col text-sm font-medium text-gray-700">
-                      <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">
-                        Actual Count (Inventory)
-                      </span>
-                      <Input
-                        type="number"
-                        placeholder="e.g., 95"
-                        value={
-                          item.groundTruths?.actualCount !== undefined && item.groundTruths.actualCount !== null
-                            ? item.groundTruths.actualCount
-                            : ''
-                        }
-                        onChange={(event) => handleGroundTruthChange('actualCount', event.target.value, { asNumber: true })}
-                      />
-                    </div>
-                    <div className="flex flex-col text-sm font-medium text-gray-700">
-                      <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">
-                        Confirmed Value (Cash / AR)
-                      </span>
-                      <Input
-                        type="number"
-                        placeholder="e.g., 50000"
-                        value={
-                          item.groundTruths?.confirmedValue !== undefined && item.groundTruths.confirmedValue !== null
-                            ? item.groundTruths.confirmedValue
-                            : ''
-                        }
-                        onChange={(event) =>
-                          handleGroundTruthChange('confirmedValue', event.target.value, { asNumber: true })
-                        }
-                      />
-                    </div>
-                    <div className="sm:col-span-2 flex flex-col text-sm font-medium text-gray-700">
-                      <span className="mb-1 text-xs uppercase tracking-wide text-gray-500">Condition / Notes</span>
-                      <Input
-                        type="text"
-                        placeholder="e.g., Damaged pallet, obsolete stock"
-                        value={item.groundTruths?.condition || ''}
-                        onChange={(event) => handleGroundTruthChange('condition', event.target.value)}
-                      />
-                    </div>
-                  </div>
-                )}
+                {renderTransactionDetails()}
               </div>
             </div>
           ) : null}

@@ -89,6 +89,7 @@ export const FirestorePaths = {
   USER_PROFILE: (userId) => `artifacts/${appId}/users/${userId}/userProfileData/profile`,
   CASES_COLLECTION: () => `artifacts/${appId}/public/data/cases`,
   CASE_DOCUMENT: (caseId) => `artifacts/${appId}/public/data/cases/${caseId}`,
+  // Keys are stored under /private/data/case_keys (keep doc/collection parity for Firestore).
   CASE_KEYS_COLLECTION: () => `artifacts/${appId}/private/data/case_keys`,
   CASE_KEYS_DOCUMENT: (caseId) => `artifacts/${appId}/private/data/case_keys/${caseId}`,
   USERS_COLLECTION: () => `artifacts/${appId}/users`,
@@ -99,4 +100,6 @@ export const FirestorePaths = {
   ROLE_DOCUMENT: (userId) => `roles/${userId}`,
   STUDENT_PROGRESS_COLLECTION: (appIdValue, uid) =>
     `artifacts/${appIdValue}/student_progress/${uid}/cases`,
+  GLOBAL_TAG_SETTINGS: (appIdValue = appId) =>
+    `artifacts/${appIdValue}/settings/global_tags`,
 };

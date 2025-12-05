@@ -150,7 +150,7 @@ export const fetchProgressRosterForCase = async ({ appId, caseId }) => {
  * Saves progress for a case.
  * @param {{ appId: string, uid: string, caseId: string, patch: Partial<import('../models/progress').ProgressModel> }} params
  */
-export const saveProgress = async ({ appId, uid, caseId, patch }) => {
+export const saveProgress = async ({ appId, uid, caseId, patch, forceOverwrite = false }) => {
   if (!navigator.onLine) {
     offlineQueue.set(`${appId}|${uid}|${caseId}`, patch);
     return;
@@ -180,7 +180,7 @@ export const saveProgress = async ({ appId, uid, caseId, patch }) => {
       const serverDoc = await getDoc(progressRef);
       const serverData = serverDoc.data();
 
-      if (serverData && serverData.updatedAt.toMillis() > (patch.updatedAt?.toMillis() || 0)) {
+      if (!forceOverwrite && serverData && serverData.updatedAt.toMillis() > (patch.updatedAt?.toMillis() || 0)) {
         patch.percentComplete = Math.max(patch.percentComplete, serverData.percentComplete);
         if (patch.percentComplete === 100) {
           patch.state = 'submitted';

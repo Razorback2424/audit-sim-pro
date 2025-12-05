@@ -9,7 +9,7 @@ import {
 import { useAuth } from './AuthContext';
 import { useModal } from './ModalContext';
 import { cacheRole, getCachedRole } from '../services/roleService';
-import { fetchUserProfile, upsertUserProfile } from '../services/userService';
+import { fetchUserProfile, upsertUserProfile, ensureOrgIdForUser } from '../services/userService';
 import { db, FirestorePaths } from '../services/firebase';
 
 const ROLE_PRIORITY = {
@@ -129,10 +129,20 @@ export const UserProvider = ({ children }) => {
       try {
         const profile = await fetchUserProfile(currentUser.uid);
         if (active) {
-          setUserProfile(profile ? { uid: currentUser.uid, ...profile } : null);
+          let nextProfile = profile ? { uid: currentUser.uid, ...profile } : null;
+          if (nextProfile && !nextProfile.orgId) {
+            try {
+              const resolvedOrgId = await ensureOrgIdForUser(currentUser.uid, { role });
+              nextProfile = { ...nextProfile, orgId: resolvedOrgId };
+            } catch (orgErr) {
+              console.warn('[UserProvider] Failed to ensure orgId for user', orgErr);
+            }
+          }
+          setUserProfile(nextProfile);
           console.info('[UserProvider] Loaded profile', {
-            hasProfile: !!profile,
-            profileRole: profile?.role ?? null,
+            hasProfile: !!nextProfile,
+            profileRole: nextProfile?.role ?? null,
+            orgId: nextProfile?.orgId ?? null,
           });
         }
       } catch (err) {
@@ -149,7 +159,7 @@ export const UserProvider = ({ children }) => {
         unsubscribeRole();
       }
     };
-  }, [currentUser]);
+  }, [currentUser, role]);
 
   const profileRole = userProfile?.role;
 

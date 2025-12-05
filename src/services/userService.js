@@ -152,6 +152,47 @@ export const upsertUserProfile = async (userId, data = {}) => {
   }
 };
 
+/**
+ * Ensures a user has an orgId by reusing an existing one if present or creating a new shared orgId
+ * based on the oldest admin/instructor profile. This keeps orgs stable for future users.
+ */
+export const ensureOrgIdForUser = async (userId, { role } = {}) => {
+  const profileRef = doc(db, FirestorePaths.USER_PROFILE(userId));
+  const profileSnap = await getDoc(profileRef);
+  const existingProfile = profileSnap.exists() ? profileSnap.data() || {} : {};
+
+  if (existingProfile.orgId) {
+    return existingProfile.orgId;
+  }
+
+  // Avoid privileged reads for non-admin/non-instructor users; derive a deterministic orgId instead.
+  let candidateOrgId = `${appId}-org`;
+
+  if (role === 'admin' || role === 'instructor') {
+    try {
+      const rosterRef = collection(db, FirestorePaths.USERS_COLLECTION());
+      const rosterSnap = await getDocs(rosterRef);
+      rosterSnap.forEach((docSnap) => {
+        const data = docSnap.data() || {};
+        const docRole = (data.role || '').toLowerCase();
+        if (!candidateOrgId && (docRole === 'admin' || docRole === 'instructor') && data.orgId) {
+          candidateOrgId = data.orgId;
+        }
+      });
+    } catch (e) {
+      console.warn('[ensureOrgIdForUser] Skipping roster scan; falling back to appId-derived orgId.', e);
+    }
+  }
+
+  // Write orgId only to the userProfile (allowed for self); avoid writing roles/users collections for non-admins.
+  await setDoc(
+    profileRef,
+    { orgId: candidateOrgId, lastUpdatedAt: serverTimestamp() },
+    { merge: true }
+  );
+  return candidateOrgId;
+};
+
 export const adminUpdateUserRole = async (userId, role) => {
   const roleRef = doc(db, FirestorePaths.ROLE_DOCUMENT(userId));
   const currentRoleSnap = await getDoc(roleRef);

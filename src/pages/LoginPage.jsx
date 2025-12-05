@@ -1,12 +1,13 @@
 
 
-import React, { useEffect, useRef, useState } from 'react';
-import { useAuth, Input, Button, useModal, useRoute } from '../AppCore';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { useAuth, Input, Button, useModal, useRoute, useUser } from '../AppCore';
 
 const LoginPage = () => {
   const { currentUser, userId, login, logout } = useAuth();
   const { showModal } = useModal();
   const { route, navigate } = useRoute();
+  const { role, loadingRole } = useUser();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -14,6 +15,22 @@ const LoginPage = () => {
   const [showPassword, setShowPassword] = useState(false);
 
   const emailRef = useRef(null);
+
+  const dashboardPath = useMemo(() => {
+    if (role === 'admin') return '/admin';
+    if (role === 'instructor') return '/instructor';
+    if (role === 'trainee') return '/trainee';
+    return '/trainee';
+  }, [role]);
+
+  useEffect(() => {
+    if (currentUser && !loadingRole) {
+      navigate(dashboardPath, { replace: true });
+    } else if (currentUser) {
+      // Fallback if role not resolved yet.
+      navigate('/trainee', { replace: true });
+    }
+  }, [currentUser, loadingRole, dashboardPath, navigate]);
 
   useEffect(() => {
     // Autofocus the email field when page loads
@@ -30,13 +47,27 @@ const LoginPage = () => {
     }
     setSubmitting(true);
     try {
-      await login(email.trim(), password);
+      const user = await login(email.trim(), password);
+      let claimedRole = null;
+      try {
+        const token = await user.getIdTokenResult(true);
+        claimedRole = token?.claims?.role || null;
+      } catch (tokenErr) {
+        console.warn('Could not read role claim on login:', tokenErr);
+      }
+      const immediateDashboard =
+        claimedRole === 'admin'
+          ? '/admin'
+          : claimedRole === 'instructor'
+          ? '/instructor'
+          : '/trainee';
       // Redirect to ?next=... if provided on the hash route, otherwise to home
       const [, queryString] = (route || '').split('?');
       const params = new URLSearchParams(queryString || '');
       const rawNext = params.get('next');
-      const next = rawNext && rawNext.startsWith('/') ? rawNext : '/';
-      navigate(next);
+      const sanitizedNext = rawNext && rawNext !== '/' && rawNext.startsWith('/') ? rawNext : null;
+      const next = sanitizedNext || dashboardPath || immediateDashboard;
+      navigate(next, { replace: true });
     } catch (err) {
       // login already surfaces a modal, but keep a guard here in case
       showModal?.(`Sign-in failed: ${err?.message || 'Unknown error'}`, 'Authentication Error');
@@ -67,7 +98,7 @@ const LoginPage = () => {
             You are signed in as <span className="font-medium">{currentUser.email || userId}</span>.
           </p>
           <div className="mt-3 flex gap-2">
-            <Button onClick={() => navigate('/')} variant="secondary" type="button">
+            <Button onClick={() => navigate(dashboardPath)} variant="secondary" type="button">
               Go to app
             </Button>
             <Button onClick={handleLogout} variant="danger" type="button">

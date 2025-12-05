@@ -46,6 +46,7 @@ service cloud.firestore {
 
     function belongsToOrg(resourceData) {
       return isAdmin() ||
+        resourceData.publicVisible == true ||
         (
           request.auth.token.orgId != null &&
           resourceData.orgId == request.auth.token.orgId
@@ -85,6 +86,12 @@ service cloud.firestore {
              (!('expectedClassification' in item) || item.expectedClassification == null || item.expectedClassification is string) &&
              (!('answerKey' in item) || item.answerKey == null) &&
              (!('hasAnswerKey' in item) || item.hasAnswerKey == null || item.hasAnswerKey is bool) &&
+             (!('trapType' in item) || item.trapType == null || item.trapType is list || item.trapType is string) &&
+             (!('shouldFlag' in item) || item.shouldFlag == null || item.shouldFlag is bool) &&
+             (!('requiredAssertions' in item) || item.requiredAssertions == null || item.requiredAssertions is list) &&
+             (!('correctAssertions' in item) || item.correctAssertions == null || item.correctAssertions is list) &&
+             (!('errorReasons' in item) || item.errorReasons == null || item.errorReasons is list) &&
+             (!('validator' in item) || item.validator == null || item.validator is map) &&
              (!('groundTruths' in item) || item.groundTruths == null) &&
              (!('storagePath' in item) || item.storagePath == null || item.storagePath is string) &&
              (!('downloadURL' in item) || item.downloadURL == null || item.downloadURL is string) &&
@@ -195,15 +202,14 @@ service cloud.firestore {
     }
 
     function canAccessCaseKeys(appId, caseId) {
-      if (isAdmin()) {
-        return true;
-      }
-      if (!isInstructor() || request.auth.token.orgId == null) {
-        return false;
-      }
-      return exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)) &&
-             get(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.orgId ==
-               request.auth.token.orgId;
+      return isAdmin() ||
+        (
+          isInstructor() &&
+          request.auth.token.orgId != null &&
+          exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)) &&
+          get(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.orgId ==
+            request.auth.token.orgId
+        );
     }
 
     function gradeFieldUnchanged(field) {
@@ -230,6 +236,7 @@ service cloud.firestore {
       // For single document reads, the function is secure.
       allow get: if request.auth != null && (
         isAdmin() ||
+        resource.data.publicVisible == true ||
         (
           belongsToOrg(resource.data) &&
           (
@@ -238,30 +245,32 @@ service cloud.firestore {
           )
         )
       );
-      // For queries, client must filter by orgId to get results.
-      allow list: if request.auth != null && (
-        isAdmin() ||
-        (
-          belongsToOrg(resource.data) &&
-          (isInstructor() || isTrainee())
-        )
-      );
+      // For queries, allow any signed-in user; visibility is enforced by query filters (publicVisible/visibleToUserIds)
+      // and downstream UI guards.
+      allow list: if request.auth != null;
       allow create: if request.auth != null &&
         (
           isAdmin() ||
-          (isInstructor() && request.resource.data.orgId == request.auth.token.orgId)
-        ) &&
-        isValidCaseDocument();
+          (
+            isInstructor() &&
+            request.resource.data.orgId == request.auth.token.orgId &&
+            isValidCaseDocument()
+          )
+        );
       allow update: if request.auth != null &&
         (
           isAdmin() ||
-          (isInstructor() && resource.data.orgId == request.auth.token.orgId)
-        ) &&
-        isValidCaseDocument();
+          (
+            isInstructor() &&
+            resource.data.orgId == request.auth.token.orgId &&
+            isValidCaseDocument()
+          )
+        );
       allow delete: if request.auth != null && isAdmin();
     }
 
-    match /artifacts/{appId}/private/case_keys/{caseId} {
+    // Private answer keys stored under artifacts/{appId}/private/data/case_keys/{caseId}
+    match /artifacts/{appId}/private/data/case_keys/{caseId} {
       allow read: if request.auth != null && canAccessCaseKeys(appId, caseId);
       allow create, update: if request.auth != null &&
                                canAccessCaseKeys(appId, caseId) &&

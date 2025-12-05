@@ -6,7 +6,13 @@ import { STANDARD_ASSERTIONS, CASH_RECON_SCENARIOS } from '../../constants/caseF
 import DisbursementItem from './DisbursementItem';
 import StepIntro from './StepIntro';
 
-export default function TransactionsStep({ transactions, files }) {
+export default function TransactionsStep({
+  transactions,
+  files,
+  availableSkillTags = [],
+  availableErrorReasons = [],
+  onAddGlobalTag,
+}) {
   const {
     disbursements,
     handleDisbursementChange,
@@ -243,6 +249,9 @@ export default function TransactionsStep({ transactions, files }) {
               maxUploadBytes={MAX_ARTIFACT_BYTES}
               prettySupportedLabels={prettySupportedLabels}
               standardAssertions={STANDARD_ASSERTIONS}
+              availableSkillTags={availableSkillTags}
+              availableErrorReasons={availableErrorReasons}
+              onAddGlobalTag={onAddGlobalTag}
             />
           ))}
         </div>

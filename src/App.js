@@ -17,6 +17,7 @@ import AdminCaseOverviewPage from './pages/AdminCaseOverviewPage';
 import AdminCaseDataAuditPage from './pages/AdminCaseDataAuditPage';
 import AdminCaseProgressPage from './pages/AdminCaseProgressPage';
 import CaseFormPage from './pages/CaseFormPage';
+import LandingPage from './pages/LandingPage';
 import TraineeDashboardPage from './pages/TraineeDashboardPage';
 import TraineeCaseViewPage from './pages/TraineeCaseViewPage';
 import TraineeSubmissionHistoryPage from './pages/TraineeSubmissionHistoryPage';
@@ -57,6 +58,7 @@ export default function App() {
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegistrationPage />} />
       <Route path="/unauthorized" element={<UnauthorizedPage />} />
+      <Route path="/" element={<LandingPage />} />
 
       <Route element={<RequireAuth />}>
         <Route path="/select-role" element={<RoleSelectionPage />} />
@@ -90,7 +92,7 @@ export default function App() {
         </Route>
       </Route>
 
-      <Route path="/" element={<HomeRedirect />} />
+      <Route path="/home" element={<HomeRedirect />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

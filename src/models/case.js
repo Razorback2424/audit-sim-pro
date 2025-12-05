@@ -15,6 +15,7 @@ import { DEFAULT_AUDIT_AREA, DEFAULT_ITEM_TYPE, AUDIT_AREAS } from './caseConsta
 /**
  * @typedef {Object} GroundTruths
  * @property {string} [invoiceDate] - Actual invoice date (YYYY-MM-DD)
+ * @property {string} [serviceDate] - Service/shipping/receiving date (YYYY-MM-DD)
  * @property {string} [servicePeriodEnd] - Actual service period end date (YYYY-MM-DD)
  * @property {number} [actualCount] - Verified physical count (inventory)
  * @property {number} [confirmedValue] - Confirmed amount from third party
@@ -45,10 +46,11 @@ import { DEFAULT_AUDIT_AREA, DEFAULT_ITEM_TYPE, AUDIT_AREAS } from './caseConsta
  * @property {string} [description]
  * @property {string} [notes]
  * @property {Record<string, any>} [meta]
- * @property {string} [trapType]
+ * @property {string|string[]} [trapType]
  * @property {AuditEvidencePoint[]} [evidencePoints]
  * @property {string} [auditArea]
  * @property {string[]} [requiredAssertions]
+ * @property {string[]} [correctAssertions]
  * @property {string[]} [errorReasons]
  * @property {boolean} [shouldFlag]
  * @property {'low' | 'medium' | 'high'} [riskLevel]

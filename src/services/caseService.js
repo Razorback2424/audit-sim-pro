@@ -18,7 +18,7 @@ import {
   Timestamp,
   getCountFromServer,
 } from 'firebase/firestore';
-import { db, FirestorePaths } from '../AppCore';
+import { db, FirestorePaths, appId, auth } from '../AppCore';
 import { getNow } from '../utils/dates';
 import { toCaseModel } from '../models/case';
 import {
@@ -302,7 +302,10 @@ const groupInvoiceMappings = (mappings = []) => {
 };
 
 const normalizeAuditItem = (item, index, invoiceGroups) => {
-  if (!isRecord(item)) return null;
+  if (!isRecord(item)) {
+    console.warn('[caseService] normalizeAuditItem: skipping non-object item', { index, item });
+    return null;
+  }
   const fallbackId = `item-${index + 1}`;
   const resolvedId = toOptionalString(item.id) || toOptionalString(item.paymentId) || fallbackId;
   const invoices = resolvedId ? invoiceGroups.get(resolvedId) || [] : [];
@@ -333,6 +336,46 @@ const normalizeAuditItem = (item, index, invoiceGroups) => {
 
   if (isRecord(item.meta)) {
     normalized.meta = { ...item.meta };
+  }
+
+  const toStringArray = (value) =>
+    Array.isArray(value)
+      ? value.map((v) => toOptionalString(v)).filter(Boolean)
+      : [];
+
+  const trapList = toStringArray(item.trapType);
+  if (trapList.length > 0) {
+    normalized.trapType = trapList;
+  } else {
+    const singleTrap = toOptionalString(item.trapType);
+    if (singleTrap) normalized.trapType = [singleTrap];
+  }
+
+  const correctAssertions = toStringArray(item.correctAssertions || item.requiredAssertions);
+  if (correctAssertions.length > 0) {
+    normalized.correctAssertions = correctAssertions;
+  }
+
+  const requiredAssertions = toStringArray(item.requiredAssertions || item.correctAssertions);
+  if (requiredAssertions.length > 0) {
+    normalized.requiredAssertions = requiredAssertions;
+  }
+
+  const errorReasons = toStringArray(item.errorReasons);
+  if (errorReasons.length > 0) {
+    normalized.errorReasons = errorReasons;
+  }
+
+  if (item.shouldFlag !== undefined) {
+    normalized.shouldFlag = Boolean(item.shouldFlag);
+  }
+
+  if (isRecord(item.validator)) {
+    const validator = { ...item.validator };
+    if (validator.config && !isRecord(validator.config)) {
+      delete validator.config;
+    }
+    normalized.validator = validator;
   }
 
   const storagePath = toOptionalString(primaryInvoice?.storagePath ?? item.storagePath);
@@ -421,6 +464,8 @@ const normalizeAuditItems = (items = [], invoiceMappings = []) => {
     const normalized = normalizeAuditItem(item, index, invoiceGroups);
     if (normalized) {
       normalizedList.push(normalized);
+    } else {
+      console.warn('[caseService] normalizeAuditItems: item dropped during normalization', { index });
     }
   });
   return normalizedList;
@@ -834,16 +879,76 @@ export const fetchCase = async (caseId) => {
 export const createCase = async (data) => {
   const { caseData, caseKeysDoc } = sanitizeCaseWriteData(data, { isCreate: true });
   const collectionRef = collection(db, FirestorePaths.CASES_COLLECTION());
-  const docRef = await addDoc(collectionRef, caseData);
-  await setDoc(doc(db, FirestorePaths.CASE_KEYS_DOCUMENT(docRef.id)), caseKeysDoc);
-  return docRef.id;
+  const debugContext = {
+    path: FirestorePaths.CASES_COLLECTION(),
+    appId,
+    publicVisible: caseData?.publicVisible,
+    visibleToUserIdsCount: Array.isArray(caseData?.visibleToUserIds) ? caseData.visibleToUserIds.length : 0,
+    status: caseData?.status,
+    uid: auth?.currentUser?.uid || 'unknown',
+  };
+  try {
+    console.info('[caseService] createCase: begin', debugContext);
+    const docRef = await addDoc(collectionRef, caseData);
+    await setDoc(doc(db, FirestorePaths.CASE_KEYS_DOCUMENT(docRef.id)), caseKeysDoc);
+    console.info('[caseService] createCase: success', { caseId: docRef.id });
+    return docRef.id;
+  } catch (err) {
+    console.error('[caseService] createCase: failed', { ...debugContext, error: err?.message, code: err?.code });
+    throw err;
+  }
 };
 
 export const updateCase = async (caseId, data) => {
   const { caseData, caseKeysDoc } = sanitizeCaseWriteData(data, { isCreate: false });
   const ref = doc(db, FirestorePaths.CASE_DOCUMENT(caseId));
-  await setDoc(ref, caseData, { merge: true });
-  await setDoc(doc(db, FirestorePaths.CASE_KEYS_DOCUMENT(caseId)), caseKeysDoc);
+  const debugContext = {
+    caseId,
+    path: FirestorePaths.CASE_DOCUMENT(caseId),
+    appId,
+    publicVisible: caseData?.publicVisible,
+    visibleToUserIdsCount: Array.isArray(caseData?.visibleToUserIds) ? caseData.visibleToUserIds.length : 0,
+    status: caseData?.status,
+    uid: auth?.currentUser?.uid || 'unknown',
+    orgId: caseData?.orgId ?? null,
+  };
+  try {
+    const sampleItem = Array.isArray(caseData?.auditItems) ? caseData.auditItems[0] : null;
+    const sampleMapping = Array.isArray(caseData?.invoiceMappings) ? caseData.invoiceMappings[0] : null;
+
+    console.info('[caseService] updateCase: begin', {
+      ...debugContext,
+      auditItemCount: Array.isArray(caseData?.auditItems) ? caseData.auditItems.length : 0,
+      invoiceMappingCount: Array.isArray(caseData?.invoiceMappings) ? caseData.invoiceMappings.length : 0,
+      sampleItem,
+      sampleMapping,
+    });
+
+    await setDoc(ref, caseData, { merge: true });
+    console.info('[caseService] updateCase: wrote case doc', {
+      caseId,
+      path: debugContext.path,
+      keysPath: FirestorePaths.CASE_KEYS_DOCUMENT(caseId),
+      hasOrgId: !!caseData?.orgId,
+      publicVisible: caseData?.publicVisible,
+      status: caseData?.status,
+    });
+    const keysPath = FirestorePaths.CASE_KEYS_DOCUMENT(caseId);
+    await setDoc(doc(db, keysPath), caseKeysDoc);
+    console.info('[caseService] updateCase: wrote keys doc', { caseId, path: keysPath });
+    console.info('[caseService] updateCase: success', { caseId });
+  } catch (err) {
+    console.error('[caseService] updateCase: failed', {
+      ...debugContext,
+      error: err?.message,
+      code: err?.code,
+      stack: err?.stack,
+      caseKeysPath: FirestorePaths.CASE_KEYS_DOCUMENT(caseId),
+      hasOrgId: !!caseData?.orgId,
+      hasVisibleIds: Array.isArray(caseData?.visibleToUserIds) ? caseData.visibleToUserIds.length : 0,
+    });
+    throw err;
+  }
 };
 
 export const markCaseDeleted = async (caseId) => {
@@ -924,7 +1029,7 @@ const computeDisbursementAlerts = (caseData) => {
   return alerts;
 };
 
-const DEFAULT_STUDENT_STATUSES = ['assigned', 'in_progress'];
+const DEFAULT_STUDENT_STATUSES = ['assigned', 'in_progress', 'submitted', 'draft'];
 
 /**
  * Build a Firestore query for trainee-visible cases with pagination support.
@@ -998,6 +1103,17 @@ export const listStudentCases = async ({
   uid,
 }) => {
   const q = buildStudentCasesQuery({ appId, uid, pageSize, cursor, includeOpensAtGate, statusFilter, sortBy });
+  if (process.env.NODE_ENV !== 'production') {
+    console.info('[caseService] listStudentCases', {
+      appId,
+      uid,
+      pageSize,
+      cursor,
+      includeOpensAtGate,
+      sortBy,
+      statusFilter,
+    });
+  }
   const snap = await getDocs(q);
   const items = snap.docs.map((docSnap) => toNormalizedCaseModel(docSnap.id, docSnap.data()));
   const lastDoc = snap.docs[snap.docs.length - 1];

@@ -55,7 +55,7 @@ const RegistrationPage = () => {
       const [, queryString] = (route || '').split('?');
       const params = new URLSearchParams(queryString || '');
       const next = params.get('next');
-      navigate(next || '/');
+      navigate(next || '/home');
     } catch (err) {
       console.error('Registration error:', err);
       showModal?.(`Registration failed: ${err?.message || 'Unknown error'}`, 'Registration Error');
@@ -72,7 +72,7 @@ const RegistrationPage = () => {
           You are already signed in. Use the app or sign out before creating a new account.
         </p>
         <div className="flex gap-2">
-        <Button type="button" onClick={() => navigate('/')}>Go to app</Button>
+        <Button type="button" onClick={() => navigate('/home')}>Go to app</Button>
         </div>
       </div>
     );

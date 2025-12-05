@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, useRoute, useAuth, useModal, appId } from '../AppCore';
 import { listUserSubmissions } from '../services/submissionService';
 import { fetchCase } from '../services/caseService';
+import { fetchProgressForCases } from '../services/progressService';
 
 const formatTimestamp = (value) => {
   if (!value) return 'N/A';
@@ -200,6 +201,70 @@ export default function TraineeSubmissionHistoryPage() {
 
   const hasHistory = history.length > 0;
 
+  const handleRetakeClick = async (caseId) => {
+    if (!caseId) return;
+    if (!userId) {
+      navigate('/login');
+      return;
+    }
+
+    try {
+      const progressMap = await fetchProgressForCases({ appId, uid: userId, caseIds: [caseId] });
+      const progress = progressMap.get(caseId);
+      const percentComplete = Number(progress?.percentComplete || 0);
+      const state = typeof progress?.state === 'string' ? progress.state.toLowerCase() : '';
+      const hasDraft = percentComplete < 100 && state !== 'submitted';
+
+      if (!hasDraft) {
+        navigate(`/trainee/case/${caseId}?retake=true`);
+        return;
+      }
+
+      showModal(
+        'You already have a draft in progress for this case. Continue where you left off or start over?',
+        'Draft in progress',
+        (close) => (
+          <>
+            <Button variant="secondary" onClick={() => { close(); navigate(`/trainee/case/${caseId}`); }}>
+              Return to draft
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                close();
+                showModal(
+                  'Starting over will delete your current progress for this case. Are you sure you want to restart?',
+                  'Confirm restart',
+                  (hide) => (
+                    <>
+                      <Button variant="secondary" onClick={hide}>
+                        Keep my draft
+                      </Button>
+                      <Button
+                        variant="primary"
+                        onClick={() => {
+                          hide();
+                          navigate(`/trainee/case/${caseId}?retake=true`);
+                        }}
+                      >
+                        Yes, start over
+                      </Button>
+                    </>
+                  )
+                );
+              }}
+            >
+              Start over
+            </Button>
+          </>
+        )
+      );
+    } catch (err) {
+      console.error('Failed to check draft status before retake:', err);
+      showModal('Could not start a retake right now. Please try again.', 'Retake unavailable');
+    }
+  };
+
   const entries = useMemo(() => {
     return history.map((entry) => {
       const attempts = Array.isArray(entry.attempts) ? entry.attempts : [];
@@ -265,7 +330,7 @@ export default function TraineeSubmissionHistoryPage() {
                     <p className="text-sm text-gray-500">Case ID: {entry.caseId}</p>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Button variant="primary" onClick={() => navigate(`/trainee/case/${entry.caseId}?retake=true`)}>
+                    <Button variant="primary" onClick={() => handleRetakeClick(entry.caseId)}>
                       Retake Case
                     </Button>
                   </div>
