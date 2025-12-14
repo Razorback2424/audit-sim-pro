@@ -54,7 +54,7 @@ const resolveStorageBucketUrl = (rawBucket) => {
   if (!trimmed) return null;
   if (/^gs:\/\//i.test(trimmed) || /^https?:\/\//i.test(trimmed)) return trimmed;
   if (/\.firebasestorage\.app$/i.test(trimmed)) {
-    console.info('[storage] Normalizing firebasestorage.app name');
+    console.info('[storage] Using firebasestorage.app bucket', { rawBucket });
     return `gs://${trimmed}`;
   }
   return `gs://${trimmed}`;

@@ -215,7 +215,7 @@ const extractPrivateCaseKeyEntries = (items = []) => {
 
     sanitizedItems.push({
       ...rest,
-      paymentId: rest.paymentId || paymentId,
+      paymentId,
       hasAnswerKey: Boolean(entry.answerKey),
     });
 
@@ -427,6 +427,19 @@ const normalizeAuditItem = (item, index, invoiceGroups) => {
 
   if (dedupedDocs.length > 0) {
     normalized.supportingDocuments = dedupedDocs;
+  }
+
+  const highlightedSource = isRecord(item.highlightedDocument) ? item.highlightedDocument : null;
+  if (highlightedSource) {
+    const highlightedDocument = {
+      storagePath: toOptionalString(highlightedSource.storagePath),
+      fileName: toOptionalString(highlightedSource.fileName),
+      downloadURL: toOptionalString(highlightedSource.downloadURL),
+      contentType: toOptionalString(highlightedSource.contentType),
+    };
+    if (highlightedDocument.storagePath || highlightedDocument.downloadURL || highlightedDocument.fileName) {
+      normalized.highlightedDocument = highlightedDocument;
+    }
   }
 
   // Normalize optional answer key shape for correctness/explanations
@@ -985,21 +998,27 @@ const computeDisbursementAlerts = (caseData) => {
   const disbursements = Array.isArray(caseData.disbursements) ? caseData.disbursements : [];
   if (disbursements.length === 0) return alerts;
 
+  const normalizePaymentId = (value) => {
+    if (value === null || value === undefined) return '';
+    return String(value).trim();
+  };
+
   const caseId = caseData?.id;
   const caseName = caseData?.caseName || caseData?.title || 'Untitled case';
   const mappedPayments = new Set(
     (Array.isArray(caseData.invoiceMappings) ? caseData.invoiceMappings : [])
-      .map((mapping) => mapping?.paymentId)
+      .map((mapping) => normalizePaymentId(mapping?.paymentId))
       .filter(Boolean)
   );
 
   disbursements.forEach((item) => {
-    const paymentId = item?.paymentId || 'Unknown payment';
+    const normalizedPaymentId = normalizePaymentId(item?.paymentId);
+    const paymentId = normalizedPaymentId || 'Unknown payment';
     const hasAnswerKey =
       item?.hasAnswerKey ||
       (item && item.answerKey && Object.keys(item.answerKey).length > 0);
     const hasSupportingDocs = Array.isArray(item?.supportingDocuments) && item.supportingDocuments.length > 0;
-    const isMapped = mappedPayments.has(item?.paymentId);
+    const isMapped = normalizedPaymentId ? mappedPayments.has(normalizedPaymentId) : false;
 
     if (!hasAnswerKey) {
       alerts.push({

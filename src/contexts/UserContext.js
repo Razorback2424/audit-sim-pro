@@ -132,7 +132,9 @@ export const UserProvider = ({ children }) => {
           let nextProfile = profile ? { uid: currentUser.uid, ...profile } : null;
           if (nextProfile && !nextProfile.orgId) {
             try {
-              const resolvedOrgId = await ensureOrgIdForUser(currentUser.uid, { role });
+              const resolvedOrgId = await ensureOrgIdForUser(currentUser.uid, {
+                role: nextProfile?.role ?? claimRole ?? null,
+              });
               nextProfile = { ...nextProfile, orgId: resolvedOrgId };
             } catch (orgErr) {
               console.warn('[UserProvider] Failed to ensure orgId for user', orgErr);
@@ -143,6 +145,16 @@ export const UserProvider = ({ children }) => {
             hasProfile: !!nextProfile,
             profileRole: nextProfile?.role ?? null,
             orgId: nextProfile?.orgId ?? null,
+          });
+          // Fall back to profile role if we still don't have a resolved role from claims/doc.
+          setRoleState((prev) => {
+            if (prev) return prev;
+            const profileRole = typeof nextProfile?.role === 'string' ? nextProfile.role.toLowerCase() : null;
+            if (profileRole) {
+              cacheRole(currentUser.uid, profileRole);
+              return profileRole;
+            }
+            return prev;
           });
         }
       } catch (err) {
@@ -159,7 +171,7 @@ export const UserProvider = ({ children }) => {
         unsubscribeRole();
       }
     };
-  }, [currentUser, role]);
+  }, [currentUser]);
 
   const profileRole = userProfile?.role;
 

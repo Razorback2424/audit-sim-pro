@@ -346,7 +346,13 @@ export default function CaseFormPage({ params }) {
 
           <CaseFormStepNav steps={steps} activeStep={activeStep} onStepChange={setActiveStep} disabled={loading} />
 
-          <form onSubmit={handleSubmit} className="space-y-10">
+          <form
+            onSubmit={(e) => {
+              console.info('[case-form] onSubmit fired', { activeStep, isEditing, allChecklistItemsReady });
+              handleSubmit(e);
+            }}
+            className="space-y-10"
+          >
             {activeStep === 0 ? <CaseBasicsStep basics={basics} /> : null}
             {activeStep === 1 ? <InstructionStep instructionData={instructionData} /> : null}
             {activeStep === 2 ? <AudienceScheduleStep audience={audience} /> : null}

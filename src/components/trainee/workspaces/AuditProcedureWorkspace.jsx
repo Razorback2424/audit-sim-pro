@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Input, Select, Textarea } from '../../../AppCore';
+import { Input, Select } from '../../../AppCore';
 import { currencyFormatter } from '../../../utils/formatters';
 
 const RISK_STYLES = {
@@ -8,22 +8,29 @@ const RISK_STYLES = {
   high: 'bg-red-50 text-red-700',
 };
 
-const buildTabs = (assertions = []) => {
-  if (!Array.isArray(assertions) || assertions.length === 0) {
-    return ['general'];
-  }
-  const unique = Array.from(new Set(assertions.filter(Boolean)));
-  return unique.includes('general') ? unique : ['general', ...unique];
+const DECISION = {
+  UNDECIDED: 'undecided',
+  PASS: 'pass',
+  EXCEPTION: 'exception',
 };
 
-const tabLabel = (key) => {
-  if (!key) return 'General';
-  return key === 'general'
-    ? 'General'
-    : key.charAt(0).toUpperCase() + key.slice(1);
-};
+const PASS_OPTIONS = [
+  { value: 'properlyIncluded', label: 'Properly Included' },
+  { value: 'properlyExcluded', label: 'Properly Excluded' },
+];
+
+const EXCEPTION_OPTIONS = [
+  { value: 'improperlyIncluded', label: 'Improperly Included' },
+  { value: 'improperlyExcluded', label: 'Missing / Unrecorded' },
+];
 
 const noop = () => {};
+
+const deriveDecision = (allocation) => {
+  if (allocation?.isException === true) return DECISION.EXCEPTION;
+  if (allocation?.isException === false) return DECISION.PASS;
+  return DECISION.UNDECIDED;
+};
 
 export default function AuditProcedureWorkspace({
   item,
@@ -34,47 +41,39 @@ export default function AuditProcedureWorkspace({
   onSplitToggle = noop,
   onClassificationChange = noop,
   onSplitAmountChange = noop,
-  onNoteChange = noop,
+  onRationaleChange = noop,
   isLocked,
   totalsMatch,
   totalEntered,
-  pdfViewerState,
   onUpdate,
   workspaceState,
 }) {
-  const tabs = useMemo(() => buildTabs(item?.requiredAssertions), [item?.requiredAssertions]);
-  const initialTab = useMemo(() => {
-    if (workspaceState?.selectedAssertion && tabs.includes(workspaceState.selectedAssertion)) {
-      return workspaceState.selectedAssertion;
-    }
-    return tabs[0];
-  }, [tabs, workspaceState?.selectedAssertion]);
-  const [activeTab, setActiveTab] = useState(initialTab);
-  const isSplit = allocation.mode === 'split';
-  const amountNumber = Number(item.amount) || 0;
+  const itemKey = item?.paymentId || item?.id || '';
+  const amountNumber = Number(item?.amount) || 0;
   const classificationLabel =
     classificationFields.find(({ key }) => key === allocation.singleClassification)?.label ||
-    'Select classification';
+    'selected classification';
   const riskClass = RISK_STYLES[item?.riskLevel] || 'bg-gray-100 text-gray-600';
-  const viewerState = pdfViewerState || { isOpen: false, currentDocId: null };
-  const linkedEvidence = workspaceState?.evidenceLinked;
-  const linkedDocId = workspaceState?.linkedDocId;
-  const linkedTimestamp = workspaceState?.timestamp;
+  const isSplit = allocation.mode === 'split';
+
+  const [currentDecision, setCurrentDecision] = useState(() => deriveDecision(allocation));
+  const [showAdvanced, setShowAdvanced] = useState(isSplit);
 
   const startTimeRef = useRef(
     workspaceState?.startedAt ? new Date(workspaceState.startedAt).getTime() : Date.now()
   );
+
   const emitUpdate = useCallback(
     (updates) => {
-      if (typeof onUpdate !== 'function' || !item?.id || !updates || typeof updates !== 'object') {
+      if (typeof onUpdate !== 'function' || !itemKey || !updates || typeof updates !== 'object') {
         return;
       }
-      onUpdate(item.id, {
+      onUpdate(itemKey, {
         updatedAt: new Date().toISOString(),
         ...updates,
       });
     },
-    [item?.id, onUpdate]
+    [itemKey, onUpdate]
   );
 
   useEffect(() => {
@@ -87,19 +86,6 @@ export default function AuditProcedureWorkspace({
       startTimeRef.current = parsed.getTime();
     }
   }, [workspaceState?.startedAt, emitUpdate]);
-
-  useEffect(() => {
-    const syncTab = workspaceState?.selectedAssertion;
-    if (syncTab && tabs.includes(syncTab) && syncTab !== activeTab) {
-      setActiveTab(syncTab);
-    } else if (!tabs.includes(activeTab)) {
-      setActiveTab(tabs[0]);
-    }
-  }, [activeTab, tabs, workspaceState?.selectedAssertion]);
-
-  useEffect(() => {
-    emitUpdate({ selectedAssertion: activeTab });
-  }, [activeTab, emitUpdate]);
 
   useEffect(() => {
     const updateDuration = () => {
@@ -115,272 +101,341 @@ export default function AuditProcedureWorkspace({
     return () => window.clearInterval(intervalId);
   }, [emitUpdate]);
 
-  const handleLinkEvidence = () => {
-    if (!viewerState.isOpen || !viewerState.currentDocId) {
-      window.alert('You cannot link evidence if the document is not open.');
+  useEffect(() => {
+    setCurrentDecision(deriveDecision(allocation));
+  }, [allocation]);
+
+  useEffect(() => {
+    if (allocation?.mode === 'split') {
+      setShowAdvanced(true);
+    }
+  }, [allocation?.mode]);
+
+  const assertionOptions = useMemo(() => {
+    if (!Array.isArray(item?.requiredAssertions)) return [];
+    return item.requiredAssertions.filter(Boolean);
+  }, [item?.requiredAssertions]);
+
+  const reasonOptions = useMemo(() => {
+    if (!Array.isArray(item?.errorReasons)) return [];
+    return item.errorReasons.filter(Boolean);
+  }, [item?.errorReasons]);
+
+  const effectivePassClassification = useMemo(() => {
+    const current = allocation?.singleClassification || '';
+    if (PASS_OPTIONS.some((option) => option.value === current)) return current;
+    return '';
+  }, [allocation?.singleClassification]);
+
+  const effectiveExceptionNature = useMemo(() => {
+    const current = allocation?.singleClassification || '';
+    if (EXCEPTION_OPTIONS.some((option) => option.value === current)) return current;
+    return '';
+  }, [allocation?.singleClassification]);
+
+  const resolveSplitValue = useCallback(
+    (key) => {
+      if (allocation?.splitValues && allocation.splitValues[key] !== undefined) {
+        return allocation.splitValues[key];
+      }
+      return allocation?.[key] ?? '';
+    },
+    [allocation]
+  );
+
+  const clearAllClassificationAmounts = useCallback(() => {
+    if (!itemKey) return;
+    classificationFields.forEach(({ key }) => onSplitAmountChange(itemKey, key, ''));
+  }, [classificationFields, itemKey, onSplitAmountChange]);
+
+  const applySingleAllocation = useCallback(
+    (classificationKey) => {
+      if (!itemKey) return;
+      onSplitToggle(itemKey, false, item);
+      onClassificationChange(itemKey, classificationKey);
+      classificationFields.forEach(({ key }) => {
+        const value = key === classificationKey ? amountNumber : '';
+        onSplitAmountChange(itemKey, key, value === '' ? '' : String(value));
+      });
+    },
+    [amountNumber, classificationFields, item, itemKey, onClassificationChange, onSplitAmountChange, onSplitToggle]
+  );
+
+  const handleDecisionChange = (nextDecision) => {
+    const isException = nextDecision === DECISION.EXCEPTION;
+    setCurrentDecision(nextDecision);
+    if (!itemKey) return;
+    onRationaleChange(itemKey, 'isException', isException);
+
+    if (!isException) {
+      onRationaleChange(itemKey, 'assertion', '');
+      onRationaleChange(itemKey, 'reason', '');
+      applySingleAllocation(effectivePassClassification || 'properlyIncluded');
+      setShowAdvanced(false);
+    } else {
+      clearAllClassificationAmounts();
+      onClassificationChange(itemKey, '');
+    }
+  };
+
+  const handlePassConfirmationChange = (value) => {
+    const nextValue = value || '';
+    if (!nextValue) return;
+    setCurrentDecision(DECISION.PASS);
+    if (!itemKey) return;
+    onRationaleChange(itemKey, 'isException', false);
+    applySingleAllocation(nextValue);
+  };
+
+  const handleNatureChange = (value) => {
+    const nature = value || '';
+    if (!nature) return;
+    setCurrentDecision(DECISION.EXCEPTION);
+    if (!itemKey) return;
+    onRationaleChange(itemKey, 'isException', true);
+    onClassificationChange(itemKey, nature);
+    applySingleAllocation(nature);
+  };
+
+  const handleSplitToggleInternal = (checked) => {
+    if (!itemKey) return;
+    onSplitToggle(itemKey, checked, item);
+    setShowAdvanced(true);
+
+    if (!checked) {
+      if (allocation.singleClassification) {
+        applySingleAllocation(allocation.singleClassification);
+      } else {
+        clearAllClassificationAmounts();
+      }
       return;
     }
-    emitUpdate({
-      evidenceLinked: true,
-      linkedDocId: viewerState.currentDocId,
-      timestamp: new Date().toISOString(),
-    });
-  };
-
-  const renderCutoffTab = () => (
-    <div className="space-y-3">
-      <label className="block text-sm font-medium text-gray-700">
-        Invoice Date
-        <Input
-          type="date"
-          className="mt-1"
-          value={workspaceState?.invoiceDateInput || ''}
-          onChange={(event) => emitUpdate({ invoiceDateInput: event.target.value })}
-          disabled={isLocked}
-        />
-      </label>
-      <label className="block text-sm font-medium text-gray-700">
-        Service Period End
-        <Input
-          type="date"
-          className="mt-1"
-          value={workspaceState?.serviceEndInput || ''}
-          onChange={(event) => emitUpdate({ serviceEndInput: event.target.value })}
-          disabled={isLocked}
-        />
-      </label>
-      <button
-        type="button"
-        onClick={handleLinkEvidence}
-        disabled={isLocked}
-        className="mt-3 inline-flex items-center text-sm font-semibold text-blue-600 hover:text-blue-800 disabled:text-gray-400"
-      >
-        <span className="mr-2" aria-hidden>
-          🔗
-        </span>
-        Link active document as evidence
-      </button>
-      {linkedEvidence && linkedTimestamp && (
-        <p className="text-xs text-green-700">
-          Evidence linked at {new Date(linkedTimestamp).toLocaleString()}
-          {linkedDocId ? ` (Doc: ${linkedDocId})` : ''}
-        </p>
-      )}
-    </div>
-  );
-
-  const renderExistenceTab = () => (
-    <div className="space-y-3">
-      <label className="block text-sm font-medium text-gray-700">
-        Do you have a supporting invoice?
-        <Select
-          className="mt-1 w-full"
-          value={workspaceState?.supportingInvoice || ''}
-          onChange={(event) => emitUpdate({ supportingInvoice: event.target.value })}
-          disabled={isLocked}
-        >
-          <option value="">Select an answer</option>
-          <option value="yes">Yes, support obtained</option>
-          <option value="no">No, still searching</option>
-          <option value="na">Not applicable</option>
-        </Select>
-      </label>
-      <label className="block text-sm font-medium text-gray-700">
-        Notes or observations
-        <textarea
-          className="mt-1 w-full rounded border border-gray-300 p-2 text-sm"
-          rows={3}
-          value={workspaceState?.existenceNotes || ''}
-          onChange={(event) => emitUpdate({ existenceNotes: event.target.value })}
-          disabled={isLocked}
-        />
-      </label>
-      <button
-        type="button"
-        onClick={handleLinkEvidence}
-        disabled={isLocked}
-        className="inline-flex items-center text-sm font-semibold text-blue-600 hover:text-blue-800 disabled:text-gray-400"
-      >
-        <span className="mr-2" aria-hidden>
-          🔗
-        </span>
-        Link active document as evidence
-      </button>
-      {linkedEvidence && linkedTimestamp && (
-        <p className="text-xs text-green-700">
-          Evidence linked at {new Date(linkedTimestamp).toLocaleString()}
-          {linkedDocId ? ` (Doc: ${linkedDocId})` : ''}
-        </p>
-      )}
-    </div>
-  );
-
-  const renderGeneralTab = () => (
-    <div className="space-y-3">
-      <p className="text-sm text-gray-600">
-        Use this workspace to record audit notes, reference assertions, and tie your documentation back to
-        the evidence viewer.
-      </p>
-      <label className="block text-sm font-medium text-gray-700">
-        Planner notes
-        <textarea
-          className="mt-1 w-full rounded border border-gray-300 p-2 text-sm"
-          rows={3}
-          value={workspaceState?.generalNotes || ''}
-          onChange={(event) => emitUpdate({ generalNotes: event.target.value })}
-          disabled={isLocked}
-        />
-      </label>
-      <button
-        type="button"
-        onClick={handleLinkEvidence}
-        disabled={isLocked}
-        className="inline-flex items-center text-sm font-semibold text-blue-600 hover:text-blue-800 disabled:text-gray-400"
-      >
-        <span className="mr-2" aria-hidden>
-          🔗
-        </span>
-        Link active document as evidence
-      </button>
-      {linkedEvidence && linkedTimestamp && (
-        <p className="text-xs text-green-700">
-          Evidence linked at {new Date(linkedTimestamp).toLocaleString()}
-          {linkedDocId ? ` (Doc: ${linkedDocId})` : ''}
-        </p>
-      )}
-    </div>
-  );
-
-  const renderActiveTab = () => {
-    if (activeTab === 'cutoff') return renderCutoffTab();
-    if (activeTab === 'existence') return renderExistenceTab();
-    return renderGeneralTab();
-  };
-
-  const handleNoteInputChange = (event) => {
-    const value = event.target.value;
-    if (typeof onNoteChange === 'function') {
-      onNoteChange(item.id, value);
-    }
-    emitUpdate({ workpaperNote: value });
   };
 
   return (
-    <div className="audit-workspace border rounded-lg p-4 bg-white shadow-sm space-y-5">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h3 className="font-bold text-lg text-gray-900">
-            {item.payee} • {currencyFormatter.format(amountNumber)}
+    <div className="audit-workspace space-y-6 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="space-y-1">
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+            Payment ID: {item.paymentId}
+          </p>
+          <h3 className="text-2xl font-bold text-gray-900">
+            {currencyFormatter.format(amountNumber)}
           </h3>
-          <p className="text-sm text-gray-600">Payment ID: {item.paymentId}</p>
-          {item.paymentDate && <p className="text-xs text-gray-500">Payment date: {item.paymentDate}</p>}
+          <p className="text-sm text-gray-700">{item.payee}</p>
+          {item.paymentDate && <p className="text-xs text-gray-500">Paid {item.paymentDate}</p>}
         </div>
-        {item.riskLevel && (
-          <span className={`badge inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold uppercase ${riskClass}`}>
-            {item.riskLevel.toUpperCase()} risk
-          </span>
-        )}
-      </div>
-
-      <div>
-        <div className="tabs flex flex-wrap gap-3 border-b border-gray-200 pb-2">
-          {tabs.map((assertion) => (
+        <div className="flex flex-col items-end gap-3 sm:flex-row sm:items-center">
+          {item.riskLevel && (
+            <span
+              className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold uppercase ${riskClass}`}
+            >
+              {item.riskLevel.toUpperCase()} risk
+            </span>
+          )}
+          <div className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 p-1 shadow-inner">
             <button
-              key={assertion}
               type="button"
-              className={`capitalize px-3 py-2 text-sm font-medium transition-colors ${
-                activeTab === assertion
-                  ? 'border-b-2 border-blue-600 text-blue-700'
-                  : 'text-gray-500 hover:text-gray-700'
+              onClick={() => handleDecisionChange(DECISION.PASS)}
+              disabled={isLocked}
+              className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors ${
+                currentDecision === DECISION.PASS
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-gray-700 hover:bg-white'
               }`}
-              onClick={() => setActiveTab(assertion)}
             >
-              {tabLabel(assertion)}
+              ✅ Pass
             </button>
-          ))}
+            <button
+              type="button"
+              onClick={() => handleDecisionChange(DECISION.EXCEPTION)}
+              disabled={isLocked}
+              className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors ${
+                currentDecision === DECISION.EXCEPTION
+                  ? 'bg-rose-600 text-white shadow-sm'
+                  : 'text-gray-700 hover:bg-white'
+              }`}
+            >
+              ⚠️ Exception
+            </button>
+          </div>
         </div>
-        <div className="workspace-content pt-4">{renderActiveTab()}</div>
       </div>
 
-      <div className="space-y-3 border-t border-gray-100 pt-4">
-        <h4 className="text-sm font-semibold text-gray-800 uppercase tracking-wide">
-          Classification & allocation
-        </h4>
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <label className="flex-1 text-sm font-medium text-gray-700">
-            <span className="mb-1 block">Classification</span>
+      {currentDecision === DECISION.PASS ? (
+        <div className="space-y-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-emerald-900">Audit decision: Pass</p>
+            <p className="text-xs text-emerald-800">Confirm the classification</p>
+          </div>
+          <label className="block text-sm font-semibold text-gray-800">
+            Confirmation
             <Select
-              value={allocation.singleClassification}
-              onChange={(event) => onClassificationChange(item.id, event.target.value)}
-              disabled={isSplit || isLocked}
-              className="w-full"
+              className="mt-1 w-full"
+              value={effectivePassClassification}
+              onChange={(event) => handlePassConfirmationChange(event.target.value)}
+              disabled={isLocked}
             >
-              <option value="">Select classification</option>
-              {classificationFields.map(({ key, label }) => (
-                <option key={key} value={key}>
-                  {label}
+              <option value="">Select classification...</option>
+              {PASS_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </Select>
           </label>
-          <label className="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
-            <input
-              type="checkbox"
-              className="rounded border-blue-300 text-blue-600 focus:ring-blue-500"
-              checked={isSplit}
-              disabled={isLocked}
-              onChange={(event) => onSplitToggle(item.id, event.target.checked, item)}
-            />
-            Split across classifications
-          </label>
+          <p className="text-xs text-emerald-800">
+            Pass keeps the item as-is. No extra detail required.
+          </p>
+        </div>
+      ) : currentDecision === DECISION.EXCEPTION ? (
+        <div className="space-y-4 rounded-xl border border-rose-200 bg-rose-50 p-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-semibold text-rose-900">Exception — add context</p>
+            <p className="text-xs text-rose-800">Verdict first, then theory.</p>
+          </div>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <label className="block text-sm font-semibold text-gray-800">
+              Nature of Error
+              <Select
+                className="mt-1 w-full"
+                value={effectiveExceptionNature}
+                onChange={(event) => handleNatureChange(event.target.value)}
+                disabled={isLocked}
+              >
+                <option value="">Select nature...</option>
+                {EXCEPTION_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </Select>
+            </label>
+
+            {assertionOptions.length > 0 && (
+              <label className="block text-sm font-semibold text-gray-800">
+                Primary Assertion Failure
+                <Select
+                  className="mt-1 w-full"
+                  value={allocation.assertion || ''}
+                  onChange={(event) => (itemKey ? onRationaleChange(itemKey, 'assertion', event.target.value) : null)}
+                  disabled={isLocked}
+                >
+                  <option value="">Select assertion...</option>
+                  {assertionOptions.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+            )}
+
+            {reasonOptions.length > 0 && (
+              <label className="block text-sm font-semibold text-gray-800">
+                Specific Reason
+                <Select
+                  className="mt-1 w-full"
+                  value={allocation.reason || ''}
+                  onChange={(event) => (itemKey ? onRationaleChange(itemKey, 'reason', event.target.value) : null)}
+                  disabled={isLocked}
+                >
+                  <option value="">Select reason...</option>
+                  {reasonOptions.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
+          <p className="text-sm font-semibold text-blue-900">Choose your verdict</p>
+          <p className="mt-1 text-xs text-blue-800">
+            Decide first: Pass or Exception. Your selection unlocks the rest of the workpaper.
+          </p>
+        </div>
+      )}
+
+      <div className="space-y-3 rounded-xl border border-gray-200 bg-gray-50 p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-sm font-semibold text-gray-900">Allocation</p>
+            <p className="text-xs text-gray-600">
+              {isSplit
+                ? 'Split only when the scenario truly needs it.'
+                : 'We default to a 100% allocation based on your verdict.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowAdvanced((prev) => !prev)}
+            disabled={isLocked}
+            className="text-xs font-semibold text-gray-700 underline decoration-gray-300 underline-offset-4 transition-colors hover:text-gray-900 disabled:text-gray-400"
+          >
+            {showAdvanced ? 'Hide advanced' : 'Advanced / Split'}
+          </button>
         </div>
 
-        {isSplit ? (
-          <div className="rounded-md border border-gray-200 bg-gray-50 p-3 space-y-3">
-            <p className="text-xs text-gray-500">{splitAllocationHint}</p>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-              {classificationFields.map(({ key, label }) => (
-                <label key={key} className="flex flex-col text-sm text-gray-700">
-                  <span className="font-medium mb-1">{label}</span>
-                  <Input
-                    type="text"
-                    inputMode="decimal"
-                    pattern="[0-9.,]*"
-                    value={allocation.splitValues[key] ?? ''}
-                    onChange={(event) => onSplitAmountChange(item.id, key, event.target.value)}
-                    disabled={isLocked}
-                  />
-                </label>
-              ))}
-            </div>
+        {showAdvanced ? (
+          <div className="space-y-3">
+            <label className="inline-flex items-center gap-2 text-sm font-semibold text-gray-800">
+              <input
+                type="checkbox"
+                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                checked={isSplit}
+                onChange={(event) => handleSplitToggleInternal(event.target.checked)}
+                disabled={isLocked}
+              />
+              Split across classifications
+            </label>
+
+            {isSplit ? (
+              <div className="space-y-3 rounded-lg border border-white/60 bg-white p-3 shadow-inner">
+                <p className="text-xs text-gray-500">{splitAllocationHint}</p>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
+                  {classificationFields.map(({ key, label }) => (
+                    <label key={key} className="flex flex-col text-sm font-semibold text-gray-800">
+                      <span className="mb-1">{label}</span>
+                      <Input
+                        type="text"
+                        inputMode="decimal"
+                        pattern="[0-9.,]*"
+                        value={resolveSplitValue(key)}
+                        onChange={(event) =>
+                          (itemKey ? onSplitAmountChange(itemKey, key, event.target.value) : null)
+                        }
+                        disabled={isLocked}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="rounded-md border border-white/60 bg-white px-3 py-2 text-sm text-gray-700">
+                {allocation.singleClassification
+                  ? `Entire amount allocated to ${classificationLabel}.`
+                  : singleAllocationHint}
+              </div>
+            )}
           </div>
         ) : (
-          <div className="rounded-md border border-gray-100 bg-gray-50 px-3 py-2 text-sm text-gray-600">
+          <div className="rounded-md border border-white/60 bg-white px-3 py-2 text-sm text-gray-700">
             {allocation.singleClassification
-              ? `Entire amount allocated to ${classificationLabel}.`
-              : singleAllocationHint}
+              ? `Allocated to ${classificationLabel}. Open advanced if you need a split.`
+              : 'Choose Pass or Exception, then confirm the classification or enter a split.'}
           </div>
         )}
 
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
-            Workpaper Procedure / Notes
-          </label>
-          <Textarea
-            rows={2}
-            placeholder="e.g., Vouched to Invoice #123. Service period verified as Dec 2023."
-            value={allocation.notes || ''}
-            onChange={handleNoteInputChange}
-            disabled={isLocked}
-          />
-        </div>
-
-        <div className="text-xs text-gray-500">
+        <div className="text-xs text-gray-600">
           Entered total: <strong>{currencyFormatter.format(totalEntered)}</strong>{' '}
           {totalsMatch ? (
-            <span className="text-green-600">(Balanced)</span>
+            <span className="text-emerald-700">(Balanced)</span>
           ) : (
-            <span className="text-amber-600">
+            <span className="text-amber-700">
               (Must equal {currencyFormatter.format(amountNumber)})
             </span>
           )}

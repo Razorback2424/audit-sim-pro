@@ -182,8 +182,14 @@ const InvoiceMappingSummaryRow = ({ mapping }) => {
     if (typeof mapping.uploadProgress === 'number' && mapping.uploadProgress < 100) {
       return { text: `Uploading (${Math.round(mapping.uploadProgress)}%)`, tone: 'text-blue-600' };
     }
-    if (mapping.uploadProgress === 100 || mapping.storagePath || mapping.downloadURL || mapping.fileName) {
+    if (mapping.clientSideFile) {
+      return { text: 'Selected (uploads on Save)', tone: 'text-amber-700' };
+    }
+    if (mapping.uploadProgress === 100 || mapping.storagePath || mapping.downloadURL) {
       return { text: 'Ready', tone: 'text-emerald-600' };
+    }
+    if (mapping.fileName) {
+      return { text: 'Missing file/link', tone: 'text-amber-700' };
     }
     return { text: 'Pending upload', tone: 'text-gray-500' };
   })();
@@ -244,10 +250,11 @@ const ReferenceDocumentItem = ({ item, index, onChange, onRemove, onFileSelect, 
 
   const storagePathLabel = (item.storagePath || '').trim();
   const downloadUrlLabel = (item.downloadURL || '').trim();
+  const hasDisplayName = Boolean((item.fileName || '').trim());
+  const hasAttachment = Boolean(item.clientSideFile || storagePathLabel || downloadUrlLabel);
 
   const summarySource = (() => {
     if (item.clientSideFile) return item.clientSideFile.name;
-    if (item.fileName) return item.fileName;
     if (storagePathLabel) return storagePathLabel;
     if (downloadUrlLabel) return downloadUrlLabel;
     return 'No attachment yet';
@@ -258,8 +265,9 @@ const ReferenceDocumentItem = ({ item, index, onChange, onRemove, onFileSelect, 
     if (typeof item.uploadProgress === 'number' && item.uploadProgress < 100) {
       return `Uploading (${Math.round(item.uploadProgress)}%)`;
     }
-    if (item.uploadProgress === 100) return 'Ready';
-    if (summarySource !== 'No attachment yet') return 'Ready';
+    if (item.clientSideFile) return 'Selected (uploads on Save)';
+    if (item.uploadProgress === 100 || hasAttachment) return 'Ready';
+    if (hasDisplayName) return 'Missing file/link';
     return 'Pending';
   })();
 
@@ -305,6 +313,10 @@ const ReferenceDocumentItem = ({ item, index, onChange, onRemove, onFileSelect, 
                   ? 'text-red-600'
                   : statusLabel === 'Ready'
                   ? 'text-emerald-600'
+                  : statusLabel === 'Uploading (0%)' || statusLabel.startsWith('Uploading')
+                  ? 'text-blue-600'
+                  : statusLabel.includes('Selected') || statusLabel.includes('Missing')
+                  ? 'text-amber-700'
                   : 'text-gray-900'
               }`}
             >

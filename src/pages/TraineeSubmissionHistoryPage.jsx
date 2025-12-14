@@ -110,6 +110,20 @@ export const getLatestAttempt = (attempts = []) => {
   return best ? best.attempt : null;
 };
 
+const hasMeaningfulDraft = (progress) => {
+  if (!progress || typeof progress !== 'object') return false;
+  const percentComplete = Number(progress.percentComplete || 0);
+  if (percentComplete > 0) return true;
+  const selectedPaymentIds = Array.isArray(progress?.draft?.selectedPaymentIds) ? progress.draft.selectedPaymentIds : [];
+  if (selectedPaymentIds.length > 0) return true;
+  const classificationDraft = progress?.draft?.classificationDraft;
+  if (classificationDraft && typeof classificationDraft === 'object' && Object.keys(classificationDraft).length > 0) {
+    return true;
+  }
+  const step = typeof progress.step === 'string' ? progress.step.toLowerCase() : '';
+  return step !== '' && step !== 'selection';
+};
+
 const extractGrade = (attempt = {}) => {
   if (!attempt || typeof attempt !== 'object') return undefined;
   const candidates = [
@@ -201,7 +215,7 @@ export default function TraineeSubmissionHistoryPage() {
 
   const hasHistory = history.length > 0;
 
-  const handleRetakeClick = async (caseId) => {
+  const handleRetakeClick = async (caseId, latestSubmittedAt) => {
     if (!caseId) return;
     if (!userId) {
       navigate('/login');
@@ -213,7 +227,13 @@ export default function TraineeSubmissionHistoryPage() {
       const progress = progressMap.get(caseId);
       const percentComplete = Number(progress?.percentComplete || 0);
       const state = typeof progress?.state === 'string' ? progress.state.toLowerCase() : '';
-      const hasDraft = percentComplete < 100 && state !== 'submitted';
+      const meaningfulDraft = hasMeaningfulDraft(progress);
+
+      // Only prompt when there is meaningful, in-progress draft work.
+      // Progress documents can be updated after submission; don't treat "submitted/results/100%" as a draft.
+      const step = typeof progress?.step === 'string' ? progress.step.toLowerCase() : '';
+      const isSubmitted = state === 'submitted' || percentComplete >= 100 || step === 'results';
+      const hasDraft = !isSubmitted && meaningfulDraft;
 
       if (!hasDraft) {
         navigate(`/trainee/case/${caseId}?retake=true`);
@@ -330,7 +350,7 @@ export default function TraineeSubmissionHistoryPage() {
                     <p className="text-sm text-gray-500">Case ID: {entry.caseId}</p>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Button variant="primary" onClick={() => handleRetakeClick(entry.caseId)}>
+                    <Button variant="primary" onClick={() => handleRetakeClick(entry.caseId, latestAttempt?.submittedAt)}>
                       Retake Case
                     </Button>
                   </div>

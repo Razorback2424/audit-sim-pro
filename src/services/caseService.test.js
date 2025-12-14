@@ -1,4 +1,4 @@
-import { fetchCase, markCaseDeleted } from './caseService';
+import { fetchCase, markCaseDeleted, updateCase } from './caseService';
 import { doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
 import { FirestorePaths, db } from '../AppCore';
 import { DEFAULT_AUDIT_AREA } from '../models/caseConstants';
@@ -56,5 +56,64 @@ describe('caseService', () => {
   test('markCaseDeleted calls setDoc', async () => {
     await markCaseDeleted('2');
     expect(setDoc).toHaveBeenCalled();
+  });
+
+  test('updateCase persists highlightedDocument on auditItems', async () => {
+    doc.mockImplementation((_db, path) => ({ path }));
+    setDoc.mockResolvedValueOnce();
+
+    await updateCase('case-1', {
+      caseName: 'Case',
+      publicVisible: true,
+      status: 'draft',
+      _deleted: false,
+      disbursements: [
+        {
+          paymentId: 'p1',
+          payee: 'Vendor',
+          amount: '100',
+          paymentDate: '2024-01-01',
+          highlightedDocument: {
+            storagePath: 'artifacts/app/case_highlight/case-1/highlight.pdf',
+            downloadURL: 'https://example.com/highlight.pdf',
+            fileName: 'highlight.pdf',
+            contentType: 'application/pdf',
+          },
+        },
+      ],
+    });
+
+    const [, payload] = setDoc.mock.calls[0];
+    expect(payload.auditItems).toHaveLength(1);
+    expect(payload.auditItems[0].highlightedDocument).toEqual({
+      storagePath: 'artifacts/app/case_highlight/case-1/highlight.pdf',
+      downloadURL: 'https://example.com/highlight.pdf',
+      fileName: 'highlight.pdf',
+      contentType: 'application/pdf',
+    });
+  });
+
+  test('updateCase trims paymentIds for auditItems', async () => {
+    doc.mockImplementation((_db, path) => ({ path }));
+    setDoc.mockResolvedValueOnce();
+
+    await updateCase('case-1', {
+      caseName: 'Case',
+      publicVisible: true,
+      status: 'draft',
+      _deleted: false,
+      disbursements: [
+        {
+          paymentId: '  P-001  ',
+          payee: 'Vendor',
+          amount: '100',
+          paymentDate: '2024-01-01',
+        },
+      ],
+      invoiceMappings: [{ paymentId: 'P-001', storagePath: 'path', fileName: 'inv.pdf' }],
+    });
+
+    const [, payload] = setDoc.mock.calls[0];
+    expect(payload.auditItems[0].paymentId).toBe('P-001');
   });
 });

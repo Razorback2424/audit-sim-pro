@@ -19,8 +19,14 @@ const InvoiceMappingInline = ({ mapping, disbursementTempId, onRemove, onFileSel
     if (typeof mapping.uploadProgress === 'number' && mapping.uploadProgress < 100) {
       return { text: `Uploading (${Math.round(mapping.uploadProgress)}%)`, className: 'text-blue-600' };
     }
-    if (mapping.uploadProgress === 100 || mapping.storagePath || mapping.downloadURL || mapping.fileName) {
+    if (mapping.clientSideFile) {
+      return { text: 'Selected (uploads on Save)', className: 'text-amber-700' };
+    }
+    if (mapping.uploadProgress === 100 || mapping.storagePath || mapping.downloadURL) {
       return { text: 'Ready', className: 'text-emerald-600' };
+    }
+    if (mapping.fileName) {
+      return { text: 'Missing file/link', className: 'text-amber-700' };
     }
     return { text: 'Pending upload', className: 'text-gray-500' };
   })();
@@ -78,6 +84,101 @@ const InvoiceMappingInline = ({ mapping, disbursementTempId, onRemove, onFileSel
           </button>
         </div>
       </div>
+    </div>
+  );
+};
+
+const HighlightedEvidenceUploader = ({
+  disbursementTempId,
+  document,
+  onSelectFile,
+  onClear,
+  acceptValue,
+  prettySupportedLabels,
+  maxUploadBytes,
+}) => {
+  const fileInputId = `highlighted-upload-${disbursementTempId}`;
+  const label =
+    document?.clientSideFile?.name ||
+    document?.fileName ||
+    document?.storagePath ||
+    document?.downloadURL ||
+    'No highlighted PDF selected';
+
+  const status = (() => {
+    if (document?.uploadError) return { text: document.uploadError, className: 'text-red-600' };
+    if (typeof document?.uploadProgress === 'number' && document.uploadProgress < 100) {
+      return { text: `Uploading (${Math.round(document.uploadProgress)}%)`, className: 'text-blue-600' };
+    }
+    if (document?.clientSideFile) {
+      return { text: 'Selected (uploads on Save)', className: 'text-amber-700' };
+    }
+    if (document?.uploadProgress === 100 || document?.storagePath || document?.downloadURL) {
+      return { text: 'Ready', className: 'text-emerald-600' };
+    }
+    if (document?.fileName) {
+      return { text: 'Missing file/link', className: 'text-amber-700' };
+    }
+    return { text: 'Pending upload', className: 'text-gray-500' };
+  })();
+
+  const helperText = `Upload a copy of the invoice with the error circled in red. Allowed formats: ${prettySupportedLabels}. Max size ${Math.round(
+    maxUploadBytes / (1024 * 1024)
+  )} MB.`;
+  const hasSelection =
+    !!document?.clientSideFile || !!document?.fileName || !!document?.storagePath || !!document?.downloadURL;
+
+  return (
+    <div className="rounded-lg border border-dashed border-blue-200 bg-blue-50/40 p-3">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+            Evidence Reveal (Highlighted PDF)
+          </p>
+          <p className="truncate text-sm font-medium text-gray-900" title={label}>
+            {label}
+          </p>
+          <p className="mt-1 text-xs text-gray-600">{helperText}</p>
+          <p className={`mt-1 text-xs ${status.className}`}>{status.text}</p>
+          {document?.downloadURL ? (
+            <a
+              href={document.downloadURL}
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs text-blue-600 hover:text-blue-800 underline mt-1 inline-block"
+            >
+              Open download URL
+            </a>
+          ) : null}
+        </div>
+        <div className="flex items-center gap-2">
+          <label
+            htmlFor={fileInputId}
+            className="inline-flex cursor-pointer items-center rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 hover:bg-blue-100 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2"
+          >
+            Upload
+          </label>
+          <input
+            id={fileInputId}
+            type="file"
+            accept={acceptValue}
+            className="hidden"
+            onChange={(event) => onSelectFile(disbursementTempId, event.target.files?.[0])}
+          />
+          {hasSelection ? (
+            <button
+              type="button"
+              onClick={() => onClear(disbursementTempId)}
+              className="inline-flex h-9 items-center justify-center rounded-full border border-gray-200 bg-white px-3 text-xs font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2"
+            >
+              Clear
+            </button>
+          ) : null}
+        </div>
+      </div>
+      {document?.uploadError ? (
+        <p className="mt-2 text-xs text-red-600">Error: {document.uploadError}</p>
+      ) : null}
     </div>
   );
 };
@@ -246,6 +347,8 @@ const DisbursementItem = ({
   onAddMapping,
   onRemoveMapping,
   onSelectMappingFile,
+  onSelectHighlightedDocument,
+  onClearHighlightedDocument,
   onSyncPaymentId,
   fileAcceptValue,
   maxUploadBytes,
@@ -331,6 +434,12 @@ const DisbursementItem = ({
   };
   const baseId = item._tempId || item.paymentId || `disbursement-${index}`;
   const mappings = item.mappings || [];
+  const highlightedDoc = item.highlightedDocument || {};
+  const hasHighlightedDocument =
+    !!highlightedDoc.clientSideFile ||
+    !!highlightedDoc.fileName ||
+    !!highlightedDoc.storagePath ||
+    !!highlightedDoc.downloadURL;
   const errorReasonValues = Array.isArray(item.errorReasons) ? item.errorReasons : [];
   const skillCategoryValues = Array.isArray(item.trapType)
     ? item.trapType
@@ -342,7 +451,8 @@ const DisbursementItem = ({
     (Array.isArray(item.correctAssertions) && item.correctAssertions.length > 0) ||
     (Array.isArray(item.requiredAssertions) && item.requiredAssertions.length > 0) ||
     !!item.validator?.type ||
-    !!item.groundTruths;
+    !!item.groundTruths ||
+    hasHighlightedDocument;
   const [showTrapLogic, setShowTrapLogic] = useState(hasAdvancedData);
 
   useEffect(() => {
@@ -725,6 +835,17 @@ const DisbursementItem = ({
                       placeholder="e.g., cleared"
                     />
                   </div>
+                </div>
+                <div className="mt-3">
+                  <HighlightedEvidenceUploader
+                    disbursementTempId={item._tempId}
+                    document={highlightedDoc}
+                    onSelectFile={onSelectHighlightedDocument}
+                    onClear={onClearHighlightedDocument}
+                    acceptValue={fileAcceptValue}
+                    prettySupportedLabels={prettySupportedLabels}
+                    maxUploadBytes={maxUploadBytes}
+                  />
                 </div>
               </div>
 

@@ -1,11 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { Timestamp } from 'firebase/firestore';
-import { storage, Button, Input, useRoute, useAuth, useModal, appId } from '../AppCore';
+import { storage, Button, useRoute, useAuth, useModal, appId } from '../AppCore';
 import { subscribeToCase } from '../services/caseService';
 import { saveSubmission } from '../services/submissionService';
 import { saveProgress, subscribeProgressForCases } from '../services/progressService';
-import { Send, FileText, Eye, Loader2, ExternalLink, Download } from 'lucide-react';
+import { Send, Loader2, ExternalLink, Download } from 'lucide-react';
+import ResultsAnalysis from '../components/trainee/ResultsAnalysis';
+import AuditItemCardFactory from '../components/trainee/AuditItemCardFactory';
 
 const FLOW_STEPS = Object.freeze({
   SELECTION: 'selection',
@@ -33,6 +35,8 @@ const CLASSIFICATION_FIELDS = [
   { key: 'improperlyIncluded', label: 'Improperly Included' },
   { key: 'improperlyExcluded', label: 'Improperly Excluded' },
 ];
+
+const hasExplicitDecision = (allocation) => allocation?.isException === true || allocation?.isException === false;
 
 const isInlinePreviewable = (contentType, fileNameOrPath) => {
   const normalizedType = typeof contentType === 'string' ? contentType.toLowerCase() : '';
@@ -133,9 +137,14 @@ const currencyFormatter = new Intl.NumberFormat('en-US', { style: 'currency', cu
 
 export default function TraineeCaseViewPage({ params }) {
   const { caseId } = params;
-  const { navigate } = useRoute();
+  const { navigate, query, setQuery } = useRoute();
   const { userId } = useAuth();
   const { showModal, hideModal } = useModal();
+
+  const normalizePaymentId = useCallback((value) => {
+    if (value === null || value === undefined) return '';
+    return String(value).trim();
+  }, []);
 
   const [caseData, setCaseData] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -148,13 +157,19 @@ export default function TraineeCaseViewPage({ params }) {
   const [activeEvidenceError, setActiveEvidenceError] = useState('');
   const [activeEvidenceLoading, setActiveEvidenceLoading] = useState(false);
   const [downloadingReferenceId, setDownloadingReferenceId] = useState(null);
+  const [isRetakeResetting, setIsRetakeResetting] = useState(false);
 
   const lastResolvedEvidenceRef = useRef({ evidenceId: null, storagePath: null, url: null, inlineNotSupported: false });
   const progressSaveTimeoutRef = useRef(null);
+  const lastLocalChangeRef = useRef(0);
   const activeStepRef = useRef(FLOW_STEPS.SELECTION);
   const selectionRef = useRef(selectedDisbursements);
   const classificationRef = useRef(classificationAmounts);
+  const selectedIdsRef = useRef([]);
+  const classifiedCountRef = useRef(0);
   const isLockedRef = useRef(false);
+  const retakeHandledRef = useRef(false);
+  const retakeResettingRef = useRef(false);
 
   const createEmptyAllocation = useCallback(() => {
     const template = {};
@@ -163,6 +178,78 @@ export default function TraineeCaseViewPage({ params }) {
     });
     return template;
   }, []);
+
+  const resetForRetake = useCallback(
+    async ({ clearRetakeQuery } = {}) => {
+      if (!caseId || !userId) return;
+      if (retakeResettingRef.current) return;
+
+      retakeResettingRef.current = true;
+      setIsRetakeResetting(true);
+      setIsLocked(false);
+      setActiveStep(FLOW_STEPS.SELECTION);
+      setSelectedDisbursements({});
+      setClassificationAmounts({});
+      setActiveEvidenceId(null);
+      setActiveEvidenceUrl(null);
+      setActiveEvidenceError('');
+      setActiveEvidenceLoading(false);
+      lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null, inlineNotSupported: false };
+
+      let didReset = false;
+      try {
+        if (progressSaveTimeoutRef.current) {
+          clearTimeout(progressSaveTimeoutRef.current);
+        }
+
+        await saveProgress({
+          appId,
+          uid: userId,
+          caseId,
+          patch: {
+            percentComplete: 0,
+            state: 'not_started',
+            step: FLOW_STEPS.SELECTION,
+            draft: {
+              selectedPaymentIds: [],
+              classificationDraft: {},
+              fixedAssetDraft: {},
+              cashLinkMap: {},
+              cashAdjustments: [],
+              cashSummary: {},
+            },
+          },
+          forceOverwrite: true,
+        });
+        didReset = true;
+      } catch (err) {
+        console.error('Failed to reset progress for retake:', err);
+        showModal('We ran into an issue preparing your retake. Please try again.', 'Retake Error');
+        retakeResettingRef.current = false;
+      } finally {
+        setIsRetakeResetting(false);
+        if (clearRetakeQuery && typeof setQuery === 'function') {
+          setQuery(
+            (prev) => {
+              const next = { ...prev };
+              delete next.retake;
+              return next;
+            },
+            { replace: true }
+          );
+        }
+
+        if (!didReset) {
+          retakeResettingRef.current = false;
+        }
+      }
+    },
+    [caseId, userId, setQuery, showModal]
+  );
+
+  const requestRetake = useCallback(() => {
+    resetForRetake();
+  }, [resetForRetake]);
 
   const parseAmount = useCallback((value) => {
     if (value === '' || value === null || value === undefined) return 0;
@@ -173,6 +260,7 @@ export default function TraineeCaseViewPage({ params }) {
   const isAllocationComplete = useCallback(
     (disbursement, allocation) => {
       if (!allocation) return false;
+      if (!hasExplicitDecision(allocation)) return false;
       const amountNumber = Number(disbursement?.amount);
       if (!Number.isFinite(amountNumber)) return false;
       let sum = 0;
@@ -261,6 +349,23 @@ export default function TraineeCaseViewPage({ params }) {
   }, [caseId, navigate, userId, showModal]);
 
   useEffect(() => {
+    if (!query?.retake) {
+      retakeHandledRef.current = false;
+    }
+  }, [query]);
+
+  useEffect(() => {
+    if (!caseId || !userId) return;
+    const retakeValue = query?.retake;
+    const retakeRequested =
+      typeof retakeValue === 'string' ? retakeValue.toLowerCase() === 'true' : Boolean(retakeValue);
+    if (!retakeRequested || retakeHandledRef.current) return;
+
+    retakeHandledRef.current = true;
+    resetForRetake({ clearRetakeQuery: true });
+  }, [caseId, userId, query, resetForRetake]);
+
+  useEffect(() => {
     if (!caseId || !userId) return;
 
     const unsubscribe = subscribeProgressForCases(
@@ -269,21 +374,38 @@ export default function TraineeCaseViewPage({ params }) {
         const entry = progressMap.get(caseId);
         if (!entry) return;
 
+        const entryUpdatedAtMs = entry?.updatedAt?.toMillis ? entry.updatedAt.toMillis() : 0;
+        const localChangeMs = lastLocalChangeRef.current || 0;
+        const isEntryStale = localChangeMs > 0 && entryUpdatedAtMs > 0 && entryUpdatedAtMs < localChangeMs - 2000;
+        const recentlyChanged = isEntryStale || Date.now() - lastLocalChangeRef.current < 1200;
+
+        if (retakeResettingRef.current) {
+          const percentComplete = Number(entry?.percentComplete || 0);
+          const state = typeof entry?.state === 'string' ? entry.state.toLowerCase() : '';
+          const step = STEP_SEQUENCE.includes(entry.step) ? entry.step : FLOW_STEPS.SELECTION;
+          const isResetSnapshot =
+            percentComplete === 0 && (state === 'not_started' || step === FLOW_STEPS.SELECTION);
+
+          if (!isResetSnapshot) return;
+          retakeResettingRef.current = false;
+        }
+
         const nextStep = STEP_SEQUENCE.includes(entry.step) ? entry.step : FLOW_STEPS.SELECTION;
-        if (activeStepRef.current !== nextStep) {
+        if ((!recentlyChanged || nextStep === FLOW_STEPS.RESULTS) && activeStepRef.current !== nextStep) {
           setActiveStep(nextStep);
         }
 
         const nextSelection = {};
         (entry.draft?.selectedPaymentIds || []).forEach((id) => {
-          if (id) nextSelection[id] = true;
+          const normalized = normalizePaymentId(id);
+          if (normalized) nextSelection[normalized] = true;
         });
-        if (!isSameSelectionMap(selectionRef.current, nextSelection)) {
+        if (!recentlyChanged && !isSameSelectionMap(selectionRef.current, nextSelection)) {
           setSelectedDisbursements(nextSelection);
         }
 
         const nextClassifications = entry.draft?.classificationDraft || {};
-        if (!isSameClassificationMap(classificationRef.current, nextClassifications)) {
+        if (!recentlyChanged && !isSameClassificationMap(classificationRef.current, nextClassifications)) {
           setClassificationAmounts(nextClassifications);
         }
 
@@ -298,11 +420,16 @@ export default function TraineeCaseViewPage({ params }) {
     );
 
     return () => unsubscribe();
-  }, [caseId, userId]);
+  }, [caseId, userId, normalizePaymentId]);
 
   const disbursementList = useMemo(
-    () => (Array.isArray(caseData?.disbursements) ? caseData.disbursements : []),
-    [caseData]
+    () =>
+      (Array.isArray(caseData?.disbursements) ? caseData.disbursements : []).map((item, index) => {
+        const paymentId = normalizePaymentId(item?.paymentId);
+        const rowKey = paymentId || item?.reference || item?._tempId || item?.id || `row-${index + 1}`;
+        return { ...item, paymentId, __rowKey: rowKey };
+      }),
+    [caseData, normalizePaymentId]
   );
 
   const referenceDocuments = useMemo(() => {
@@ -339,7 +466,7 @@ export default function TraineeCaseViewPage({ params }) {
 
   useEffect(() => {
     if (!caseData) return;
-    const validIds = new Set(disbursementList.map((item) => item.paymentId));
+    const validIds = new Set(disbursementList.map((item) => item.paymentId).filter(Boolean));
 
     setSelectedDisbursements((prev) => {
       const filtered = {};
@@ -367,6 +494,7 @@ export default function TraineeCaseViewPage({ params }) {
   const disbursementById = useMemo(() => {
     const map = new Map();
     disbursementList.forEach((item) => {
+      if (!item.paymentId) return;
       map.set(item.paymentId, item);
     });
     return map;
@@ -376,7 +504,10 @@ export default function TraineeCaseViewPage({ params }) {
     if (disbursementList.length === 0) {
       return Object.keys(selectedDisbursements).filter((id) => selectedDisbursements[id]);
     }
-    return disbursementList.map((item) => item.paymentId).filter((id) => selectedDisbursements[id]);
+    return disbursementList
+      .map((item) => item.paymentId)
+      .filter(Boolean)
+      .filter((id) => selectedDisbursements[id]);
   }, [disbursementList, selectedDisbursements]);
 
   const selectedDisbursementDetails = useMemo(
@@ -390,15 +521,13 @@ export default function TraineeCaseViewPage({ params }) {
     ).length;
   }, [selectedDisbursementDetails, classificationAmounts, isAllocationComplete]);
 
-  const classificationDraft = useMemo(() => {
-    const draft = {};
-    selectedIds.forEach((id) => {
-      if (classificationAmounts[id]) {
-        draft[id] = classificationAmounts[id];
-      }
-    });
-    return draft;
-  }, [selectedIds, classificationAmounts]);
+  useEffect(() => {
+    selectedIdsRef.current = selectedIds;
+  }, [selectedIds]);
+
+  useEffect(() => {
+    classifiedCountRef.current = classifiedCount;
+  }, [classifiedCount]);
 
   const allClassified = 
     selectedDisbursementDetails.length > 0 && classifiedCount === selectedDisbursementDetails.length;
@@ -629,37 +758,46 @@ export default function TraineeCaseViewPage({ params }) {
   const enqueueProgressSave = useCallback(
     (stepOverride) => {
       if (!userId || !caseId) return;
-      const step = stepOverride || activeStep;
-      const selectedCount = selectedIds.length;
-      const percentComplete = computePercentComplete(step, selectedCount, classifiedCount);
-
-      const patch = {
-        percentComplete,
-        state: deriveStateFromProgress(step, percentComplete),
-        step,
-        draft: {
-          selectedPaymentIds: selectedIds,
-          classificationDraft,
-        },
-      };
+      const intendedStep = stepOverride || activeStepRef.current;
 
       if (progressSaveTimeoutRef.current) {
         clearTimeout(progressSaveTimeoutRef.current);
       }
 
       progressSaveTimeoutRef.current = setTimeout(() => {
+        const step = intendedStep || activeStepRef.current;
+        const selectedPaymentIds = selectedIdsRef.current || [];
+        const selectedCount = selectedPaymentIds.length;
+        const classified = classifiedCountRef.current || 0;
+        const percentComplete = computePercentComplete(step, selectedCount, classified);
+        const snapshot = classificationRef.current || {};
+        const nextDraft = {};
+        selectedPaymentIds.forEach((id) => {
+          if (snapshot[id]) nextDraft[id] = snapshot[id];
+        });
+
+        const patch = {
+          percentComplete,
+          state: deriveStateFromProgress(step, percentComplete),
+          step,
+          draft: {
+            selectedPaymentIds: selectedPaymentIds,
+            classificationDraft: nextDraft,
+          },
+        };
+
         saveProgress({ appId, uid: userId, caseId, patch }).catch((err) => {
           console.error('Failed to save progress:', err);
         });
-      }, 600);
+      }, 300);
     },
-    [userId, caseId, activeStep, selectedIds, classifiedCount, classificationDraft]
+    [userId, caseId]
   );
 
   useEffect(() => {
-    if (!caseData || !userId || isLocked || activeStep === FLOW_STEPS.RESULTS) return;
+    if (!caseData || !userId || isLocked || activeStep === FLOW_STEPS.RESULTS || isRetakeResetting) return;
     enqueueProgressSave();
-  }, [caseData, userId, isLocked, activeStep, enqueueProgressSave]);
+  }, [caseData, userId, isLocked, activeStep, enqueueProgressSave, isRetakeResetting]);
 
   useEffect(
     () => () => {
@@ -670,8 +808,11 @@ export default function TraineeCaseViewPage({ params }) {
     []
   );
 
-  const handleSelectionChange = (paymentId) => {
+  const handleSelectionChange = (paymentIdRaw) => {
     if (isLocked) return;
+    const paymentId = normalizePaymentId(paymentIdRaw);
+    if (!paymentId) return;
+    lastLocalChangeRef.current = Date.now();
     const currentlySelected = !!selectedDisbursements[paymentId];
 
     setSelectedDisbursements((prev) => {
@@ -698,14 +839,40 @@ export default function TraineeCaseViewPage({ params }) {
     }
   };
 
-  const handleAllocationChange = (paymentId, fieldKey, rawValue) => {
+  const handleAllocationChange = (paymentId, fieldKey, value) => {
     if (isLocked) return;
-    const sanitized = rawValue === '' ? '' : rawValue.replace(/[^0-9.]/g, '');
+    const normalizedId = normalizePaymentId(paymentId);
+    if (!normalizedId) return;
+    lastLocalChangeRef.current = Date.now();
+
+    let finalValue;
+    // Keep raw value for these specific, non-numeric fields
+    if (['mode', 'singleClassification', 'notes'].includes(fieldKey)) {
+      finalValue = value;
+    } else {
+      // Sanitize all other fields (assumed to be amounts)
+      finalValue = value === '' ? '' : String(value).replace(/[^0-9.]/g, '');
+    }
+
     setClassificationAmounts((prev) => {
       const next = { ...prev };
-      const allocation = { ...(next[paymentId] || createEmptyAllocation()) };
-      allocation[fieldKey] = sanitized;
-      next[paymentId] = allocation;
+      const allocation = { ...(next[normalizedId] || createEmptyAllocation()) };
+      allocation[fieldKey] = finalValue;
+      next[normalizedId] = allocation;
+      return next;
+    });
+  };
+
+  const handleRationaleChange = (paymentId, fieldKey, value) => {
+    if (isLocked) return;
+    const normalizedId = normalizePaymentId(paymentId);
+    if (!normalizedId) return;
+    lastLocalChangeRef.current = Date.now();
+    setClassificationAmounts((prev) => {
+      const next = { ...prev };
+      const allocation = { ...(next[normalizedId] || createEmptyAllocation()) };
+      allocation[fieldKey] = value; // Stores 'assertion', 'reason', or 'isException'
+      next[normalizedId] = allocation;
       return next;
     });
   };
@@ -725,6 +892,7 @@ export default function TraineeCaseViewPage({ params }) {
       );
       return;
     }
+    lastLocalChangeRef.current = Date.now();
     setClassificationAmounts((prev) => {
       const next = { ...prev };
       selectedIds.forEach((id) => {
@@ -734,6 +902,7 @@ export default function TraineeCaseViewPage({ params }) {
       });
       return next;
     });
+    enqueueProgressSave(FLOW_STEPS.TESTING);
     setActiveStep(FLOW_STEPS.TESTING);
   };
 
@@ -1099,26 +1268,30 @@ export default function TraineeCaseViewPage({ params }) {
         <p className="text-gray-500">No disbursements are available for this case.</p>
       ) : (
         <div className="space-y-3">
-          {disbursementList.map((d) => (
-            <div
-              key={d.paymentId}
-              className="flex items-center p-4 border border-gray-200 rounded-md hover:bg-gray-50 transition-colors"
-            >
-              <input
-                type="checkbox"
-                id={`cb-${d.paymentId}`}
-                checked={!!selectedDisbursements[d.paymentId]}
-                onChange={() => handleSelectionChange(d.paymentId)}
-                disabled={isLocked}
-                className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 mr-4 cursor-pointer disabled:cursor-not-allowed"
-              />
-              <label
-                htmlFor={`cb-${d.paymentId}`}
-                className="flex-grow grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-1 cursor-pointer"
+          {disbursementList.map((d, index) => {
+            const paymentId = d.paymentId;
+            const checkboxId = paymentId ? `cb-${paymentId}` : `cb-missing-${index + 1}`;
+            const disabled = isLocked || !paymentId;
+            return (
+              <div
+                key={d.__rowKey}
+                className="flex items-center p-4 border border-gray-200 rounded-md hover:bg-gray-50 transition-colors"
               >
-                <span className="text-sm text-gray-700">
-                  <strong className="font-medium">ID:</strong> {d.paymentId}
-                </span>
+                <input
+                  type="checkbox"
+                  id={checkboxId}
+                  checked={paymentId ? !!selectedDisbursements[paymentId] : false}
+                  onChange={() => handleSelectionChange(paymentId)}
+                  disabled={disabled}
+                  className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 mr-4 cursor-pointer disabled:cursor-not-allowed"
+                />
+                <label
+                  htmlFor={checkboxId}
+                  className={`flex-grow grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-1 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
+                >
+                  <span className="text-sm text-gray-700">
+                    <strong className="font-medium">ID:</strong> {paymentId || 'Missing payment ID'}
+                  </span>
                 <span className="text-sm text-gray-700">
                   <strong className="font-medium">Payee:</strong> {d.payee}
                 </span>
@@ -1133,9 +1306,15 @@ export default function TraineeCaseViewPage({ params }) {
                     Expected classification: {d.expectedClassification}
                   </span>
                 ) : null}
-              </label>
-            </div>
-          ))}
+                  {!paymentId ? (
+                    <span className="text-xs text-amber-700">
+                      This disbursement is missing a payment ID and cannot be selected.
+                    </span>
+                  ) : null}
+                </label>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -1192,8 +1371,8 @@ export default function TraineeCaseViewPage({ params }) {
             </div>
 
             <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
-              <h3 className="text-xl font-semibold text-gray-800 mb-4">Allocate Each Disbursement</h3>
-              <div className="space-y-4">
+              <h3 className="text-xl font-semibold text-gray-800 mb-4">Audit Procedures</h3>
+              <div className="space-y-6">
                 {selectedDisbursementDetails.map((d) => {
                   const allocation = classificationAmounts[d.paymentId] || createEmptyAllocation();
                   const totalEntered = CLASSIFICATION_FIELDS.reduce((sum, { key }) => {
@@ -1203,51 +1382,27 @@ export default function TraineeCaseViewPage({ params }) {
                   const amountNumber = Number(d.amount) || 0;
                   const totalsMatch = Math.abs(totalEntered - amountNumber) <= 0.01;
 
+                  // 3. The Swap: Use Factory instead of manual divs
                   return (
-                    <div key={d.paymentId} className="border border-gray-200 rounded-md p-4 space-y-4">
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-sm text-gray-700">
-                        <span>
-                          <strong className="font-medium">ID:</strong> {d.paymentId}
-                        </span>
-                        <span>
-                          <strong className="font-medium">Payee:</strong> {d.payee}
-                        </span>
-                        <span>
-                          <strong className="font-medium">Amount:</strong> {currencyFormatter.format(amountNumber)}
-                        </span>
-                        <span>
-                          <strong className="font-medium">Date:</strong> {d.paymentDate}
-                        </span>
-                        {d.expectedClassification ? (
-                          <span className="text-xs text-gray-500 col-span-full">
-                            Expected classification: {d.expectedClassification}
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-                        {CLASSIFICATION_FIELDS.map(({ key, label }) => (
-                          <label key={key} className="flex flex-col text-sm text-gray-700">
-                            <span className="font-medium mb-1">{label}</span>
-                            <Input
-                              type="number"
-                              min="0"
-                              step="0.01"
-                              value={allocation[key] ?? ''}
-                              onChange={(e) => handleAllocationChange(d.paymentId, key, e.target.value)}
-                              disabled={isLocked}
-                            />
-                          </label>
-                        ))}
-                      </div>
-                      <div className="text-xs text-gray-500">
-                        Entered total: <strong>{currencyFormatter.format(totalEntered)}</strong>{' '}
-                        {!totalsMatch ? (
-                          <span className="text-amber-600">(Must equal {currencyFormatter.format(amountNumber)})</span>
-                        ) : (
-                          <span className="text-green-600">(Balanced)</span>
-                        )}
-                      </div>
-                    </div>
+                    <AuditItemCardFactory
+                      key={d.paymentId}
+                      item={d}
+                      allocation={allocation}
+                      classificationFields={CLASSIFICATION_FIELDS}
+                      splitAllocationHint="Enter amounts for each category."
+                      singleAllocationHint="Select a classification."
+                      onSplitToggle={(id, checked) => {
+                         // Simple local toggle logic or update allocation mode
+                         handleAllocationChange(id, 'mode', checked ? 'split' : 'single');
+                      }}
+                      onClassificationChange={(id, val) => handleAllocationChange(id, 'singleClassification', val)}
+                      onSplitAmountChange={(id, key, val) => handleAllocationChange(id, key, val)}
+                      onNoteChange={(id, val) => handleAllocationChange(id, 'notes', val)}
+                      onRationaleChange={handleRationaleChange} // <--- Pass the new handler
+                      isLocked={isLocked}
+                      totalsMatch={totalsMatch}
+                      totalEntered={totalEntered}
+                    />
                   );
                 })}
               </div>
@@ -1268,119 +1423,25 @@ export default function TraineeCaseViewPage({ params }) {
   };
 
   const renderResultsStep = () => {
-    const summaryDocuments = selectedDisbursementDetails.map((disbursement) => ({
-      disbursement,
-      documents: collectSupportingDocuments(disbursement),
-    }));
-
     return (
       <div className="space-y-6">
-        <div className="bg-white border border-gray-200 rounded-lg shadow-xl p-6">
-          <h1 className="text-3xl font-bold text-gray-800 mb-2">Submission Confirmed</h1>
-          <p className="text-gray-600">
-            Your testing selections for {caseTitle} have been recorded. You can review your answers below.
-          </p>
-        </div>
-
         <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
-          <h2 className="text-xl font-semibold text-gray-800 mb-4">Selected Disbursements</h2>
-          {summaryDocuments.length === 0 ? (
-            <p className="text-sm text-gray-500">No disbursements were recorded in your submission.</p>
-          ) : (
-            <ul className="space-y-4">
-              {summaryDocuments.map(({ disbursement, documents }) => {
-                const allocation = classificationAmounts[disbursement.paymentId] || createEmptyAllocation();
-                const parsedValues = CLASSIFICATION_FIELDS.map(({ key }) => {
-                  const value = parseAmount(allocation[key]);
-                  return Number.isFinite(value) ? value : 0;
-                });
-                const totalEntered = parsedValues.reduce((sum, value) => sum + value, 0);
-
-                return (
-                  <li key={disbursement.paymentId} className="border border-gray-200 rounded-md p-4">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-gray-700">
-                      <span>
-                        <strong className="font-medium">ID:</strong> {disbursement.paymentId}
-                      </span>
-                      <span>
-                        <strong className="font-medium">Payee:</strong> {disbursement.payee}
-                      </span>
-                      <span>
-                        <strong className="font-medium">Amount:</strong> {currencyFormatter.format(Number(disbursement.amount) || 0)}
-                      </span>
-                      <span>
-                        <strong className="font-medium">Date:</strong> {disbursement.paymentDate}
-                      </span>
-                      <span>
-                        <strong className="font-medium">Expected classification:</strong>{' '}
-                        {disbursement.expectedClassification || 'Not provided'}
-                      </span>
-                    </div>
-
-                    <div className="mt-3 overflow-x-auto">
-                      <table className="min-w-full text-sm text-left text-gray-700 border border-gray-200 rounded-md">
-                        <thead className="bg-gray-100">
-                          <tr>
-                            {CLASSIFICATION_FIELDS.map(({ label }) => (
-                              <th key={label} className="px-3 py-2 font-semibold text-gray-600">
-                                {label}
-                              </th>
-                            ))}
-                            <th className="px-3 py-2 font-semibold text-gray-600">Total Entered</th>
-                          </tr>
-                        </thead>
-                      <tbody>
-                        <tr>
-                          {CLASSIFICATION_FIELDS.map(({ label }, index) => (
-                            <td key={label} className="px-3 py-2">
-                              {currencyFormatter.format(parsedValues[index])}
-                            </td>
-                          ))}
-                          <td className="px-3 py-2">
-                            {currencyFormatter.format(totalEntered)}
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-                    </div>
-                    {documents.length > 0 ? (
-                      <div className="mt-4 space-y-2">
-                        <p className="text-sm font-medium text-gray-600">Supporting Documents</p>
-                        <ul className="space-y-2">
-                          {documents.map((doc, docIndex) => (
-                            <li
-                              key={`${disbursement.paymentId || 'doc'}-${docIndex}`}
-                              className="flex items-center justify-between bg-gray-50 border border-gray-200 rounded-md px-3 py-2 text-sm text-gray-700"
-                            >
-                              <span className="flex items-center">
-                                <FileText size={16} className="text-blue-500 mr-2 flex-shrink-0" /> {doc.fileName}
-                              </span>
-                              {(doc.storagePath || doc.downloadURL) && (
-                                <Button
-                                  onClick={() => handleViewDocument(doc)}
-                                  variant="secondary"
-                                  className="text-xs px-2 py-1"
-                                >
-                                  <Eye size={14} className="inline mr-1" /> View Document
-                                </Button>
-                              )}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : (
-                      <p className="mt-3 text-sm text-gray-500">No supporting documents were available.</p>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+          <div className="mb-6">
+            <h1 className="text-2xl font-bold text-gray-900">Audit Completion Report</h1>
+            <p className="text-gray-600">Review your performance against the Virtual Senior&apos;s expectations.</p>
+          </div>
+          
+          <ResultsAnalysis 
+            disbursements={selectedDisbursementDetails} 
+            studentAnswers={classificationAmounts} 
+            onRequestRetake={requestRetake}
+            onReturnToDashboard={() => navigate('/trainee')}
+          />
         </div>
 
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex justify-center">
           <Button variant="secondary" onClick={() => navigate('/trainee')}> 
-            Back to Cases
+            Return to Dashboard
           </Button>
         </div>
       </div>

@@ -20,16 +20,13 @@ const LoginPage = () => {
     if (role === 'admin') return '/admin';
     if (role === 'instructor') return '/instructor';
     if (role === 'trainee') return '/trainee';
-    return '/trainee';
+    return '/home';
   }, [role]);
 
   useEffect(() => {
-    if (currentUser && !loadingRole) {
-      navigate(dashboardPath, { replace: true });
-    } else if (currentUser) {
-      // Fallback if role not resolved yet.
-      navigate('/trainee', { replace: true });
-    }
+    if (!currentUser) return;
+    if (loadingRole) return;
+    navigate(dashboardPath, { replace: true });
   }, [currentUser, loadingRole, dashboardPath, navigate]);
 
   useEffect(() => {
@@ -55,18 +52,21 @@ const LoginPage = () => {
       } catch (tokenErr) {
         console.warn('Could not read role claim on login:', tokenErr);
       }
+      const resolvedRole = (claimedRole || (!loadingRole ? role : null) || '').toLowerCase();
       const immediateDashboard =
-        claimedRole === 'admin'
+        resolvedRole === 'admin'
           ? '/admin'
-          : claimedRole === 'instructor'
-          ? '/instructor'
-          : '/trainee';
+          : resolvedRole === 'instructor'
+            ? '/instructor'
+            : resolvedRole === 'trainee'
+              ? '/trainee'
+              : '/home';
       // Redirect to ?next=... if provided on the hash route, otherwise to home
       const [, queryString] = (route || '').split('?');
       const params = new URLSearchParams(queryString || '');
       const rawNext = params.get('next');
       const sanitizedNext = rawNext && rawNext !== '/' && rawNext.startsWith('/') ? rawNext : null;
-      const next = sanitizedNext || dashboardPath || immediateDashboard;
+      const next = sanitizedNext || immediateDashboard;
       navigate(next, { replace: true });
     } catch (err) {
       // login already surfaces a modal, but keep a guard here in case

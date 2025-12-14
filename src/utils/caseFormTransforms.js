@@ -1,16 +1,20 @@
 export const mergeDisbursementDocuments = (disbursementList, invoiceMappings) => {
   const baseDisbursements = (disbursementList || []).map(({ _tempId, ...rest }) => rest);
   const mappingGroups = new Map();
+  const normalizePaymentId = (value) => {
+    if (value === null || value === undefined) return '';
+    return String(value).trim();
+  };
 
   (invoiceMappings || [])
-    .filter((m) => m && m.paymentId)
+    .filter((m) => m && normalizePaymentId(m.paymentId))
     .forEach((m) => {
-      const key = m.paymentId;
+      const key = normalizePaymentId(m.paymentId);
       if (!mappingGroups.has(key)) {
         mappingGroups.set(key, []);
       }
       mappingGroups.get(key).push({
-        paymentId: m.paymentId,
+        paymentId: normalizePaymentId(m.paymentId),
         storagePath: m.storagePath || '',
         fileName: m.fileName || '',
         downloadURL: m.downloadURL || '',
@@ -20,7 +24,7 @@ export const mergeDisbursementDocuments = (disbursementList, invoiceMappings) =>
 
   return baseDisbursements.map((item) => {
     const next = { ...item };
-    const linkedDocs = item.paymentId ? mappingGroups.get(item.paymentId) || [] : [];
+    const linkedDocs = normalizePaymentId(item.paymentId) ? mappingGroups.get(normalizePaymentId(item.paymentId)) || [] : [];
     const existingDocs = Array.isArray(item.supportingDocuments) ? item.supportingDocuments : [];
 
     const combinedDocs = [...existingDocs, ...linkedDocs].map((doc) => ({

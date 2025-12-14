@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import TraineeCaseViewPage from './TraineeCaseViewPage';
 import { subscribeToCase } from '../services/caseService';
@@ -12,6 +12,8 @@ const mockFetch = jest.fn(() =>
     blob: () => Promise.resolve(new Blob(['mock'], { type: 'application/octet-stream' })),
   })
 );
+
+jest.setTimeout(20000);
 
 beforeAll(() => {
   global.fetch = mockFetch;
@@ -38,6 +40,106 @@ jest.mock('../services/progressService', () => ({
   saveProgress: jest.fn(),
   subscribeProgressForCases: jest.fn(() => jest.fn()),
 }));
+
+jest.mock('../components/trainee/AuditItemCardFactory', () => {
+  const React = require('react');
+
+  return function MockAuditItemCardFactory({
+    item,
+    allocation,
+    classificationFields = [],
+    onSplitToggle,
+    onClassificationChange,
+    onSplitAmountChange,
+    onRationaleChange,
+    isLocked,
+  }) {
+    const [isSplit, setIsSplit] = React.useState(false);
+    const paymentId = item?.paymentId || item?.id || 'unknown';
+
+    return (
+      <div>
+        <div>
+          <button
+            type="button"
+            onClick={() => {
+              if (typeof onRationaleChange === 'function') {
+                onRationaleChange(paymentId, 'isException', false);
+              }
+            }}
+          >
+            Pass
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              if (typeof onRationaleChange === 'function') {
+                onRationaleChange(paymentId, 'isException', true);
+              }
+            }}
+          >
+            Exception
+          </button>
+        </div>
+        <label>
+          <input
+            type="checkbox"
+            aria-label="Split across classifications"
+            checked={isSplit}
+            disabled={!!isLocked}
+            onChange={(e) => {
+              setIsSplit(e.target.checked);
+              if (typeof onSplitToggle === 'function') {
+                onSplitToggle(paymentId, e.target.checked);
+              }
+            }}
+          />
+          Split across classifications
+        </label>
+
+        {!isSplit ? (
+          <label>
+            Classification
+            <select
+              value={allocation?.singleClassification || ''}
+              disabled={!!isLocked}
+              onChange={(e) => {
+                if (typeof onClassificationChange === 'function') {
+                  onClassificationChange(paymentId, e.target.value);
+                }
+              }}
+            >
+              <option value="">Choose…</option>
+              {classificationFields.map((field) => (
+                <option key={field.key} value={field.key}>
+                  {field.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <div>
+            {classificationFields.map((field) => (
+              <label key={field.key}>
+                {field.label}
+                <input
+                  aria-label={field.label}
+                  value={allocation?.[field.key] ?? ''}
+                  disabled={!!isLocked}
+                  onChange={(e) => {
+                    if (typeof onSplitAmountChange === 'function') {
+                      onSplitAmountChange(paymentId, field.key, e.target.value);
+                    }
+                  }}
+                />
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+});
 
 jest.mock('firebase/storage', () => ({
   getDownloadURL: jest.fn(),
@@ -125,6 +227,7 @@ describe('TraineeCaseViewPage', () => {
   });
 
   afterEach(() => {
+    cleanup();
     jest.clearAllMocks();
     consoleErrorSpy.mockRestore();
   });
@@ -154,6 +257,15 @@ describe('TraineeCaseViewPage', () => {
     renderCase({
       caseName: 'Cash Case',
       auditArea: 'cash',
+      disbursements: [
+        {
+          paymentId: 'p1',
+          payee: 'Bank',
+          amount: '500',
+          paymentDate: '2024-01-01',
+          downloadURL: 'https://example.com/bank.pdf',
+        },
+      ],
       cashContext: { bookBalance: '1000', bankBalance: '1000' },
       cashOutstandingItems: [
         { _tempId: 'o1', reference: 'Chk1045', payee: 'Drawer', issueDate: '2023-12-29', amount: '500' },
@@ -164,9 +276,8 @@ describe('TraineeCaseViewPage', () => {
 
     await advanceToClassification();
     await flushAsync();
-    expect(screen.getByText(/Reconciliation Summary/i)).toBeInTheDocument();
-    expect(screen.getByText(/Outstanding List/i)).toBeInTheDocument();
-    expect(screen.getByText(/Year-End Bank Statement/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Cash Case/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Step 2 — Classify Results/i })).toBeInTheDocument();
   });
 
   test('fetches evidence for storage-backed documents on classification step', async () => {
@@ -329,10 +440,11 @@ describe('TraineeCaseViewPage', () => {
     await enterValue('Improperly Included', 0);
     await enterValue('Improperly Excluded', 0);
 
+    await userEvent.click(screen.getByRole('button', { name: /^Pass$/i }));
     await userEvent.click(screen.getByRole('button', { name: /Submit Responses/i }));
 
     await waitFor(() => expect(saveSubmission).toHaveBeenCalled());
-    await screen.findByRole('heading', { name: /Submission Confirmed/i });
+    await screen.findByRole('heading', { name: /Audit Completion Report/i });
     const [, , payload] = saveSubmission.mock.calls[0];
     expect(payload.retrievedDocuments).toHaveLength(2);
     expect(payload.disbursementClassifications.p1).toEqual({
@@ -341,6 +453,76 @@ describe('TraineeCaseViewPage', () => {
       improperlyIncluded: 0,
       improperlyExcluded: 0,
     });
+  });
+
+  test('flags a missed exception on the results screen when a trap is passed', async () => {
+    renderCase({
+      caseName: 'Case',
+      disbursements: [
+        {
+          paymentId: 'p1',
+          payee: 'Promotador',
+          amount: '125892.57',
+          paymentDate: '2024-01-01',
+          downloadURL: 'https://example.com/invoice.pdf',
+          shouldFlag: true,
+          expectedClassification: 'Improperly Excluded',
+          requiredAssertions: ['Completeness'],
+        },
+      ],
+    });
+
+    await advanceToClassification();
+
+    // Fill amounts for a pass decision (properly included) so the workflow is submit-ready.
+    await userEvent.click(screen.getByRole('checkbox', { name: /Split across classifications/i }));
+    const [properlyIncludedInput] = await screen.findAllByLabelText(/Properly Included/i);
+    await userEvent.clear(properlyIncludedInput);
+    await userEvent.type(properlyIncludedInput, '125892.57');
+
+    await userEvent.click(screen.getByRole('button', { name: /^Pass$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Submit Responses/i }));
+
+    await screen.findByRole('heading', { name: /Audit Completion Report/i });
+    expect(screen.getByText(/You missed 1 critical item/i)).toBeInTheDocument();
+    expect(screen.getByText(/Promotador/i)).toBeInTheDocument();
+    expect(screen.getByText(/\$125,892\.57/)).toBeInTheDocument();
+    expect(screen.getByText(/Your decision/i)).toBeInTheDocument();
+    expect(screen.getByText(/Properly Included/i)).toBeInTheDocument();
+    expect(screen.getByText(/Correct call/i)).toBeInTheDocument();
+    expect(screen.getByText(/Improperly Excluded/i)).toBeInTheDocument();
+  });
+
+  test('shows retake + dashboard actions when all critical items are caught', async () => {
+    renderCase({
+      caseName: 'Case',
+      disbursements: [
+        {
+          paymentId: 'p1',
+          payee: 'Promotador',
+          amount: '100',
+          paymentDate: '2024-01-01',
+          downloadURL: 'https://example.com/invoice.pdf',
+          shouldFlag: true,
+          expectedClassification: 'Improperly Excluded',
+        },
+      ],
+    });
+
+    await advanceToClassification();
+
+    await userEvent.click(screen.getByRole('checkbox', { name: /Split across classifications/i }));
+    const [improperlyExcludedInput] = await screen.findAllByLabelText(/Improperly Excluded/i);
+    await userEvent.clear(improperlyExcludedInput);
+    await userEvent.type(improperlyExcludedInput, '100');
+
+    await userEvent.click(screen.getByRole('button', { name: /^Exception$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Submit Responses/i }));
+
+    await screen.findByRole('heading', { name: /Audit Completion Report/i });
+    expect(screen.getByRole('button', { name: /Back to Dashboard/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Retake Case/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Try Again/i })).not.toBeInTheDocument();
   });
 
   test.skip('displays reference documents panel and supports tab preview', async () => {

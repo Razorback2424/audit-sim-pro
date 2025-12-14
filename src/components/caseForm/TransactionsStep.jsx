@@ -21,6 +21,8 @@ export default function TransactionsStep({
     addMappingToDisbursement,
     removeMappingFromDisbursement,
     handleMappingFileSelect,
+    handleHighlightedDocumentSelect,
+    handleClearHighlightedDocument,
     syncMappingsWithPaymentId,
     disbursementCsvInputRef,
     handleCsvImport,
@@ -244,6 +246,8 @@ export default function TransactionsStep({
               onAddMapping={addMappingToDisbursement}
               onRemoveMapping={removeMappingFromDisbursement}
               onSelectMappingFile={handleMappingFileSelect}
+              onSelectHighlightedDocument={handleHighlightedDocumentSelect}
+              onClearHighlightedDocument={handleClearHighlightedDocument}
               onSyncPaymentId={syncMappingsWithPaymentId}
               fileAcceptValue={FILE_INPUT_ACCEPT}
               maxUploadBytes={MAX_ARTIFACT_BYTES}

@@ -2,8 +2,9 @@ import { render, screen, waitFor, fireEvent, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import CaseFormPage, { mergeDisbursementDocuments } from './CaseFormPage';
 import { fetchCase, createCase, updateCase } from '../services/caseService';
-import { fetchUserRosterOptions } from '../services/userService';
+import { fetchUserRosterOptions, getCurrentUserOrgId } from '../services/userService';
 import { DEFAULT_AUDIT_AREA } from '../models/caseConstants';
+import { fetchGlobalTags, addGlobalTag } from '../services/tagService';
 
 jest.mock('../services/caseService', () => ({
   fetchCase: jest.fn(),
@@ -11,8 +12,17 @@ jest.mock('../services/caseService', () => ({
   updateCase: jest.fn()
 }));
 
+jest.mock('../services/tagService', () => ({
+  fetchGlobalTags: jest.fn(async () => ({ skillCategories: [], errorReasons: [] })),
+  addGlobalTag: jest.fn(async () => null),
+  TAG_FIELDS: { SKILL_CATEGORIES: 'skillCategories', ERROR_REASONS: 'errorReasons' },
+  DEFAULT_SKILL_CATEGORIES: [],
+  DEFAULT_ERROR_REASONS: [],
+}));
+
 jest.mock('../services/userService', () => ({
-  fetchUserRosterOptions: jest.fn()
+  fetchUserRosterOptions: jest.fn(),
+  getCurrentUserOrgId: jest.fn()
 }));
 
 const mockNavigate = jest.fn();
@@ -34,6 +44,7 @@ jest.mock('../AppCore', () => ({
   useRoute: () => ({ navigate: mockNavigate }),
   useModal: () => ({ showModal: mockShowModal }),
   useAuth: () => ({ userId: 'u1' }),
+  useUser: () => ({ userProfile: {}, role: 'admin', loadingRole: false }),
   appId: 'app',
   storage: { app: {} }
 }));
@@ -59,11 +70,18 @@ beforeEach(() => {
   fetchCase.mockReset();
   fetchUserRosterOptions.mockReset();
   fetchUserRosterOptions.mockResolvedValue([]);
+  getCurrentUserOrgId.mockReset();
+  getCurrentUserOrgId.mockResolvedValue('org-1');
+  fetchGlobalTags.mockReset();
+  fetchGlobalTags.mockResolvedValue({ skillCategories: [], errorReasons: [] });
+  addGlobalTag.mockReset();
+  addGlobalTag.mockResolvedValue(null);
   createCase.mockReset();
   updateCase.mockReset();
   mockShowModal.mockReset();
   mockNavigate.mockReset();
   window.confirm = jest.fn(() => true);
+  window.localStorage?.clear?.();
 });
 
 describe('mergeDisbursementDocuments', () => {

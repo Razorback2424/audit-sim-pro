@@ -42,6 +42,7 @@ import { DEFAULT_AUDIT_AREA, DEFAULT_ITEM_TYPE, AUDIT_AREAS } from './caseConsta
  * @property {string|null} [downloadURL]
  * @property {string|null} [fileName]
  * @property {string|null} [contentType]
+ * @property {CaseReferenceDocument} [highlightedDocument] - The "Answer Key" PDF with markup for reveals.
  * @property {Array<{ storagePath: string|null, downloadURL: string|null, fileName: string|null, contentType: string|null }>} [supportingDocuments]
  * @property {string} [description]
  * @property {string} [notes]

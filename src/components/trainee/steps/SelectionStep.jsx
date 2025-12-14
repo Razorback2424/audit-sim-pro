@@ -25,7 +25,10 @@ export default function SelectionStep({
       ) : (
         <div className="space-y-3">
           {disbursementList.map((d, index) => {
-            const displayId = d.paymentId || d.reference || d._tempId || d.id || `item-${index + 1}`;
+            const paymentId = d.paymentId === null || d.paymentId === undefined ? '' : String(d.paymentId).trim();
+            const displayId = paymentId || d.reference || d._tempId || d.id || `item-${index + 1}`;
+            const checkboxId = paymentId ? `cb-${paymentId}` : `cb-missing-${index + 1}`;
+            const disabled = isLocked || !paymentId;
             const displayDate = d.paymentDate || d.issueDate || d.bookDate || '';
             return (
               <div
@@ -34,15 +37,15 @@ export default function SelectionStep({
               >
                 <input
                   type="checkbox"
-                  id={`cb-${displayId}`}
-                  checked={!!selectedDisbursements[displayId]}
-                  onChange={() => onSelectionChange(displayId)}
-                  disabled={isLocked}
+                  id={checkboxId}
+                  checked={paymentId ? !!selectedDisbursements[paymentId] : false}
+                  onChange={() => (paymentId ? onSelectionChange(paymentId) : undefined)}
+                  disabled={disabled}
                   className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 mr-4 cursor-pointer disabled:cursor-not-allowed"
                 />
                 <label
-                  htmlFor={`cb-${displayId}`}
-                  className="flex-grow grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-1 cursor-pointer"
+                  htmlFor={checkboxId}
+                  className={`flex-grow grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-1 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                 >
                   <span className="text-sm text-gray-700">
                     <strong className="font-medium">ID:</strong> {displayId}
@@ -58,6 +61,11 @@ export default function SelectionStep({
                   </span>
                   {d.expectedClassification ? (
                     <span className="text-xs text-gray-500">Expected classification: {d.expectedClassification}</span>
+                  ) : null}
+                  {!paymentId ? (
+                    <span className="text-xs text-amber-700">
+                      This disbursement is missing a payment ID and cannot be selected.
+                    </span>
                   ) : null}
                 </label>
               </div>

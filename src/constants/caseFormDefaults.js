@@ -4,6 +4,16 @@ import {
   buildSingleAnswerKey,
 } from '../utils/caseFormHelpers';
 
+export const initialHighlightedDocument = () => ({
+  fileName: '',
+  storagePath: '',
+  downloadURL: '',
+  clientSideFile: null,
+  uploadProgress: undefined,
+  uploadError: null,
+  contentType: '',
+});
+
 export const initialDisbursement = () => ({
   _tempId: getUUID(),
   paymentId: '',
@@ -19,6 +29,7 @@ export const initialDisbursement = () => ({
   correctAssertions: [],
   requiredAssertions: [],
   errorReasons: [],
+  highlightedDocument: initialHighlightedDocument(),
   shouldFlag: false,
   validator: { type: '', config: {} },
 });
