@@ -36,10 +36,16 @@ export function useRoute() {
       });
       const targetPath = options.path || location.pathname;
       const searchString = searchParams.toString();
-      const target = `${targetPath}${searchString ? `?${searchString}` : ''}`;
+      const hash =
+        typeof options.hash === 'string'
+          ? options.hash
+          : options.keepHash === false
+            ? ''
+            : location.hash || '';
+      const target = `${targetPath}${searchString ? `?${searchString}` : ''}${hash}`;
       navigate(target, { replace: !!options.replace });
     },
-    [navigate, location.pathname, query]
+    [navigate, location.pathname, location.hash, query]
   );
 
   return {

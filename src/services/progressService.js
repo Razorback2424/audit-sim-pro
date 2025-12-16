@@ -18,13 +18,22 @@ const RETRY_DELAY_MS = 500;
 
 const offlineQueue = new Map();
 
-window.addEventListener('online', () => {
-  offlineQueue.forEach((patch, key) => {
-    const [appId, uid, caseId] = key.split('|');
-    saveProgress({ appId, uid, caseId, patch });
-  });
-  offlineQueue.clear();
-});
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  const markerKey = '__auditsimProgressOnlineListenerBound';
+  if (!window[markerKey]) {
+    window[markerKey] = true;
+    window.addEventListener('online', () => {
+      offlineQueue.forEach((patch, key) => {
+        const [appId, uid, caseId] = String(key).split('|');
+        if (!appId || !uid || !caseId) return;
+        saveProgress({ appId, uid, caseId, patch }).catch((err) => {
+          console.warn('[progressService] Failed to flush offline progress patch', { key, error: err?.message });
+        });
+      });
+      offlineQueue.clear();
+    });
+  }
+}
 
 /**
  * Fetches progress for a list of cases.
@@ -151,16 +160,26 @@ export const fetchProgressRosterForCase = async ({ appId, caseId }) => {
  * @param {{ appId: string, uid: string, caseId: string, patch: Partial<import('../models/progress').ProgressModel> }} params
  */
 export const saveProgress = async ({ appId, uid, caseId, patch, forceOverwrite = false }) => {
-  if (!navigator.onLine) {
+  if (!appId || !uid || !caseId) {
+    throw new Error('saveProgress requires appId, uid, and caseId.');
+  }
+  if (!patch || typeof patch !== 'object') {
+    throw new Error('saveProgress requires a patch object.');
+  }
+
+  const isOffline = typeof navigator !== 'undefined' && typeof navigator.onLine === 'boolean' && !navigator.onLine;
+  if (isOffline) {
     offlineQueue.set(`${appId}|${uid}|${caseId}`, patch);
     return;
   }
 
-  const { percentComplete } = patch;
+  const percentCompleteRaw = patch.percentComplete ?? 0;
+  const percentComplete = Number(percentCompleteRaw);
 
-  if (percentComplete < 0 || percentComplete > 100) {
+  if (!Number.isFinite(percentComplete) || percentComplete < 0 || percentComplete > 100) {
     throw new Error('percentComplete must be between 0 and 100.');
   }
+  patch.percentComplete = percentComplete;
 
   let { state } = patch;
   if (!state) {
@@ -180,7 +199,14 @@ export const saveProgress = async ({ appId, uid, caseId, patch, forceOverwrite =
       const serverDoc = await getDoc(progressRef);
       const serverData = serverDoc.data();
 
-      if (!forceOverwrite && serverData && serverData.updatedAt.toMillis() > (patch.updatedAt?.toMillis() || 0)) {
+      const serverUpdatedAtMs =
+        serverData?.updatedAt && typeof serverData.updatedAt.toMillis === 'function'
+          ? serverData.updatedAt.toMillis()
+          : 0;
+      const patchUpdatedAtMs =
+        patch?.updatedAt && typeof patch.updatedAt.toMillis === 'function' ? patch.updatedAt.toMillis() : 0;
+
+      if (!forceOverwrite && serverData && serverUpdatedAtMs > patchUpdatedAtMs) {
         patch.percentComplete = Math.max(patch.percentComplete, serverData.percentComplete);
         if (patch.percentComplete === 100) {
           patch.state = 'submitted';

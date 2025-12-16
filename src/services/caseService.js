@@ -321,6 +321,16 @@ const normalizeAuditItem = (item, index, invoiceGroups) => {
     expectedClassification: toOptionalString(item.expectedClassification),
   };
 
+  if (item.hasAnswerKey !== undefined) {
+    normalized.hasAnswerKey = Boolean(item.hasAnswerKey);
+  }
+
+  const transactionType = toOptionalString(item.transactionType);
+  if (transactionType) normalized.transactionType = transactionType;
+
+  const itemAuditArea = toOptionalString(item.auditArea);
+  if (itemAuditArea) normalized.auditArea = itemAuditArea;
+
   const title = toOptionalString(item.title) || normalized.payee || `Item ${index + 1}`;
   if (title) normalized.title = title;
 
@@ -336,6 +346,42 @@ const normalizeAuditItem = (item, index, invoiceGroups) => {
 
   if (isRecord(item.meta)) {
     normalized.meta = { ...item.meta };
+  }
+
+  const riskLevelRaw = toOptionalString(item.riskLevel);
+  if (riskLevelRaw && ['low', 'medium', 'high'].includes(riskLevelRaw.toLowerCase())) {
+    normalized.riskLevel = riskLevelRaw.toLowerCase();
+  }
+
+  if (isRecord(item.directionalFlags)) {
+    normalized.directionalFlags = {
+      allowVouching: Boolean(item.directionalFlags.allowVouching),
+      allowTracing: Boolean(item.directionalFlags.allowTracing),
+    };
+  }
+
+  if (Array.isArray(item.evidencePoints)) {
+    const cleanedEvidencePoints = item.evidencePoints
+      .filter((point) => isRecord(point))
+      .map((point) => ({
+        label: toTrimmedString(point.label),
+        value: toTrimmedString(point.value),
+        assertion: toTrimmedString(point.assertion),
+        toleranceDays:
+          point.toleranceDays === '' || point.toleranceDays === null || point.toleranceDays === undefined
+            ? undefined
+            : Number(point.toleranceDays),
+      }))
+      .filter((point) => point.label || point.value || point.assertion);
+
+    if (cleanedEvidencePoints.length > 0) {
+      cleanedEvidencePoints.forEach((point) => {
+        if (point.toleranceDays !== undefined && !Number.isFinite(point.toleranceDays)) {
+          delete point.toleranceDays;
+        }
+      });
+      normalized.evidencePoints = cleanedEvidencePoints;
+    }
   }
 
   const toStringArray = (value) =>
@@ -530,6 +576,12 @@ const mergeCaseKeysIntoCaseModel = (caseModel, caseKeysData) => {
     }
     if (typeof entry.primaryAssertion === 'string') {
       merged.primaryAssertion = entry.primaryAssertion;
+    }
+    if (isRecord(entry.groundTruths)) {
+      merged.groundTruths = { ...entry.groundTruths };
+    }
+    if (typeof entry.riskLevel === 'string' && entry.riskLevel.trim()) {
+      merged.riskLevel = entry.riskLevel.trim().toLowerCase();
     }
     return merged;
   });
@@ -1201,6 +1253,12 @@ export const subscribeToAdminCaseSummary = (onData, onError) =>
         acc.activeCases += 1;
         acc.totalDisbursements += Array.isArray(current.disbursements) ? current.disbursements.length : 0;
         acc.totalMappings += Array.isArray(current.invoiceMappings) ? current.invoiceMappings.length : 0;
+        if (current.status === 'draft') {
+          acc.draftCases += 1;
+        }
+        if (current.publicVisible === false) {
+          acc.restrictedCases += 1;
+        }
         if (current.publicVisible === false && Array.isArray(current.visibleToUserIds) && current.visibleToUserIds.length > 0) {
           acc.privateAudiences += 1;
         }
@@ -1209,7 +1267,15 @@ export const subscribeToAdminCaseSummary = (onData, onError) =>
         acc.auditAreaCounts[area] = (acc.auditAreaCounts[area] || 0) + 1;
         return acc;
       },
-      { activeCases: 0, totalDisbursements: 0, totalMappings: 0, privateAudiences: 0, auditAreaCounts: {} }
+      {
+        activeCases: 0,
+        totalDisbursements: 0,
+        totalMappings: 0,
+        privateAudiences: 0,
+        draftCases: 0,
+        restrictedCases: 0,
+        auditAreaCounts: {},
+      }
     );
     onData(summary);
   }, onError);

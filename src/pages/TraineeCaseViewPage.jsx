@@ -8,6 +8,7 @@ import { saveProgress, subscribeProgressForCases } from '../services/progressSer
 import { Send, Loader2, ExternalLink, Download } from 'lucide-react';
 import ResultsAnalysis from '../components/trainee/ResultsAnalysis';
 import AuditItemCardFactory from '../components/trainee/AuditItemCardFactory';
+import OutstandingCheckTestingModule from '../components/trainee/OutstandingCheckTestingModule';
 
 const FLOW_STEPS = Object.freeze({
   SELECTION: 'selection',
@@ -78,6 +79,8 @@ const isSameSelectionMap = (currentMap, nextMap) => {
   return currentKeys.every((key) => !!nextMap[key]);
 };
 
+const CLASSIFICATION_META_FIELDS = ['isException', 'mode', 'singleClassification', 'notes', 'assertion', 'reason'];
+
 const isSameClassificationMap = (currentMap, nextMap) => {
   const currentKeys = Object.keys(currentMap);
   const nextKeys = Object.keys(nextMap);
@@ -85,6 +88,12 @@ const isSameClassificationMap = (currentMap, nextMap) => {
   return currentKeys.every((key) => {
     const currentAllocation = currentMap[key] || {};
     const nextAllocation = nextMap[key] || {};
+    const metaMatches = CLASSIFICATION_META_FIELDS.every((fieldKey) => {
+      const currentValue = currentAllocation[fieldKey] ?? '';
+      const nextValue = nextAllocation[fieldKey] ?? '';
+      return currentValue === nextValue;
+    });
+    if (!metaMatches) return false;
     return CLASSIFICATION_FIELDS.every(({ key: fieldKey }) => {
       const currentValue = currentAllocation[fieldKey] ?? '';
       const nextValue = nextAllocation[fieldKey] ?? '';
@@ -396,7 +405,10 @@ export default function TraineeCaseViewPage({ params }) {
         }
 
         const nextSelection = {};
-        (entry.draft?.selectedPaymentIds || []).forEach((id) => {
+        const rawSelectedPaymentIds = Array.isArray(entry.draft?.selectedPaymentIds)
+          ? entry.draft.selectedPaymentIds
+          : [];
+        rawSelectedPaymentIds.forEach((id) => {
           const normalized = normalizePaymentId(id);
           if (normalized) nextSelection[normalized] = true;
         });
@@ -404,7 +416,9 @@ export default function TraineeCaseViewPage({ params }) {
           setSelectedDisbursements(nextSelection);
         }
 
-        const nextClassifications = entry.draft?.classificationDraft || {};
+        const rawClassificationDraft = entry.draft?.classificationDraft;
+        const nextClassifications =
+          rawClassificationDraft && typeof rawClassificationDraft === 'object' ? rawClassificationDraft : {};
         if (!recentlyChanged && !isSameClassificationMap(classificationRef.current, nextClassifications)) {
           setClassificationAmounts(nextClassifications);
         }
@@ -813,7 +827,7 @@ export default function TraineeCaseViewPage({ params }) {
     const paymentId = normalizePaymentId(paymentIdRaw);
     if (!paymentId) return;
     lastLocalChangeRef.current = Date.now();
-    const currentlySelected = !!selectedDisbursements[paymentId];
+    const currentlySelected = !!selectionRef.current?.[paymentId];
 
     setSelectedDisbursements((prev) => {
       const next = { ...prev };
@@ -1036,6 +1050,20 @@ export default function TraineeCaseViewPage({ params }) {
   if (loading) return <div className="p-4 text-center">Loading case details...</div>;
   if (!caseData) return <div className="p-4 text-center">Case not found or you may not have access. Redirecting...</div>;
 
+  const isOutstandingCheckTesting =
+    caseData?.auditArea === 'cash' && caseData?.cashContext?.moduleType === 'outstanding_check_testing';
+  if (isOutstandingCheckTesting) {
+    return (
+      <OutstandingCheckTestingModule
+        caseId={caseId}
+        caseData={caseData}
+        userId={userId}
+        navigate={navigate}
+        showModal={showModal}
+      />
+    );
+  }
+
   const stepIndex = STEP_SEQUENCE.indexOf(activeStep);
 
   const renderStepper = () => (
@@ -1108,66 +1136,73 @@ export default function TraineeCaseViewPage({ params }) {
     </div>
   );
 
-  const renderEvidenceViewer = (items) => (
-    <div className="bg-white border border-gray-200 rounded-lg shadow-sm flex flex-col min-h-[480px]">
-      <div className="border-b border-gray-200 px-4 py-3 flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold text-gray-800">Document Viewer</h2>
-          <p className="text-xs text-gray-500">
-            {items.length === 0
-              ? 'Choose a disbursement to see its supporting document.'
-              : activeEvidenceId
-              ? `Now viewing: ${items.find((item) => item.evidenceId === activeEvidenceId)?.evidenceFileName || items.find((item) => item.evidenceId === activeEvidenceId)?.paymentId || 'Supporting document'}`
-              : 'Select a disbursement to view its document.'}
-          </p>
+  const renderEvidenceViewer = (items) => {
+    const activeEvidence = activeEvidenceId
+      ? items.find((item) => item.evidenceId === activeEvidenceId)
+      : null;
+    const nowViewingLabel =
+      activeEvidence?.evidenceFileName || activeEvidence?.paymentId || 'Supporting document';
+
+    return (
+      <div className="bg-white border border-gray-200 rounded-lg shadow-sm flex flex-col min-h-[480px]">
+        <div className="border-b border-gray-200 px-4 py-3 flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-800">Document Viewer</h2>
+            <p className="text-xs text-gray-500">
+              {items.length === 0
+                ? 'Choose a disbursement to see its supporting document.'
+                : activeEvidenceId
+                ? `Now viewing: ${nowViewingLabel}`
+                : 'Select a disbursement to view its document.'}
+            </p>
+          </div>
+          {viewerEnabled && activeEvidenceId ? (
+            (() => {
+              if (!activeEvidence || (!activeEvidence.storagePath && !activeEvidence.downloadURL)) return null;
+              return (
+                <Button
+                  variant="secondary"
+                  className="text-xs px-3 py-1"
+                  onClick={() =>
+                    handleViewDocument({
+                      fileName: activeEvidence.evidenceFileName,
+                      storagePath: activeEvidence.storagePath,
+                      downloadURL: activeEvidence.downloadURL,
+                    })
+                  }
+                >
+                  <ExternalLink size={14} className="inline mr-1" /> Open in new tab
+                </Button>
+              );
+            })()
+          ) : null}
         </div>
-        {viewerEnabled && activeEvidenceId ? (
-          (() => {
-            const activeEvidence = items.find((item) => item.evidenceId === activeEvidenceId);
-            if (!activeEvidence || (!activeEvidence.storagePath && !activeEvidence.downloadURL)) return null;
-            return (
-              <Button
-                variant="secondary"
-                className="text-xs px-3 py-1"
-                onClick={() =>
-                  handleViewDocument({
-                    fileName: activeEvidence.evidenceFileName,
-                    storagePath: activeEvidence.storagePath,
-                    downloadURL: activeEvidence.downloadURL,
-                  })
-                }
-              >
-                <ExternalLink size={14} className="inline mr-1" /> Open in new tab
-              </Button>
-            );
-          })()
-        ) : null}
+        <div className="flex-1 bg-gray-100 rounded-b-lg flex items-center justify-center">
+          {activeEvidenceLoading ? (
+            <div className="flex flex-col items-center text-gray-500">
+              <Loader2 size={32} className="animate-spin mb-2" />
+              <p className="text-sm">Loading document…</p>
+            </div>
+          ) : activeEvidenceError ? (
+            <div className="max-w-sm text-center px-6 py-4 text-sm text-amber-700 bg-amber-100 border border-amber-200 rounded-md">
+              {activeEvidenceError}
+            </div>
+          ) : activeEvidenceUrl ? (
+            <iframe
+              title="Evidence document"
+              src={activeEvidenceUrl}
+              className="w-full h-full rounded-b-lg"
+              style={{ minHeight: '480px' }}
+            />
+          ) : (
+            <p className="text-sm text-gray-500 px-6 text-center">
+              Select a disbursement with a linked document to preview it here.
+            </p>
+          )}
+        </div>
       </div>
-      <div className="flex-1 bg-gray-100 rounded-b-lg flex items-center justify-center">
-        {activeEvidenceLoading ? (
-          <div className="flex flex-col items-center text-gray-500">
-            <Loader2 size={32} className="animate-spin mb-2" />
-            <p className="text-sm">Loading document…</p>
-          </div>
-        ) : activeEvidenceError ? (
-          <div className="max-w-sm text-center px-6 py-4 text-sm text-amber-700 bg-amber-100 border border-amber-200 rounded-md">
-            {activeEvidenceError}
-          </div>
-        ) : activeEvidenceUrl ? (
-          <iframe
-            title="Evidence document"
-            src={activeEvidenceUrl}
-            className="w-full h-full rounded-b-lg"
-            style={{ minHeight: '480px' }}
-          />
-        ) : (
-          <p className="text-sm text-gray-500 px-6 text-center">
-            Select a disbursement with a linked document to preview it here.
-          </p>
-        )}
-      </div>
-    </div>
-  );
+    );
+  };
 
   const triggerFileDownload = async (url, filename) => {
     const safeName = filename || 'reference-document';

@@ -9,6 +9,7 @@ import {
   DEFAULT_CASE_SORT,
 } from '../services/caseService';
 import { subscribeToRecentSubmissionActivity } from '../services/submissionService';
+import { fetchUsersWithProfiles } from '../services/userService';
 
 const appCoreMocks = {};
 
@@ -25,6 +26,10 @@ jest.mock('../services/caseService', () => ({
 
 jest.mock('../services/submissionService', () => ({
   subscribeToRecentSubmissionActivity: jest.fn(),
+}));
+
+jest.mock('../services/userService', () => ({
+  fetchUsersWithProfiles: jest.fn(),
 }));
 
 jest.mock('../AppCore', () => {
@@ -100,6 +105,7 @@ beforeEach(() => {
     cb([]);
     return jest.fn();
   });
+  fetchUsersWithProfiles.mockResolvedValue([]);
 });
 
 test('renders admin dashboard heading', async () => {

@@ -49,6 +49,14 @@ export const initialCutoffItem = () => ({
   amount: '',
 });
 
+export const initialCashRegisterItem = () => ({
+  _tempId: getUUID(),
+  checkNo: '',
+  writtenDate: '',
+  amount: '',
+  payee: '',
+});
+
 export const initialReconciliationMap = () => ({
   _tempId: getUUID(),
   outstandingTempId: '',
@@ -125,6 +133,7 @@ export const initialFaDisposal = () => ({
 });
 
 export const initialCashContext = () => ({
+  moduleType: 'bank_reconciliation',
   bookBalance: '',
   bankBalance: '',
   reconciliationDate: '',

@@ -53,6 +53,26 @@ describe('caseService', () => {
     });
   });
 
+  test('fetchCase preserves hasAnswerKey flag from case doc', async () => {
+    getDoc
+      .mockResolvedValueOnce({
+        exists: () => true,
+        id: '1',
+        data: () => ({
+          caseName: 'Case',
+          publicVisible: true,
+          _deleted: false,
+          status: 'draft',
+          auditItems: [{ paymentId: 'p1', payee: 'Vendor', amount: '100', paymentDate: '2024-01-01', hasAnswerKey: true }],
+        }),
+      })
+      .mockResolvedValueOnce({ exists: () => false });
+
+    const result = await fetchCase('1');
+    expect(Array.isArray(result.disbursements)).toBe(true);
+    expect(result.disbursements[0].hasAnswerKey).toBe(true);
+  });
+
   test('markCaseDeleted calls setDoc', async () => {
     await markCaseDeleted('2');
     expect(setDoc).toHaveBeenCalled();

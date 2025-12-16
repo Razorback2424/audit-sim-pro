@@ -26,25 +26,25 @@ const DashboardMetrics = ({ summary, loading, onNavigate }) => {
       actionPath: '/admin#cases',
     },
     {
-      key: 'totalDisbursements',
-      label: 'Total disbursements',
-      value: summary?.totalDisbursements ?? 0,
-      actionLabel: 'Review disbursements',
-      actionPath: '/admin/case-data-audit',
+      key: 'registeredUsers',
+      label: 'Registered users',
+      value: summary?.registeredUsers ?? 0,
+      actionLabel: 'Manage users',
+      actionPath: '/admin/user-management',
     },
     {
-      key: 'totalMappings',
-      label: 'Invoice mappings',
-      value: summary?.totalMappings ?? 0,
-      actionLabel: 'Mapping overview',
-      actionPath: '/admin/case-data-audit?tab=mappings',
+      key: 'draftCases',
+      label: 'Draft cases',
+      value: summary?.draftCases ?? 0,
+      actionLabel: 'Review drafts',
+      actionPath: '/admin?status=draft#cases',
     },
     {
-      key: 'privateAudiences',
-      label: 'Private audiences',
-      value: summary?.privateAudiences ?? 0,
+      key: 'restrictedCases',
+      label: 'Restricted cases',
+      value: summary?.restrictedCases ?? 0,
       actionLabel: 'Manage visibility',
-      actionPath: '/admin/case-overview',
+      actionPath: '/admin?visibility=private#cases',
     },
   ];
   const auditAreaCounts = summary?.auditAreaCounts || {};
@@ -60,7 +60,7 @@ const DashboardMetrics = ({ summary, loading, onNavigate }) => {
         <h2 className="text-xl font-semibold text-gray-800">Dashboard metrics</h2>
         <button
           type="button"
-          onClick={() => onNavigate?.('/admin/case-data-audit')}
+          onClick={() => onNavigate?.('/admin#cases')}
           className="text-sm font-medium text-blue-600 hover:text-blue-700"
         >
           See all

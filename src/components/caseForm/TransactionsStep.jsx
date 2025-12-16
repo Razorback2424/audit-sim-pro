@@ -6,6 +6,11 @@ import { STANDARD_ASSERTIONS, CASH_RECON_SCENARIOS } from '../../constants/caseF
 import DisbursementItem from './DisbursementItem';
 import StepIntro from './StepIntro';
 
+const CASH_MODULE_TYPE_OPTIONS = [
+  { value: 'bank_reconciliation', label: 'Bank Reconciliation (Forward Direction)' },
+  { value: 'outstanding_check_testing', label: 'Outstanding Check Testing (Reverse Direction)' },
+];
+
 export default function TransactionsStep({
   transactions,
   files,
@@ -36,6 +41,10 @@ export default function TransactionsStep({
     handleCutoffChange,
     addCutoffItem,
     removeCutoffItem,
+    cashRegisterItems,
+    handleCashRegisterChange,
+    addCashRegisterItem,
+    removeCashRegisterItem,
     handleReconciliationMapChange,
     addReconciliationMap,
     removeReconciliationMap,
@@ -62,6 +71,7 @@ export default function TransactionsStep({
       const base =
         prev ||
         {
+          moduleType: 'bank_reconciliation',
           bookBalance: '',
           bankBalance: '',
           reconciliationDate: '',
@@ -80,6 +90,7 @@ export default function TransactionsStep({
   };
   const safeCashContext =
     cashContext || {
+      moduleType: 'bank_reconciliation',
       bookBalance: '',
       bankBalance: '',
       reconciliationDate: '',
@@ -88,6 +99,7 @@ export default function TransactionsStep({
       testingThreshold: '',
       cutoffWindowDays: '',
     };
+  const isOutstandingCheckTesting = safeCashContext.moduleType === 'outstanding_check_testing';
 
   return (
     <div className="space-y-8">
@@ -97,9 +109,17 @@ export default function TransactionsStep({
         isCash
           ? [
                 'Enter reconciliation context (book vs bank balance and the reconciliation/reporting date).',
-                'Capture the client’s Outstanding Check List (this is the ledger list trainees will test).',
-                'Add Cutoff Statement items (bank evidence students will trace from).',
-                'Use the Reconciliation Mapper to describe the intended behavior of each outstanding item and link it to cutoff evidence where applicable.',
+                ...(isOutstandingCheckTesting
+                  ? [
+                      'Capture the 12/31 Outstanding Check List (client-prepared listing trainees will test for completeness).',
+                      'Add January cutoff statement cleared checks (this is the population trainees will sample from).',
+                      'Add the client check register (trainees will use check numbers + written dates to determine eligibility).',
+                    ]
+                  : [
+                      'Capture the client’s Outstanding Check List (this is the ledger list trainees will test).',
+                      'Add Cutoff Statement items (bank evidence students will trace from).',
+                      'Use the Reconciliation Mapper to describe the intended behavior of each outstanding item and link it to cutoff evidence where applicable.',
+                    ]),
                 'Use CSV import if you have many transactions to add at once.'
               ]
           : [
@@ -118,6 +138,15 @@ export default function TransactionsStep({
             <p className="text-xs text-gray-500">
               Provide the balances and key date trainees will reconcile against. The reconciliation date also serves as the reporting date.
             </p>
+          </div>
+          <div className="mt-4">
+            <label className="block text-sm font-medium text-gray-700">Cash Module Type</label>
+            <Select
+              value={safeCashContext.moduleType || 'bank_reconciliation'}
+              onChange={(event) => handleCashContextChange('moduleType', event.target.value)}
+              options={CASH_MODULE_TYPE_OPTIONS}
+              className="mt-2"
+            />
           </div>
           <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
             <div>
@@ -553,9 +582,13 @@ export default function TransactionsStep({
         <section className="rounded-lg border border-gray-200 p-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <h3 className="text-base font-semibold text-gray-800">Outstanding Checks (Client List)</h3>
+              <h3 className="text-base font-semibold text-gray-800">
+                {isOutstandingCheckTesting ? '12/31 Outstanding Check List (Client Listing)' : 'Outstanding Checks (Client List)'}
+              </h3>
               <p className="text-xs text-gray-500">
-                Enter the client’s reported outstanding items as of the reconciliation date. These form the “ledger” pane students will validate.
+                {isOutstandingCheckTesting
+                  ? 'Enter the client’s 12/31 outstanding check listing. Trainees will trace eligible January clearings to this list to test completeness.'
+                  : 'Enter the client’s reported outstanding items as of the reconciliation date. These form the “ledger” pane students will validate.'}
               </p>
             </div>
             <Button onClick={addOutstandingItem} variant="secondary" type="button">
@@ -567,18 +600,18 @@ export default function TransactionsStep({
               <div key={item._tempId} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
                   <Input
-                    placeholder="Reference #"
+                    placeholder={isOutstandingCheckTesting ? 'Check #' : 'Reference #'}
                     value={item.reference}
                     onChange={(e) => handleOutstandingChange(index, { reference: e.target.value })}
                   />
                   <Input
-                    placeholder="Description / Payee"
+                    placeholder={isOutstandingCheckTesting ? 'Payee (optional)' : 'Description / Payee'}
                     value={item.payee}
                     onChange={(e) => handleOutstandingChange(index, { payee: e.target.value })}
                   />
                   <Input
                     type="date"
-                    placeholder="Book Date"
+                    placeholder={isOutstandingCheckTesting ? 'Check Date (optional)' : 'Book Date'}
                     value={item.issueDate}
                     onChange={(e) => handleOutstandingChange(index, { issueDate: e.target.value })}
                   />
@@ -605,9 +638,13 @@ export default function TransactionsStep({
         <section className="rounded-lg border border-gray-200 p-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <h3 className="text-base font-semibold text-gray-800">Cutoff Statement Items (Evidence)</h3>
+              <h3 className="text-base font-semibold text-gray-800">
+                {isOutstandingCheckTesting ? 'January Cutoff Statement — Cleared Checks (Bank Evidence)' : 'Cutoff Statement Items (Evidence)'}
+              </h3>
               <p className="text-xs text-gray-500">
-                Add the transactions from the cutoff bank statement. Students will trace from these bank items to the ledger list.
+                {isOutstandingCheckTesting
+                  ? 'Add the checks that cleared the bank in January. Trainees will sample from this population, trace to the check register, then trace eligible items to the 12/31 outstanding list.'
+                  : 'Add the transactions from the cutoff bank statement. Students will trace from these bank items to the ledger list.'}
               </p>
             </div>
             <Button onClick={addCutoffItem} variant="secondary" type="button">
@@ -619,13 +656,13 @@ export default function TransactionsStep({
               <div key={item._tempId} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   <Input
-                    placeholder="Reference #"
+                    placeholder={isOutstandingCheckTesting ? 'Check #' : 'Reference #'}
                     value={item.reference}
                     onChange={(e) => handleCutoffChange(index, { reference: e.target.value })}
                   />
                   <Input
                     type="date"
-                    placeholder="Cleared Date"
+                    placeholder={isOutstandingCheckTesting ? 'Clearing Date' : 'Cleared Date'}
                     value={item.clearDate}
                     onChange={(e) => handleCutoffChange(index, { clearDate: e.target.value })}
                   />
@@ -648,7 +685,59 @@ export default function TransactionsStep({
         </section>
       ) : null}
 
-      {isCash ? (
+      {isCash && isOutstandingCheckTesting ? (
+        <section className="rounded-lg border border-gray-200 p-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-gray-800">Client Check Register (Source for Written Date)</h3>
+              <p className="text-xs text-gray-500">
+                Add the client’s check register lines (check #, written date, amount). Trainees will use this to determine which January clearings were written on or before 12/31.
+              </p>
+            </div>
+            <Button onClick={addCashRegisterItem} variant="secondary" type="button">
+              <PlusCircle size={16} className="mr-1" /> Add Register Item
+            </Button>
+          </div>
+          <div className="mt-4 space-y-4">
+            {cashRegisterItems.map((item, index) => (
+              <div key={item._tempId} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <Input
+                    placeholder="Check #"
+                    value={item.checkNo}
+                    onChange={(e) => handleCashRegisterChange(index, { checkNo: e.target.value })}
+                  />
+                  <Input
+                    type="date"
+                    placeholder="Written date"
+                    value={item.writtenDate}
+                    onChange={(e) => handleCashRegisterChange(index, { writtenDate: e.target.value })}
+                  />
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    placeholder="Amount"
+                    value={item.amount}
+                    onChange={(e) => handleCashRegisterChange(index, { amount: e.target.value })}
+                  />
+                  <Input
+                    placeholder="Payee (optional)"
+                    value={item.payee}
+                    onChange={(e) => handleCashRegisterChange(index, { payee: e.target.value })}
+                  />
+                </div>
+                <div className="mt-3 flex justify-end">
+                  <Button onClick={() => removeCashRegisterItem(index)} variant="ghost" type="button" className="text-sm text-red-600">
+                    Remove
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      {isCash && !isOutstandingCheckTesting ? (
         <section className="rounded-lg border border-gray-200 p-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>

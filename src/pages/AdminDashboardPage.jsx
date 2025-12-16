@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   FilePlus,
   Edit3,
@@ -25,6 +25,7 @@ import {
   DEFAULT_CASE_SORT,
 } from '../services/caseService';
 import { subscribeToRecentSubmissionActivity } from '../services/submissionService';
+import { fetchUsersWithProfiles } from '../services/userService';
 import AdvancedToolsMenu from '../components/admin/AdvancedToolsMenu';
 import DashboardMetrics from '../components/admin/DashboardMetrics';
 import SetupAlerts from '../components/admin/SetupAlerts';
@@ -111,11 +112,15 @@ export default function AdminDashboardPage() {
     totalDisbursements: 0,
     totalMappings: 0,
     privateAudiences: 0,
+    registeredUsers: 0,
+    draftCases: 0,
+    restrictedCases: 0,
     auditAreaCounts: {},
   });
   const [alerts, setAlerts] = useState([]);
   const [recentActivity, setRecentActivity] = useState([]);
   const [loadingSummary, setLoadingSummary] = useState(true);
+  const [loadingUsers, setLoadingUsers] = useState(true);
   const [loadingAlerts, setLoadingAlerts] = useState(true);
   const [loadingActivity, setLoadingActivity] = useState(true);
   const [casesState, setCasesState] = useState({
@@ -150,6 +155,34 @@ export default function AdminDashboardPage() {
     }
   });
   const isAdmin = role === 'admin';
+  const handleNavigate = useCallback(
+    (target) => {
+      if (!target || typeof target !== 'string') return;
+
+      const hashIndex = target.indexOf('#');
+      if (hashIndex === -1) {
+        navigate(target);
+        return;
+      }
+
+      const base = target.slice(0, hashIndex) || window.location.pathname + window.location.search;
+      const hash = target.slice(hashIndex + 1);
+
+      navigate(base);
+      window.setTimeout(() => {
+        const elementId = decodeURIComponent(hash);
+        const el = document.getElementById(elementId);
+        if (el) {
+          el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+
+        if (base) {
+          window.history.replaceState(null, '', `${base}#${hash}`);
+        }
+      }, 0);
+    },
+    [navigate]
+  );
   const alertsByCaseId = useMemo(() => {
     const map = new Map();
     alerts.forEach((alert) => {
@@ -302,7 +335,7 @@ export default function AdminDashboardPage() {
     setLoadingSummary(true);
     const unsubscribe = subscribeToAdminCaseSummary(
       (data) => {
-        setDashboardSummary(data);
+        setDashboardSummary((prev) => ({ ...prev, ...data }));
         setLoadingSummary(false);
       },
       (error) => {
@@ -315,6 +348,35 @@ export default function AdminDashboardPage() {
       if (typeof unsubscribe === 'function') {
         unsubscribe();
       }
+    };
+  }, [showModal, role, loadingRole]);
+
+  useEffect(() => {
+    if (loadingRole || role !== 'admin') {
+      if (!loadingRole) {
+        setLoadingUsers(false);
+      }
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingUsers(true);
+    fetchUsersWithProfiles()
+      .then((users) => {
+        if (cancelled) return;
+        setDashboardSummary((prev) => ({ ...prev, registeredUsers: Array.isArray(users) ? users.length : 0 }));
+        setLoadingUsers(false);
+      })
+      .catch((error) => {
+        console.error('Error loading registered users:', error);
+        showModal('Error loading registered users: ' + (error?.message || 'Please try again.'), 'Error');
+        if (!cancelled) {
+          setLoadingUsers(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
     };
   }, [showModal, role, loadingRole]);
 
@@ -843,10 +905,10 @@ export default function AdminDashboardPage() {
           </div>
         </div>
         <div className="grid gap-6 md:grid-cols-2">
-          <DashboardMetrics summary={dashboardSummary} loading={loadingSummary} onNavigate={navigate} />
-          <SetupAlerts alerts={alerts} loading={loadingAlerts} onNavigate={navigate} />
-          <RecentActivity activity={recentActivity} loading={loadingActivity} onNavigate={navigate} />
-          <QuickActions onNavigate={navigate} />
+          <DashboardMetrics summary={dashboardSummary} loading={loadingSummary || loadingUsers} onNavigate={handleNavigate} />
+          <SetupAlerts alerts={alerts} loading={loadingAlerts} onNavigate={handleNavigate} />
+          <RecentActivity activity={recentActivity} loading={loadingActivity} onNavigate={handleNavigate} />
+          <QuickActions onNavigate={handleNavigate} />
         </div>
         <section id="cases" className="space-y-4">
           <div className="flex flex-col gap-4">
