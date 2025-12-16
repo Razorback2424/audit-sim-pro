@@ -181,19 +181,35 @@ export default function TwoPaneTestingStep({
                         </p>
                         <label className="flex flex-col gap-1">
                           <span>Select assertion</span>
-                          <select
-                            className="rounded-md border border-blue-200 p-1 text-sm"
-                            value={rationaleState.assertionSelection || ''}
-                            disabled={isLocked}
-                            onChange={(event) => handleRationaleSelection(itemId, 'assertionSelection', event.target.value)}
-                          >
-                            <option value="">Choose assertion…</option>
-                            {STANDARD_ASSERTIONS.map((assertion) => (
-                              <option key={assertion} value={assertion}>
-                                {assertion}
-                              </option>
-                            ))}
-                          </select>
+                          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+                            {STANDARD_ASSERTIONS.map((assertion) => {
+                              const selected = (rationaleState.assertionSelection || '') === assertion;
+                              return (
+                                <button
+                                  key={assertion}
+                                  type="button"
+                                  disabled={isLocked}
+                                  aria-pressed={selected}
+                                  onClick={() => handleRationaleSelection(itemId, 'assertionSelection', assertion)}
+                                  className={`rounded-md border px-2 py-2 text-[12px] font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 ${
+                                    selected
+                                      ? 'border-blue-500 bg-white text-blue-800 shadow-sm'
+                                      : 'border-blue-200 bg-blue-50/50 text-blue-900 hover:bg-white'
+                                  } ${isLocked ? 'opacity-60' : ''}`}
+                                >
+                                  {assertion}
+                                </button>
+                              );
+                            })}
+                            <button
+                              type="button"
+                              disabled={isLocked || !rationaleState.assertionSelection}
+                              onClick={() => handleRationaleSelection(itemId, 'assertionSelection', '')}
+                              className="rounded-md border border-blue-200 bg-transparent px-2 py-2 text-[12px] font-semibold text-blue-800 hover:bg-white disabled:opacity-50"
+                            >
+                              Clear
+                            </button>
+                          </div>
                         </label>
                         <label className="flex flex-col gap-1">
                           <span>Select reason</span>

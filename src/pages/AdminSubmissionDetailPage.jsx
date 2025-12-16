@@ -96,10 +96,26 @@ export default function AdminSubmissionDetailPage({ params }) {
                       attempt.disbursementClassifications && attempt.disbursementClassifications[pid]
                         ? attempt.disbursementClassifications[pid]
                         : null;
+                    const traineeMeta = traineeAnswer && typeof traineeAnswer === 'object' ? traineeAnswer : {};
                     const expectedAnswer =
                       attempt.expectedClassifications && attempt.expectedClassifications[pid]
                         ? attempt.expectedClassifications[pid]
                         : null;
+                    const workspaceNote =
+                      attempt.workspaceNotes && attempt.workspaceNotes[pid] && typeof attempt.workspaceNotes[pid] === 'object'
+                        ? attempt.workspaceNotes[pid]
+                        : null;
+                    const workpaperNoteText = String(
+                      workspaceNote?.workpaperNote ||
+                        workspaceNote?.note ||
+                        workspaceNote?.notes ||
+                        traineeMeta.workpaperNote ||
+                        traineeMeta.notes ||
+                        traineeMeta.note ||
+                        ''
+                    ).trim();
+                    const assertionText = String(traineeMeta.assertion || workspaceNote?.assertionSelection || '').trim();
+                    const reasonText = String(traineeMeta.reason || workspaceNote?.reasonSelection || '').trim();
                     return (
                       <li key={pid} className="break-all">
                         {pid}
@@ -126,6 +142,21 @@ export default function AdminSubmissionDetailPage({ params }) {
                                 </tr>
                               </tbody>
                             </table>
+                          </div>
+                        ) : null}
+                        {workpaperNoteText ? (
+                          <div className="mt-2 ml-4 rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-600">
+                              Workpaper note
+                            </div>
+                            {(assertionText || reasonText) && (
+                              <div className="mt-1 text-xs text-gray-600">
+                                {assertionText ? <span>Assertion: {assertionText}</span> : null}
+                                {assertionText && reasonText ? <span> · </span> : null}
+                                {reasonText ? <span>Reason: {reasonText}</span> : null}
+                              </div>
+                            )}
+                            <p className="mt-1 whitespace-pre-wrap text-sm text-gray-800">{workpaperNoteText}</p>
                           </div>
                         ) : null}
                         {traineeAnswer && typeof traineeAnswer !== 'object' ? ` — ${traineeAnswer}` : ''}

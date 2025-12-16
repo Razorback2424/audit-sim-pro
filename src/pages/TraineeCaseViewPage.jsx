@@ -79,7 +79,15 @@ const isSameSelectionMap = (currentMap, nextMap) => {
   return currentKeys.every((key) => !!nextMap[key]);
 };
 
-const CLASSIFICATION_META_FIELDS = ['isException', 'mode', 'singleClassification', 'notes', 'assertion', 'reason'];
+const CLASSIFICATION_META_FIELDS = [
+  'isException',
+  'mode',
+  'singleClassification',
+  'workpaperNote',
+  'notes',
+  'assertion',
+  'reason',
+];
 
 const isSameClassificationMap = (currentMap, nextMap) => {
   const currentKeys = Object.keys(currentMap);
@@ -272,6 +280,15 @@ export default function TraineeCaseViewPage({ params }) {
       if (!hasExplicitDecision(allocation)) return false;
       const amountNumber = Number(disbursement?.amount);
       if (!Number.isFinite(amountNumber)) return false;
+      if (allocation?.isException === true) {
+        const noteText =
+          typeof allocation.workpaperNote === 'string'
+            ? allocation.workpaperNote
+            : typeof allocation.notes === 'string'
+            ? allocation.notes
+            : '';
+        if (noteText.trim().length === 0) return false;
+      }
       let sum = 0;
       for (const { key } of CLASSIFICATION_FIELDS) {
         const value = parseAmount(allocation[key]);
@@ -861,7 +878,7 @@ export default function TraineeCaseViewPage({ params }) {
 
     let finalValue;
     // Keep raw value for these specific, non-numeric fields
-    if (['mode', 'singleClassification', 'notes'].includes(fieldKey)) {
+    if (['mode', 'singleClassification', 'notes', 'workpaperNote'].includes(fieldKey)) {
       finalValue = value;
     } else {
       // Sanitize all other fields (assumed to be amounts)
@@ -936,6 +953,17 @@ export default function TraineeCaseViewPage({ params }) {
       CLASSIFICATION_FIELDS.forEach(({ key }) => {
         entry[key] = parseAmount(allocation[key]);
       });
+      entry.isException = allocation.isException ?? null;
+      entry.mode = allocation.mode || '';
+      entry.singleClassification = allocation.singleClassification || '';
+      entry.assertion = allocation.assertion || '';
+      entry.reason = allocation.reason || '';
+      entry.workpaperNote =
+        typeof allocation.workpaperNote === 'string'
+          ? allocation.workpaperNote
+          : typeof allocation.notes === 'string'
+          ? allocation.notes
+          : '';
       allocationPayload[disbursement.paymentId] = entry;
     });
 
@@ -1432,7 +1460,7 @@ export default function TraineeCaseViewPage({ params }) {
                       }}
                       onClassificationChange={(id, val) => handleAllocationChange(id, 'singleClassification', val)}
                       onSplitAmountChange={(id, key, val) => handleAllocationChange(id, key, val)}
-                      onNoteChange={(id, val) => handleAllocationChange(id, 'notes', val)}
+                      onNoteChange={(id, val) => handleAllocationChange(id, 'workpaperNote', val)}
                       onRationaleChange={handleRationaleChange} // <--- Pass the new handler
                       isLocked={isLocked}
                       totalsMatch={totalsMatch}

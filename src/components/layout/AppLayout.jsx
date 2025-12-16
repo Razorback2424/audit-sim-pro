@@ -20,11 +20,6 @@ export default function AppLayout() {
           </h1>
           <div className="flex items-center space-x-3 sm:space-x-4">
             {role && <span className="text-xs sm:text-sm capitalize hidden sm:inline">Role: {role}</span>}
-            {currentUser?.uid && (
-              <span className="text-xs text-blue-200 hidden md:inline" title={currentUser.uid}>
-                UID: {currentUser.uid.substring(0, 8)}...
-              </span>
-            )}
             {currentUser && (
               <Button onClick={logout} variant="secondary" className="text-xs sm:text-sm px-2 py-1 sm:px-3">
                 <LogOut size={16} className="inline mr-1" /> Logout

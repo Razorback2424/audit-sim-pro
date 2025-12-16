@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Input, Select, Textarea } from '../../AppCore';
 import StepIntro from './StepIntro';
+import { STANDARD_ASSERTIONS } from '../../constants/caseFormOptions';
 import {
   ANSWER_KEY_FIELDS,
   ANSWER_KEY_LABELS,
@@ -188,6 +189,7 @@ export default function AnswerKeyCard({
   const reasonPreview = String(answerKey.reason || '').trim();
   const statusBadgeClass = ready ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700';
   const statusText = ready ? 'READY' : 'INCOMPLETE';
+  const reasonOptions = Array.isArray(disbursement.errorReasons) ? disbursement.errorReasons.filter(Boolean) : [];
 
   return (
     <div className="rounded-2xl border border-gray-200 bg-white shadow-sm">
@@ -294,22 +296,29 @@ export default function AnswerKeyCard({
               <label className="mb-1 text-xs uppercase tracking-wide text-gray-500" htmlFor={`${disbursement._tempId}-assertion`}>
                 Expected assertion (for grading)
               </label>
-              <Input
+              <Select
                 id={`${disbursement._tempId}-assertion`}
                 value={answerKey?.assertion ?? ''}
                 onChange={(event) => handleAssertionChange(event.target.value)}
-                placeholder="e.g., cutoff, existence, rights & obligations"
+                options={[
+                  { value: '', label: 'Choose assertion…' },
+                  ...STANDARD_ASSERTIONS.map((assertion) => ({ value: assertion, label: assertion })),
+                ]}
               />
             </div>
             <div className="flex flex-col text-sm font-medium text-gray-700">
               <label className="mb-1 text-xs uppercase tracking-wide text-gray-500" htmlFor={`${disbursement._tempId}-reason`}>
                 Expected reason / trigger
               </label>
-              <Input
+              <Select
                 id={`${disbursement._tempId}-reason`}
                 value={answerKey?.reason ?? ''}
                 onChange={(event) => handleReasonChange(event.target.value)}
-                placeholder="e.g., dated after year end, customer-owned inventory"
+                disabled={reasonOptions.length === 0}
+                options={[
+                  { value: '', label: reasonOptions.length ? 'Choose reason…' : 'No reasons configured' },
+                  ...reasonOptions.map((reason) => ({ value: reason, label: reason })),
+                ]}
               />
             </div>
           </div>

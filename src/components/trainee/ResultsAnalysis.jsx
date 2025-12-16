@@ -472,11 +472,25 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
                   </div>
                 </div>
 
-                <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Senior feedback</div>
-                  <p className="mt-2 text-sm text-gray-800 leading-relaxed">
-                    {currentIssue.item?.answerKey?.explanation || 'No explanation provided yet for this item.'}
-                  </p>
+                <div className="rounded-lg border border-gray-200 bg-gray-50 p-4 space-y-4">
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Your workpaper note</div>
+                    <p className="mt-2 whitespace-pre-wrap text-sm text-gray-800 leading-relaxed">
+                      {(() => {
+                        const student = studentAnswers?.[currentIssue.item?.paymentId] || {};
+                        const note = String(student.workpaperNote || student.notes || student.note || '').trim();
+                        return note || 'No note submitted.';
+                      })()}
+                    </p>
+                  </div>
+                  <div className="border-t border-gray-200 pt-4">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Senior Manager&apos;s Note
+                    </div>
+                    <p className="mt-2 text-sm text-gray-800 leading-relaxed">
+                      {currentIssue.item?.answerKey?.explanation || 'No explanation provided yet for this item.'}
+                    </p>
+                  </div>
                 </div>
 
                 <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">

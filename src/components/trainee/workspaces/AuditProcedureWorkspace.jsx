@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Input, Select } from '../../../AppCore';
+import { Input, Select, Textarea } from '../../../AppCore';
 import { currencyFormatter } from '../../../utils/formatters';
 
 const RISK_STYLES = {
@@ -42,6 +42,7 @@ export default function AuditProcedureWorkspace({
   onClassificationChange = noop,
   onSplitAmountChange = noop,
   onRationaleChange = noop,
+  onNoteChange = noop,
   isLocked,
   totalsMatch,
   totalEntered,
@@ -120,6 +121,12 @@ export default function AuditProcedureWorkspace({
     if (!Array.isArray(item?.errorReasons)) return [];
     return item.errorReasons.filter(Boolean);
   }, [item?.errorReasons]);
+
+  const workpaperNote = typeof allocation?.workpaperNote === 'string'
+    ? allocation.workpaperNote
+    : typeof allocation?.notes === 'string'
+    ? allocation.notes
+    : '';
 
   const effectivePassClassification = useMemo(() => {
     const current = allocation?.singleClassification || '';
@@ -349,6 +356,23 @@ export default function AuditProcedureWorkspace({
                 </Select>
               </label>
             )}
+          </div>
+
+          <div className="space-y-1">
+            <label className="block text-sm font-semibold text-gray-800">
+              Workpaper note <span className="text-rose-700">*</span>
+              <Textarea
+                className="mt-1"
+                rows={4}
+                value={workpaperNote}
+                onChange={(event) => (itemKey ? onNoteChange(itemKey, event.target.value) : null)}
+                disabled={isLocked}
+                placeholder="Document your judgment call (e.g., invoice date is post-YE but service was performed pre-YE...)."
+              />
+            </label>
+            <p className="text-xs text-rose-800">
+              Required to complete an exception workpaper. This note is saved for review but does not affect your score.
+            </p>
           </div>
         </div>
       ) : (
