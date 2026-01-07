@@ -17,6 +17,12 @@ jest.setTimeout(20000);
 
 beforeAll(() => {
   global.fetch = mockFetch;
+  if (!Element.prototype.scrollIntoView) {
+    Element.prototype.scrollIntoView = jest.fn();
+  }
+  if (!window.scrollTo) {
+    window.scrollTo = jest.fn();
+  }
 });
 
 afterEach(() => {
@@ -52,6 +58,7 @@ jest.mock('../components/trainee/AuditItemCardFactory', () => {
     onClassificationChange,
     onSplitAmountChange,
     onRationaleChange,
+    onNoteChange,
     isLocked,
   }) {
     const [isSplit, setIsSplit] = React.useState(false);
@@ -136,9 +143,33 @@ jest.mock('../components/trainee/AuditItemCardFactory', () => {
             ))}
           </div>
         )}
+
+        {allocation?.isException === true ? (
+          <label>
+            Workpaper note
+            <textarea
+              aria-label="Workpaper note"
+              value={allocation?.workpaperNote || ''}
+              disabled={!!isLocked}
+              onChange={(e) => {
+                if (typeof onNoteChange === 'function') {
+                  onNoteChange(paymentId, e.target.value);
+                }
+              }}
+            />
+          </label>
+        ) : null}
       </div>
     );
   };
+});
+
+beforeEach(() => {
+  jest.spyOn(window, 'confirm').mockReturnValue(true);
+});
+
+afterEach(() => {
+  window.confirm?.mockRestore?.();
 });
 
 jest.mock('firebase/storage', () => ({
@@ -184,21 +215,46 @@ describe('TraineeCaseViewPage', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
+  const baseInstruction = {
+    title: 'Mission Briefing',
+    moduleCode: 'SURL-101',
+    hook: {
+      headline: 'Confirm liabilities are recorded in the correct period.',
+      risk: 'Cutoff errors misstate expenses.',
+      body: 'Review the evidence and apply the cutoff rule before selecting items.',
+    },
+    visualAsset: { type: 'VIDEO', source_id: '' },
+    heuristic: { rule_text: 'Expenses follow the work, not the paper.' },
+    gateCheck: {
+      question: 'What is the golden rule for cutoff?',
+      options: [
+        { id: 'opt-a', text: 'Expenses follow the work, not the paper.', correct: true },
+        { id: 'opt-b', text: 'Use the invoice date every time.', correct: false },
+      ],
+    },
+  };
+
   const renderCase = (casePayload) => {
     subscribeToCase.mockImplementation((_id, cb) => {
-      cb(casePayload);
+      cb({
+        ...casePayload,
+        instruction: casePayload?.instruction || baseInstruction,
+      });
       return jest.fn();
     });
     return render(<TraineeCaseViewPage params={{ caseId: 'case-1' }} />);
   };
 
   const advanceToClassification = async () => {
-    await screen.findByRole('heading', { name: /Step 1 — Select Disbursements/i, level: 2 });
+    await screen.findByRole('heading', { name: /Step 1 — Instruction/i, level: 2 });
+    await userEvent.click(screen.getByRole('radio', { name: /Expenses follow the work/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Enter the Simulation/i }));
+    await screen.findByRole('heading', { name: /Step 2 — Select Disbursements/i, level: 2 });
     const [checkbox] = screen.getAllByRole('checkbox');
     await userEvent.click(checkbox);
     const continueButton = screen.getByRole('button', { name: /Continue to Classification/i });
     await userEvent.click(continueButton);
-    await screen.findByRole('heading', { name: /Step 2 — Classify Results/i, level: 2 });
+    await screen.findByRole('heading', { name: /Step 3 — Classify Results/i, level: 2 });
   };
 
   beforeEach(() => {
@@ -277,7 +333,7 @@ describe('TraineeCaseViewPage', () => {
     await advanceToClassification();
     await flushAsync();
     expect(screen.getByRole('heading', { name: /Cash Case/i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /Step 2 — Classify Results/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Step 3 — Classify Results/i })).toBeInTheDocument();
   });
 
   test('fetches evidence for storage-backed documents on classification step', async () => {
@@ -337,11 +393,11 @@ describe('TraineeCaseViewPage', () => {
       ],
     });
 
-    await screen.findByText(/Step 1 — Select Disbursements/i);
+    await screen.findByText(/Step 2 — Select Disbursements/i);
     await userEvent.click(screen.getByRole('checkbox', { name: /ID:\s*p1/i }));
     await userEvent.click(screen.getByRole('button', { name: /Continue to Classification/i }));
     await waitFor(() => {
-      expect(screen.queryByText(/Step 2 — Classify Results/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/Step 3 — Classify Results/i)).not.toBeInTheDocument();
     });
     await flushAsync();
     await waitFor(() => {
@@ -447,7 +503,7 @@ describe('TraineeCaseViewPage', () => {
     await screen.findByRole('heading', { name: /Audit Completion Report/i });
     const [, , payload] = saveSubmission.mock.calls[0];
     expect(payload.retrievedDocuments).toHaveLength(2);
-    expect(payload.disbursementClassifications.p1).toEqual({
+    expect(payload.disbursementClassifications.p1).toMatchObject({
       properlyIncluded: 100,
       properlyExcluded: 50,
       improperlyIncluded: 0,
@@ -517,6 +573,7 @@ describe('TraineeCaseViewPage', () => {
     await userEvent.type(improperlyExcludedInput, '100');
 
     await userEvent.click(screen.getByRole('button', { name: /^Exception$/i }));
+    await userEvent.type(screen.getByLabelText(/Workpaper note/i), 'Invoice dated after year-end; service performed before year-end.');
     await userEvent.click(screen.getByRole('button', { name: /Submit Responses/i }));
 
     await screen.findByRole('heading', { name: /Audit Completion Report/i });

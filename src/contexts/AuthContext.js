@@ -13,6 +13,47 @@ import { useModal } from './ModalContext';
 import { clearRoleCache } from '../services/roleService';
 
 const AuthContext = createContext(null);
+const LOGIN_TIMEOUT_MS = 15000;
+
+const isAuthDebugEnabled = () => {
+  if (process.env.NODE_ENV === 'test') return false;
+  try {
+    return typeof window !== 'undefined' && window.localStorage?.getItem('debugAuth') === '1';
+  } catch {
+    return false;
+  }
+};
+
+const authDebug = (message, meta) => {
+  if (!isAuthDebugEnabled()) return;
+  const payload = meta && typeof meta === 'object' ? meta : undefined;
+  // Keep this as console.info so it can be filtered easily.
+  console.info(`[AuthDebug] ${message}`, payload || '');
+};
+
+const withTimeout = (promise, timeoutMs, timeoutError) =>
+  new Promise((resolve, reject) => {
+    let didFinish = false;
+    const timeoutId = setTimeout(() => {
+      if (didFinish) return;
+      didFinish = true;
+      reject(timeoutError);
+    }, timeoutMs);
+
+    promise
+      .then((value) => {
+        if (didFinish) return;
+        didFinish = true;
+        clearTimeout(timeoutId);
+        resolve(value);
+      })
+      .catch((err) => {
+        if (didFinish) return;
+        didFinish = true;
+        clearTimeout(timeoutId);
+        reject(err);
+      });
+  });
 
 // Guest sign-in is disabled to ensure a stable UID across sessions.
 export let signInAsGuest = async () => {
@@ -53,6 +94,11 @@ export const AuthProvider = ({ children }) => {
     attemptInitialAuth();
 
     const unsubscribe = onAuthStateChanged(auth, (user) => {
+      authDebug('onAuthStateChanged fired', {
+        uid: user?.uid ?? null,
+        isAnonymous: user?.isAnonymous ?? null,
+        providerIds: Array.isArray(user?.providerData) ? user.providerData.map((p) => p?.providerId).filter(Boolean) : [],
+      });
       console.info('[AuthProvider] onAuthStateChanged', {
         uid: user?.uid ?? null,
         isAnonymous: user?.isAnonymous ?? null,
@@ -92,10 +138,22 @@ export const AuthProvider = ({ children }) => {
 
   const login = async (email, password) => {
     try {
+      authDebug('login() called', { email: (email || '').trim() });
       await setPersistence(auth, browserLocalPersistence);
-      const cred = await signInWithEmailAndPassword(auth, email, password);
+      authDebug('setPersistence resolved', {});
+      console.info('[AuthProvider] Starting email/password sign-in', { email: (email || '').trim() });
+      const cred = await withTimeout(
+        signInWithEmailAndPassword(auth, email, password),
+        LOGIN_TIMEOUT_MS,
+        Object.assign(new Error('Sign-in timed out. Please check your connection and try again.'), {
+          code: 'auth/timeout',
+        })
+      );
+      authDebug('signInWithEmailAndPassword resolved', { uid: cred?.user?.uid ?? null });
+      console.info('[AuthProvider] Email/password sign-in resolved', { uid: cred?.user?.uid ?? null });
       return cred.user;
     } catch (err) {
+      authDebug('login() failed', { code: err?.code ?? null, message: err?.message ?? String(err) });
       console.error('Email/password sign-in error:', err);
       if (showModal) {
         showModal(`Failed to sign in: ${err.message} (Code: ${err.code})`, 'Authentication Error');

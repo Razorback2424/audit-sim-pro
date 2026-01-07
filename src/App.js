@@ -41,7 +41,7 @@ const HomeRedirect = () => {
   const { role, loadingRole } = useUser();
   if (loadingRole) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="min-h-screen flex items-center justify-center bg-white">
         <Loader2 className="animate-spin text-blue-600" size={32} />
       </div>
     );

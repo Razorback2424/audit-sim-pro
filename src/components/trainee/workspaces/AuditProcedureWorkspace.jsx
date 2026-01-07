@@ -1,28 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Input, Select, Textarea } from '../../../AppCore';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Input, Textarea } from '../../../AppCore';
 import { currencyFormatter } from '../../../utils/formatters';
-
-const RISK_STYLES = {
-  low: 'bg-green-50 text-green-700',
-  medium: 'bg-amber-50 text-amber-700',
-  high: 'bg-red-50 text-red-700',
-};
 
 const DECISION = {
   UNDECIDED: 'undecided',
   PASS: 'pass',
   EXCEPTION: 'exception',
 };
-
-const PASS_OPTIONS = [
-  { value: 'properlyIncluded', label: 'Properly Included' },
-  { value: 'properlyExcluded', label: 'Properly Excluded' },
-];
-
-const EXCEPTION_OPTIONS = [
-  { value: 'improperlyIncluded', label: 'Improperly Included' },
-  { value: 'improperlyExcluded', label: 'Missing / Unrecorded' },
-];
 
 const noop = () => {};
 
@@ -36,13 +20,14 @@ export default function AuditProcedureWorkspace({
   item,
   allocation,
   classificationFields,
-  splitAllocationHint,
-  singleAllocationHint,
   onSplitToggle = noop,
   onClassificationChange = noop,
   onSplitAmountChange = noop,
   onRationaleChange = noop,
   onNoteChange = noop,
+  canMakeDecision = true,
+  onDecisionBlocked = noop,
+  isComplete,
   isLocked,
   totalsMatch,
   totalEntered,
@@ -51,14 +36,9 @@ export default function AuditProcedureWorkspace({
 }) {
   const itemKey = item?.paymentId || item?.id || '';
   const amountNumber = Number(item?.amount) || 0;
-  const classificationLabel =
-    classificationFields.find(({ key }) => key === allocation.singleClassification)?.label ||
-    'selected classification';
-  const riskClass = RISK_STYLES[item?.riskLevel] || 'bg-gray-100 text-gray-600';
   const isSplit = allocation.mode === 'split';
 
   const [currentDecision, setCurrentDecision] = useState(() => deriveDecision(allocation));
-  const [showAdvanced, setShowAdvanced] = useState(isSplit);
 
   const startTimeRef = useRef(
     workspaceState?.startedAt ? new Date(workspaceState.startedAt).getTime() : Date.now()
@@ -106,39 +86,11 @@ export default function AuditProcedureWorkspace({
     setCurrentDecision(deriveDecision(allocation));
   }, [allocation]);
 
-  useEffect(() => {
-    if (allocation?.mode === 'split') {
-      setShowAdvanced(true);
-    }
-  }, [allocation?.mode]);
-
-  const assertionOptions = useMemo(() => {
-    if (!Array.isArray(item?.requiredAssertions)) return [];
-    return item.requiredAssertions.filter(Boolean);
-  }, [item?.requiredAssertions]);
-
-  const reasonOptions = useMemo(() => {
-    if (!Array.isArray(item?.errorReasons)) return [];
-    return item.errorReasons.filter(Boolean);
-  }, [item?.errorReasons]);
-
   const workpaperNote = typeof allocation?.workpaperNote === 'string'
     ? allocation.workpaperNote
     : typeof allocation?.notes === 'string'
     ? allocation.notes
     : '';
-
-  const effectivePassClassification = useMemo(() => {
-    const current = allocation?.singleClassification || '';
-    if (PASS_OPTIONS.some((option) => option.value === current)) return current;
-    return '';
-  }, [allocation?.singleClassification]);
-
-  const effectiveExceptionNature = useMemo(() => {
-    const current = allocation?.singleClassification || '';
-    if (EXCEPTION_OPTIONS.some((option) => option.value === current)) return current;
-    return '';
-  }, [allocation?.singleClassification]);
 
   const resolveSplitValue = useCallback(
     (key) => {
@@ -169,6 +121,10 @@ export default function AuditProcedureWorkspace({
   );
 
   const handleDecisionChange = (nextDecision) => {
+    if (!canMakeDecision) {
+      onDecisionBlocked();
+      return;
+    }
     const isException = nextDecision === DECISION.EXCEPTION;
     setCurrentDecision(nextDecision);
     if (!itemKey) return;
@@ -177,37 +133,20 @@ export default function AuditProcedureWorkspace({
     if (!isException) {
       onRationaleChange(itemKey, 'assertion', '');
       onRationaleChange(itemKey, 'reason', '');
-      applySingleAllocation(effectivePassClassification || 'properlyIncluded');
-      setShowAdvanced(false);
+      applySingleAllocation('properlyIncluded');
     } else {
       clearAllClassificationAmounts();
       onClassificationChange(itemKey, '');
     }
   };
 
-  const handlePassConfirmationChange = (value) => {
-    const nextValue = value || '';
-    if (!nextValue) return;
-    setCurrentDecision(DECISION.PASS);
-    if (!itemKey) return;
-    onRationaleChange(itemKey, 'isException', false);
-    applySingleAllocation(nextValue);
-  };
-
-  const handleNatureChange = (value) => {
-    const nature = value || '';
-    if (!nature) return;
-    setCurrentDecision(DECISION.EXCEPTION);
-    if (!itemKey) return;
-    onRationaleChange(itemKey, 'isException', true);
-    onClassificationChange(itemKey, nature);
-    applySingleAllocation(nature);
-  };
-
   const handleSplitToggleInternal = (checked) => {
+    if (!canMakeDecision) {
+      onDecisionBlocked();
+      return;
+    }
     if (!itemKey) return;
     onSplitToggle(itemKey, checked, item);
-    setShowAdvanced(true);
 
     if (!checked) {
       if (allocation.singleClassification) {
@@ -219,252 +158,123 @@ export default function AuditProcedureWorkspace({
     }
   };
 
+  const statusTone =
+    currentDecision === DECISION.EXCEPTION
+      ? 'border-rose-200 bg-rose-50/60'
+      : currentDecision === DECISION.PASS
+      ? 'border-emerald-200 bg-emerald-50/70'
+      : 'border-amber-200 bg-amber-50/70';
+
   return (
-    <div className="audit-workspace space-y-6 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="space-y-1">
-          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
-            Payment ID: {item.paymentId}
-          </p>
-          <h3 className="text-2xl font-bold text-gray-900">
-            {currencyFormatter.format(amountNumber)}
-          </h3>
-          <p className="text-sm text-gray-700">{item.payee}</p>
-          {item.paymentDate && <p className="text-xs text-gray-500">Paid {item.paymentDate}</p>}
+    <div
+      className={`audit-workspace space-y-5 rounded-2xl border p-5 shadow-sm transition-colors ${statusTone}`}
+    >
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Vendor</p>
+          <p className="text-2xl font-semibold text-slate-900">{item.payee || 'Unknown payee'}</p>
         </div>
-        <div className="flex flex-col items-end gap-3 sm:flex-row sm:items-center">
-          {item.riskLevel && (
-            <span
-              className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold uppercase ${riskClass}`}
-            >
-              {item.riskLevel.toUpperCase()} risk
-            </span>
-          )}
-          <div className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 p-1 shadow-inner">
-            <button
-              type="button"
-              onClick={() => handleDecisionChange(DECISION.PASS)}
-              disabled={isLocked}
-              className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors ${
-                currentDecision === DECISION.PASS
-                  ? 'bg-emerald-600 text-white shadow-sm'
-                  : 'text-gray-700 hover:bg-white'
-              }`}
-            >
-              ✅ Pass
-            </button>
-            <button
-              type="button"
-              onClick={() => handleDecisionChange(DECISION.EXCEPTION)}
-              disabled={isLocked}
-              className={`rounded-full px-4 py-2 text-sm font-semibold transition-colors ${
-                currentDecision === DECISION.EXCEPTION
-                  ? 'bg-rose-600 text-white shadow-sm'
-                  : 'text-gray-700 hover:bg-white'
-              }`}
-            >
-              ⚠️ Exception
-            </button>
-          </div>
+        <div className="sm:text-right">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Amount</p>
+          <p className="text-2xl font-bold text-slate-900">{currencyFormatter.format(amountNumber)}</p>
         </div>
       </div>
 
-      {currentDecision === DECISION.PASS ? (
-        <div className="space-y-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-semibold text-emerald-900">Audit decision: Pass</p>
-            <p className="text-xs text-emerald-800">Confirm the classification</p>
-          </div>
+      <div className="text-xs text-slate-500">
+        <span className="font-medium text-slate-600">Payment ID:</span> {item.paymentId || '—'}{' '}
+        <span className="mx-2 text-slate-300">|</span>
+        <span className="font-medium text-slate-600">Payment Date:</span> {item.paymentDate || '—'}
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <button
+          type="button"
+          onClick={() => handleDecisionChange(DECISION.PASS)}
+          disabled={isLocked}
+          className={`w-full rounded-xl px-5 py-3 text-sm font-semibold shadow-sm transition-all ${
+            currentDecision === DECISION.PASS
+              ? 'bg-emerald-600 text-white ring-2 ring-emerald-200'
+              : 'bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-50'
+          }`}
+        >
+          ✅ No Exception
+        </button>
+        <button
+          type="button"
+          onClick={() => handleDecisionChange(DECISION.EXCEPTION)}
+          disabled={isLocked}
+          className={`w-full rounded-xl px-5 py-3 text-sm font-semibold shadow-sm transition-all ${
+            currentDecision === DECISION.EXCEPTION
+              ? 'bg-rose-600 text-white ring-2 ring-rose-200'
+              : 'bg-white text-rose-700 border border-rose-200 hover:bg-rose-50'
+          }`}
+        >
+          ⚠️ Exception
+        </button>
+      </div>
+
+      {currentDecision === DECISION.EXCEPTION ? (
+        <div className="space-y-2">
           <label className="block text-sm font-semibold text-gray-800">
-            Confirmation
-            <Select
-              className="mt-1 w-full"
-              value={effectivePassClassification}
-              onChange={(event) => handlePassConfirmationChange(event.target.value)}
+            Exception note <span className="text-rose-700">*</span>
+            <Textarea
+              className="mt-1"
+              rows={3}
+              value={workpaperNote}
+              onChange={(event) => (itemKey ? onNoteChange(itemKey, event.target.value) : null)}
               disabled={isLocked}
-            >
-              <option value="">Select classification...</option>
-              {PASS_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </Select>
+              placeholder="Why is this an exception?"
+            />
           </label>
-          <p className="text-xs text-emerald-800">
-            Pass keeps the item as-is. No extra detail required.
-          </p>
         </div>
-      ) : currentDecision === DECISION.EXCEPTION ? (
-        <div className="space-y-4 rounded-xl border border-rose-200 bg-rose-50 p-4">
-          <div className="flex items-center justify-between">
-            <p className="text-sm font-semibold text-rose-900">Exception — add context</p>
-            <p className="text-xs text-rose-800">Verdict first, then theory.</p>
-          </div>
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <label className="block text-sm font-semibold text-gray-800">
-              Nature of Error
-              <Select
-                className="mt-1 w-full"
-                value={effectiveExceptionNature}
-                onChange={(event) => handleNatureChange(event.target.value)}
-                disabled={isLocked}
-              >
-                <option value="">Select nature...</option>
-                {EXCEPTION_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </Select>
-            </label>
+      ) : null}
 
-            {assertionOptions.length > 0 && (
-              <label className="block text-sm font-semibold text-gray-800">
-                Primary Assertion Failure
-                <Select
-                  className="mt-1 w-full"
-                  value={allocation.assertion || ''}
-                  onChange={(event) => (itemKey ? onRationaleChange(itemKey, 'assertion', event.target.value) : null)}
+      <label className="inline-flex items-center gap-2 text-sm font-semibold text-gray-800">
+        <input
+          type="checkbox"
+          className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+          checked={isSplit}
+          onChange={(event) => handleSplitToggleInternal(event.target.checked)}
+          disabled={isLocked}
+        />
+        Split Payment Across Classifications
+      </label>
+
+      {isSplit ? (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
+            {classificationFields.map(({ key, label }) => (
+              <label key={key} className="flex flex-col text-sm font-semibold text-gray-800">
+                <span className="mb-1">{label}</span>
+                <Input
+                  type="text"
+                  inputMode="decimal"
+                  pattern="[0-9.,]*"
+                  value={resolveSplitValue(key)}
+                  onChange={(event) => {
+                    if (!canMakeDecision) {
+                      onDecisionBlocked();
+                      return;
+                    }
+                    if (itemKey) onSplitAmountChange(itemKey, key, event.target.value);
+                  }}
                   disabled={isLocked}
-                >
-                  <option value="">Select assertion...</option>
-                  {assertionOptions.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </Select>
+                />
               </label>
-            )}
-
-            {reasonOptions.length > 0 && (
-              <label className="block text-sm font-semibold text-gray-800">
-                Specific Reason
-                <Select
-                  className="mt-1 w-full"
-                  value={allocation.reason || ''}
-                  onChange={(event) => (itemKey ? onRationaleChange(itemKey, 'reason', event.target.value) : null)}
-                  disabled={isLocked}
-                >
-                  <option value="">Select reason...</option>
-                  {reasonOptions.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-            )}
+            ))}
           </div>
-
-          <div className="space-y-1">
-            <label className="block text-sm font-semibold text-gray-800">
-              Workpaper note <span className="text-rose-700">*</span>
-              <Textarea
-                className="mt-1"
-                rows={4}
-                value={workpaperNote}
-                onChange={(event) => (itemKey ? onNoteChange(itemKey, event.target.value) : null)}
-                disabled={isLocked}
-                placeholder="Document your judgment call (e.g., invoice date is post-YE but service was performed pre-YE...)."
-              />
-            </label>
-            <p className="text-xs text-rose-800">
-              Required to complete an exception workpaper. This note is saved for review but does not affect your score.
-            </p>
-          </div>
-        </div>
-      ) : (
-        <div className="rounded-xl border border-blue-200 bg-blue-50 p-4">
-          <p className="text-sm font-semibold text-blue-900">Choose your verdict</p>
-          <p className="mt-1 text-xs text-blue-800">
-            Decide first: Pass or Exception. Your selection unlocks the rest of the workpaper.
-          </p>
-        </div>
-      )}
-
-      <div className="space-y-3 rounded-xl border border-gray-200 bg-gray-50 p-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <p className="text-sm font-semibold text-gray-900">Allocation</p>
-            <p className="text-xs text-gray-600">
-              {isSplit
-                ? 'Split only when the scenario truly needs it.'
-                : 'We default to a 100% allocation based on your verdict.'}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => setShowAdvanced((prev) => !prev)}
-            disabled={isLocked}
-            className="text-xs font-semibold text-gray-700 underline decoration-gray-300 underline-offset-4 transition-colors hover:text-gray-900 disabled:text-gray-400"
-          >
-            {showAdvanced ? 'Hide advanced' : 'Advanced / Split'}
-          </button>
-        </div>
-
-        {showAdvanced ? (
-          <div className="space-y-3">
-            <label className="inline-flex items-center gap-2 text-sm font-semibold text-gray-800">
-              <input
-                type="checkbox"
-                className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                checked={isSplit}
-                onChange={(event) => handleSplitToggleInternal(event.target.checked)}
-                disabled={isLocked}
-              />
-              Split across classifications
-            </label>
-
-            {isSplit ? (
-              <div className="space-y-3 rounded-lg border border-white/60 bg-white p-3 shadow-inner">
-                <p className="text-xs text-gray-500">{splitAllocationHint}</p>
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
-                  {classificationFields.map(({ key, label }) => (
-                    <label key={key} className="flex flex-col text-sm font-semibold text-gray-800">
-                      <span className="mb-1">{label}</span>
-                      <Input
-                        type="text"
-                        inputMode="decimal"
-                        pattern="[0-9.,]*"
-                        value={resolveSplitValue(key)}
-                        onChange={(event) =>
-                          (itemKey ? onSplitAmountChange(itemKey, key, event.target.value) : null)
-                        }
-                        disabled={isLocked}
-                      />
-                    </label>
-                  ))}
-                </div>
-              </div>
+          <div className="text-xs text-gray-600">
+            Entered total: <strong>{currencyFormatter.format(totalEntered)}</strong>{' '}
+            {totalsMatch ? (
+              <span className="text-emerald-700">(Balanced)</span>
             ) : (
-              <div className="rounded-md border border-white/60 bg-white px-3 py-2 text-sm text-gray-700">
-                {allocation.singleClassification
-                  ? `Entire amount allocated to ${classificationLabel}.`
-                  : singleAllocationHint}
-              </div>
+              <span className="text-amber-700">
+                (Must equal {currencyFormatter.format(amountNumber)})
+              </span>
             )}
           </div>
-        ) : (
-          <div className="rounded-md border border-white/60 bg-white px-3 py-2 text-sm text-gray-700">
-            {allocation.singleClassification
-              ? `Allocated to ${classificationLabel}. Open advanced if you need a split.`
-              : 'Choose Pass or Exception, then confirm the classification or enter a split.'}
-          </div>
-        )}
-
-        <div className="text-xs text-gray-600">
-          Entered total: <strong>{currencyFormatter.format(totalEntered)}</strong>{' '}
-          {totalsMatch ? (
-            <span className="text-emerald-700">(Balanced)</span>
-          ) : (
-            <span className="text-amber-700">
-              (Must equal {currencyFormatter.format(amountNumber)})
-            </span>
-          )}
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }

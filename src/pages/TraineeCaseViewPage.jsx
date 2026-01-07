@@ -5,26 +5,35 @@ import { storage, Button, useRoute, useAuth, useModal, appId } from '../AppCore'
 import { subscribeToCase } from '../services/caseService';
 import { saveSubmission } from '../services/submissionService';
 import { saveProgress, subscribeProgressForCases } from '../services/progressService';
-import { Send, Loader2, ExternalLink, Download } from 'lucide-react';
+import { Send, Loader2, ExternalLink, Download, BookOpen } from 'lucide-react';
 import ResultsAnalysis from '../components/trainee/ResultsAnalysis';
 import AuditItemCardFactory from '../components/trainee/AuditItemCardFactory';
 import OutstandingCheckTestingModule from '../components/trainee/OutstandingCheckTestingModule';
+import InstructionView from '../components/InstructionView';
 
 const FLOW_STEPS = Object.freeze({
+  INSTRUCTION: 'instruction',
   SELECTION: 'selection',
   TESTING: 'testing',
   RESULTS: 'results',
 });
 
-const STEP_SEQUENCE = [FLOW_STEPS.SELECTION, FLOW_STEPS.TESTING, FLOW_STEPS.RESULTS];
+const STEP_SEQUENCE = [
+  FLOW_STEPS.INSTRUCTION,
+  FLOW_STEPS.SELECTION,
+  FLOW_STEPS.TESTING,
+  FLOW_STEPS.RESULTS,
+];
 
 const STEP_LABELS = {
+  [FLOW_STEPS.INSTRUCTION]: 'Instruction',
   [FLOW_STEPS.SELECTION]: 'Select Disbursements',
   [FLOW_STEPS.TESTING]: 'Classify Results',
   [FLOW_STEPS.RESULTS]: 'Review Outcome',
 };
 
 const STEP_DESCRIPTIONS = {
+  [FLOW_STEPS.INSTRUCTION]: 'Review the briefing and pass the gate check.',
   [FLOW_STEPS.SELECTION]: 'Choose which disbursements you will test.',
   [FLOW_STEPS.TESTING]: 'Allocate the amounts across each classification and review documents.',
   [FLOW_STEPS.RESULTS]: 'See a recap of your responses.',
@@ -56,6 +65,7 @@ const isInlinePreviewable = (contentType, fileNameOrPath) => {
 };
 
 const computePercentComplete = (step, selectedCount, classifiedCount) => {
+  if (step === FLOW_STEPS.INSTRUCTION) return 0;
   if (step === FLOW_STEPS.RESULTS) return 100;
   if (selectedCount <= 0) return 0;
   if (step === FLOW_STEPS.SELECTION) return 25;
@@ -165,21 +175,26 @@ export default function TraineeCaseViewPage({ params }) {
 
   const [caseData, setCaseData] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [activeStep, setActiveStep] = useState(FLOW_STEPS.SELECTION);
+  const [activeStep, setActiveStep] = useState(FLOW_STEPS.INSTRUCTION);
   const [selectedDisbursements, setSelectedDisbursements] = useState({});
   const [classificationAmounts, setClassificationAmounts] = useState({});
   const [isLocked, setIsLocked] = useState(false);
   const [activeEvidenceId, setActiveEvidenceId] = useState(null);
+  const [activePaymentId, setActivePaymentId] = useState(null);
   const [activeEvidenceUrl, setActiveEvidenceUrl] = useState(null);
   const [activeEvidenceError, setActiveEvidenceError] = useState('');
   const [activeEvidenceLoading, setActiveEvidenceLoading] = useState(false);
   const [downloadingReferenceId, setDownloadingReferenceId] = useState(null);
+  const [openedReferenceDocs, setOpenedReferenceDocs] = useState(() => new Set());
+  const [decisionBlockedHint, setDecisionBlockedHint] = useState(false);
   const [isRetakeResetting, setIsRetakeResetting] = useState(false);
+  const [saveStatus, setSaveStatus] = useState('saved');
+  const [furthestStepIndex, setFurthestStepIndex] = useState(0);
 
   const lastResolvedEvidenceRef = useRef({ evidenceId: null, storagePath: null, url: null, inlineNotSupported: false });
   const progressSaveTimeoutRef = useRef(null);
   const lastLocalChangeRef = useRef(0);
-  const activeStepRef = useRef(FLOW_STEPS.SELECTION);
+  const activeStepRef = useRef(FLOW_STEPS.INSTRUCTION);
   const selectionRef = useRef(selectedDisbursements);
   const classificationRef = useRef(classificationAmounts);
   const selectedIdsRef = useRef([]);
@@ -187,6 +202,7 @@ export default function TraineeCaseViewPage({ params }) {
   const isLockedRef = useRef(false);
   const retakeHandledRef = useRef(false);
   const retakeResettingRef = useRef(false);
+  const decisionHintTimeoutRef = useRef(null);
 
   const createEmptyAllocation = useCallback(() => {
     const template = {};
@@ -204,10 +220,12 @@ export default function TraineeCaseViewPage({ params }) {
       retakeResettingRef.current = true;
       setIsRetakeResetting(true);
       setIsLocked(false);
-      setActiveStep(FLOW_STEPS.SELECTION);
+      setActiveStep(FLOW_STEPS.INSTRUCTION);
+      setFurthestStepIndex(0);
       setSelectedDisbursements({});
       setClassificationAmounts({});
       setActiveEvidenceId(null);
+      setOpenedReferenceDocs(new Set());
       setActiveEvidenceUrl(null);
       setActiveEvidenceError('');
       setActiveEvidenceLoading(false);
@@ -226,7 +244,7 @@ export default function TraineeCaseViewPage({ params }) {
           patch: {
             percentComplete: 0,
             state: 'not_started',
-            step: FLOW_STEPS.SELECTION,
+            step: FLOW_STEPS.INSTRUCTION,
             draft: {
               selectedPaymentIds: [],
               classificationDraft: {},
@@ -304,6 +322,14 @@ export default function TraineeCaseViewPage({ params }) {
 
   useEffect(() => {
     activeStepRef.current = activeStep;
+    const currentIndex = STEP_SEQUENCE.indexOf(activeStep);
+    if (currentIndex >= 0) {
+      setFurthestStepIndex((prev) => Math.max(prev, currentIndex));
+    }
+  }, [activeStep]);
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }, [activeStep]);
 
   useEffect(() => {
@@ -408,15 +434,15 @@ export default function TraineeCaseViewPage({ params }) {
         if (retakeResettingRef.current) {
           const percentComplete = Number(entry?.percentComplete || 0);
           const state = typeof entry?.state === 'string' ? entry.state.toLowerCase() : '';
-          const step = STEP_SEQUENCE.includes(entry.step) ? entry.step : FLOW_STEPS.SELECTION;
+          const step = STEP_SEQUENCE.includes(entry.step) ? entry.step : FLOW_STEPS.INSTRUCTION;
           const isResetSnapshot =
-            percentComplete === 0 && (state === 'not_started' || step === FLOW_STEPS.SELECTION);
+            percentComplete === 0 && (state === 'not_started' || step === FLOW_STEPS.INSTRUCTION);
 
           if (!isResetSnapshot) return;
           retakeResettingRef.current = false;
         }
 
-        const nextStep = STEP_SEQUENCE.includes(entry.step) ? entry.step : FLOW_STEPS.SELECTION;
+        const nextStep = STEP_SEQUENCE.includes(entry.step) ? entry.step : FLOW_STEPS.INSTRUCTION;
         if ((!recentlyChanged || nextStep === FLOW_STEPS.RESULTS) && activeStepRef.current !== nextStep) {
           setActiveStep(nextStep);
         }
@@ -603,6 +629,39 @@ export default function TraineeCaseViewPage({ params }) {
     return allEvidenceItems.filter((item) => selectedIds.includes(item.paymentId));
   }, [allEvidenceItems, selectedIds]);
 
+  const isSurlCase = useMemo(() => {
+    const identifier = `${caseData?.moduleCode || ''} ${caseData?.title || ''} ${caseData?.caseName || ''}`.toLowerCase();
+    return identifier.includes('surl') || identifier.includes('unrecorded');
+  }, [caseData?.moduleCode, caseData?.title, caseData?.caseName]);
+
+  const apAgingReferenceIds = useMemo(() => {
+    return referenceDocuments
+      .map((doc) => {
+        const label = `${doc?.fileName || ''} ${doc?.title || ''}`.toLowerCase();
+        if (!label.includes('ap aging')) return null;
+        return doc?.id || doc?.storagePath || doc?.downloadURL || doc?.fileName || null;
+      })
+      .filter(Boolean);
+  }, [referenceDocuments]);
+
+  const apAgingOpened = useMemo(() => {
+    return apAgingReferenceIds.some((id) => openedReferenceDocs.has(id));
+  }, [apAgingReferenceIds, openedReferenceDocs]);
+
+  const mustOpenReference = isSurlCase && apAgingReferenceIds.length > 0;
+
+  const handleSelectPayment = useCallback(
+    (paymentId) => {
+      if (!paymentId) return;
+      setActivePaymentId(paymentId);
+      const match = selectedEvidenceItems.find((item) => item.paymentId === paymentId);
+      if (match) {
+        setActiveEvidenceId(match.evidenceId);
+      }
+    },
+    [selectedEvidenceItems]
+  );
+
   const viewerEnabled = activeStep === FLOW_STEPS.TESTING;
   const evidenceSource = useMemo(
     () => (viewerEnabled ? selectedEvidenceItems : []),
@@ -612,6 +671,7 @@ export default function TraineeCaseViewPage({ params }) {
   useEffect(() => {
     if (!viewerEnabled) {
       setActiveEvidenceId(null);
+      setActivePaymentId(null);
       setActiveEvidenceUrl(null);
       setActiveEvidenceError('');
       setActiveEvidenceLoading(false);
@@ -621,6 +681,7 @@ export default function TraineeCaseViewPage({ params }) {
 
     if (evidenceSource.length === 0) {
       setActiveEvidenceId(null);
+      setActivePaymentId(null);
       setActiveEvidenceUrl(null);
       setActiveEvidenceError('');
       setActiveEvidenceLoading(false);
@@ -630,8 +691,17 @@ export default function TraineeCaseViewPage({ params }) {
 
     if (!activeEvidenceId || !evidenceSource.some((item) => item.evidenceId === activeEvidenceId)) {
       setActiveEvidenceId(evidenceSource[0].evidenceId);
+      setActivePaymentId(evidenceSource[0].paymentId || null);
     }
   }, [viewerEnabled, evidenceSource, activeEvidenceId]);
+
+  useEffect(() => {
+    if (!activeEvidenceId || evidenceSource.length === 0) return;
+    const matched = evidenceSource.find((item) => item.evidenceId === activeEvidenceId);
+    if (matched?.paymentId && matched.paymentId !== activePaymentId) {
+      setActivePaymentId(matched.paymentId);
+    }
+  }, [activeEvidenceId, activePaymentId, evidenceSource]);
 
   useEffect(() => {
     if (!viewerEnabled || evidenceSource.length === 0 || !activeEvidenceId) {
@@ -786,10 +856,27 @@ export default function TraineeCaseViewPage({ params }) {
     };
   }, [viewerEnabled, evidenceSource, activeEvidenceId]);
 
+  useEffect(() => {
+    if (!decisionBlockedHint) return;
+    if (decisionHintTimeoutRef.current) {
+      clearTimeout(decisionHintTimeoutRef.current);
+    }
+    decisionHintTimeoutRef.current = setTimeout(() => {
+      setDecisionBlockedHint(false);
+    }, 3000);
+    return () => {
+      if (decisionHintTimeoutRef.current) {
+        clearTimeout(decisionHintTimeoutRef.current);
+        decisionHintTimeoutRef.current = null;
+      }
+    };
+  }, [decisionBlockedHint]);
+
   const enqueueProgressSave = useCallback(
     (stepOverride) => {
       if (!userId || !caseId) return;
       const intendedStep = stepOverride || activeStepRef.current;
+      setSaveStatus('saving');
 
       if (progressSaveTimeoutRef.current) {
         clearTimeout(progressSaveTimeoutRef.current);
@@ -817,10 +904,13 @@ export default function TraineeCaseViewPage({ params }) {
           },
         };
 
-        saveProgress({ appId, uid: userId, caseId, patch }).catch((err) => {
-          console.error('Failed to save progress:', err);
-        });
-      }, 300);
+        saveProgress({ appId, uid: userId, caseId, patch })
+          .then(() => setSaveStatus('saved'))
+          .catch((err) => {
+            console.error('Failed to save progress:', err);
+            setSaveStatus('error');
+          });
+      }, 1000);
     },
     [userId, caseId]
   );
@@ -846,6 +936,25 @@ export default function TraineeCaseViewPage({ params }) {
     lastLocalChangeRef.current = Date.now();
     const currentlySelected = !!selectionRef.current?.[paymentId];
 
+    if (currentlySelected) {
+      const currentWork = classificationRef.current?.[paymentId];
+      const hasWork = Boolean(
+        currentWork &&
+          (currentWork.singleClassification ||
+            currentWork.isException === true ||
+            currentWork.isException === false ||
+            (typeof currentWork.workpaperNote === 'string' && currentWork.workpaperNote.trim().length > 0) ||
+            (typeof currentWork.notes === 'string' && currentWork.notes.trim().length > 0))
+      );
+
+      if (hasWork) {
+        const confirmDelete = window.confirm(
+          "Warning: Deselecting this item will permanently delete the work you've done for it in the Classification step.\n\nAre you sure?"
+        );
+        if (!confirmDelete) return;
+      }
+    }
+
     setSelectedDisbursements((prev) => {
       const next = { ...prev };
       if (currentlySelected) {
@@ -868,6 +977,8 @@ export default function TraineeCaseViewPage({ params }) {
         return { ...prev, [paymentId]: createEmptyAllocation() };
       });
     }
+
+    enqueueProgressSave();
   };
 
   const handleAllocationChange = (paymentId, fieldKey, value) => {
@@ -892,6 +1003,8 @@ export default function TraineeCaseViewPage({ params }) {
       next[normalizedId] = allocation;
       return next;
     });
+
+    enqueueProgressSave();
   };
 
   const handleRationaleChange = (paymentId, fieldKey, value) => {
@@ -906,6 +1019,8 @@ export default function TraineeCaseViewPage({ params }) {
       next[normalizedId] = allocation;
       return next;
     });
+
+    enqueueProgressSave();
   };
 
   const goToTestingStep = () => {
@@ -968,12 +1083,15 @@ export default function TraineeCaseViewPage({ params }) {
     });
 
     if (invalidAllocations.length > 0) {
-      showModal(
-        `Please ensure the allocations for the following disbursements are numeric, non-negative, and total the disbursement amount: ${invalidAllocations.join(
-          ', '
-        )}.`, 
-        'Incomplete Classification'
-      );
+      const firstInvalidId = invalidAllocations[0];
+      const element = typeof document !== 'undefined' ? document.getElementById(firstInvalidId) : null;
+
+      if (element && typeof element.scrollIntoView === 'function') {
+        element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        showModal(`Please complete the workpaper for ${firstInvalidId} before submitting.`, 'Action Required');
+      } else {
+        showModal(`Please check the following items: ${invalidAllocations.join(', ')}`, 'Incomplete');
+      }
       return;
     }
 
@@ -1073,7 +1191,44 @@ export default function TraineeCaseViewPage({ params }) {
     }
   };
 
+  const triggerFileDownload = async (url, filename) => {
+    const safeName = filename || 'reference-document';
+    const hasFetch = typeof fetch === 'function';
+    const canStream = typeof window !== 'undefined' && window.URL && typeof window.URL.createObjectURL === 'function';
+
+    if (!hasFetch || !canStream) {
+      window.open(url, '_blank', 'noopener');
+      return;
+    }
+
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error('Unable to retrieve file contents.');
+    }
+    const blob = await response.blob();
+    const blobUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = blobUrl;
+    link.download = safeName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => window.URL.revokeObjectURL(blobUrl), 2000);
+  };
+
   const caseTitle = caseData?.title || caseData?.caseName || 'Audit Case';
+  const caseSubtitle = '';
+
+  useEffect(() => {
+    sessionStorage.setItem('auditsim:moduleTitle', caseTitle);
+    sessionStorage.setItem('auditsim:moduleSubtitle', caseSubtitle);
+    window.dispatchEvent(new Event('auditsim:moduleHeader'));
+    return () => {
+      sessionStorage.removeItem('auditsim:moduleTitle');
+      sessionStorage.removeItem('auditsim:moduleSubtitle');
+      window.dispatchEvent(new Event('auditsim:moduleHeader'));
+    };
+  }, [caseSubtitle, caseTitle]);
 
   if (loading) return <div className="p-4 text-center">Loading case details...</div>;
   if (!caseData) return <div className="p-4 text-center">Case not found or you may not have access. Redirecting...</div>;
@@ -1095,73 +1250,47 @@ export default function TraineeCaseViewPage({ params }) {
   const stepIndex = STEP_SEQUENCE.indexOf(activeStep);
 
   const renderStepper = () => (
-    <ol className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between bg-white rounded-lg shadow px-4 py-4">
+    <ol className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between rounded-xl border border-slate-200 bg-gradient-to-r from-slate-50 via-white to-slate-50 px-4 py-4 shadow-sm">
       {STEP_SEQUENCE.map((stepKey, idx) => {
-        const isCompleted = stepIndex > idx;
+        const isCompleted = furthestStepIndex > idx;
         const isActive = stepIndex === idx;
+        const canNavigate = idx <= furthestStepIndex;
         return (
           <li key={stepKey} className="flex items-center space-x-3">
-            <span
-              className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold ${isActive ? 'bg-blue-600 text-white' : isCompleted ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-600'}`}
+            <button
+              type="button"
+              onClick={() => {
+                if (!canNavigate) return;
+                if (activeStep === stepKey) return;
+                setActiveStep(stepKey);
+              }}
+              className={`flex items-center space-x-3 text-left ${
+                canNavigate ? 'cursor-pointer' : 'cursor-not-allowed'
+              }`}
+              disabled={!canNavigate}
             >
-              {isCompleted ? '✓' : idx + 1}
-            </span>
-            <div>
-              <p className={`text-sm font-semibold ${isActive ? 'text-blue-700' : 'text-gray-800'}`}>{STEP_LABELS[stepKey]}</p>
-              <p className="text-xs text-gray-500 hidden sm:block">{STEP_DESCRIPTIONS[stepKey]}</p>
-            </div>
+              <span
+                className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold ${
+                  isActive
+                    ? 'bg-blue-600 text-white'
+                    : isCompleted
+                    ? 'bg-emerald-600 text-white'
+                    : 'bg-slate-100 text-slate-600'
+                }`}
+              >
+                {isCompleted ? '✓' : idx + 1}
+              </span>
+              <div>
+                <p className={`text-sm font-semibold ${isActive ? 'text-blue-700' : 'text-slate-800'}`}>
+                  {STEP_LABELS[stepKey]}
+                </p>
+                <p className="text-xs text-slate-500 hidden sm:block">{STEP_DESCRIPTIONS[stepKey]}</p>
+              </div>
+            </button>
           </li>
         );
       })}
     </ol>
-  );
-
-  const renderEvidenceList = (items) => (
-    <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
-      <div className="border-b border-gray-200 px-4 py-3">
-        <h2 className="text-lg font-semibold text-gray-800">Supporting Documents</h2>
-        <p className="text-xs text-gray-500">Select a disbursement to preview its support.</p>
-      </div>
-      <div className="max-h-[460px] overflow-y-auto divide-y divide-gray-100">
-        {items.length === 0 ? (
-          <p className="px-4 py-6 text-sm text-gray-500">No supporting documents selected yet.</p>
-        ) : (
-          items.map((item, index) => {
-            const isActive = item.evidenceId === activeEvidenceId;
-            const invoiceLabel =
-              item.evidenceFileName ||
-              item.fileName ||
-              (item.paymentId ? `Invoice for ${item.paymentId}` : `Invoice ${index + 1}`);
-            const payeeLabel = item.payee || 'Unknown payee';
-            const documentLabel = `${invoiceLabel} — ${payeeLabel}`;
-            return (
-              <button
-                key={item.evidenceId}
-                type="button"
-                onClick={() => setActiveEvidenceId(item.evidenceId)}
-                aria-label={`Evidence for ${documentLabel}`}
-                className={`w-full text-left px-4 py-3 focus:outline-none transition-colors ${isActive ? 'bg-blue-50 border-l-4 border-blue-500' : 'hover:bg-gray-50'}`}
-              >
-                <div className="flex items-center justify-between">
-                  <span className={`text-sm font-semibold ${isActive ? 'text-blue-700' : 'text-gray-800'}`}>
-                    Invoice: {invoiceLabel}
-                  </span>
-                  {!item.hasLinkedDocument && (
-                    <span className="ml-3 inline-flex items-center text-[10px] font-semibold uppercase tracking-wider text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
-                      Document not linked
-                    </span>
-                  )}
-                </div>
-                <div className="mt-1 text-xs text-gray-500">
-                  Payee:{' '}
-                  <strong className="text-gray-700 font-medium">{payeeLabel}</strong>
-                </div>
-              </button>
-            );
-          })
-        )}
-      </div>
-    </div>
   );
 
   const renderEvidenceViewer = (items) => {
@@ -1172,11 +1301,11 @@ export default function TraineeCaseViewPage({ params }) {
       activeEvidence?.evidenceFileName || activeEvidence?.paymentId || 'Supporting document';
 
     return (
-      <div className="bg-white border border-gray-200 rounded-lg shadow-sm flex flex-col min-h-[480px]">
-        <div className="border-b border-gray-200 px-4 py-3 flex items-center justify-between">
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col min-h-[560px]">
+        <div className="border-b border-slate-200 px-4 py-3 flex items-center justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-gray-800">Document Viewer</h2>
-            <p className="text-xs text-gray-500">
+            <h2 className="text-lg font-semibold text-slate-900">Document Viewer</h2>
+            <p className="text-xs text-slate-500">
               {items.length === 0
                 ? 'Choose a disbursement to see its supporting document.'
                 : activeEvidenceId
@@ -1205,9 +1334,9 @@ export default function TraineeCaseViewPage({ params }) {
             })()
           ) : null}
         </div>
-        <div className="flex-1 bg-gray-100 rounded-b-lg flex items-center justify-center">
+        <div className="flex-1 bg-slate-50 rounded-b-xl flex items-center justify-center min-h-[520px] md:min-h-[600px] h-[60vh] md:h-[65vh] lg:h-[70vh]">
           {activeEvidenceLoading ? (
-            <div className="flex flex-col items-center text-gray-500">
+            <div className="flex flex-col items-center text-slate-500">
               <Loader2 size={32} className="animate-spin mb-2" />
               <p className="text-sm">Loading document…</p>
             </div>
@@ -1219,11 +1348,11 @@ export default function TraineeCaseViewPage({ params }) {
             <iframe
               title="Evidence document"
               src={activeEvidenceUrl}
-              className="w-full h-full rounded-b-lg"
-              style={{ minHeight: '480px' }}
+              className="w-full h-full rounded-b-xl"
+              style={{ minHeight: '520px' }}
             />
           ) : (
-            <p className="text-sm text-gray-500 px-6 text-center">
+            <p className="text-sm text-slate-500 px-6 text-center">
               Select a disbursement with a linked document to preview it here.
             </p>
           )}
@@ -1232,34 +1361,10 @@ export default function TraineeCaseViewPage({ params }) {
     );
   };
 
-  const triggerFileDownload = async (url, filename) => {
-    const safeName = filename || 'reference-document';
-    const hasFetch = typeof fetch === 'function';
-    const canStream = typeof window !== 'undefined' && window.URL && typeof window.URL.createObjectURL === 'function';
-
-    if (!hasFetch || !canStream) {
-      window.open(url, '_blank', 'noopener');
-      return;
-    }
-
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error('Unable to retrieve file contents.');
-    }
-    const blob = await response.blob();
-    const blobUrl = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = blobUrl;
-    link.download = safeName;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    setTimeout(() => window.URL.revokeObjectURL(blobUrl), 2000);
-  };
-
   const handleDownloadReferenceDoc = async (doc) => {
     if (!doc) return;
     const displayName = (doc.fileName || 'reference-document').trim() || 'reference-document';
+    const referenceKey = doc.id || doc.storagePath || doc.downloadURL || doc.fileName;
     try {
       setDownloadingReferenceId(doc.id);
       let url = (doc.downloadURL || '').trim();
@@ -1269,7 +1374,19 @@ export default function TraineeCaseViewPage({ params }) {
         }
         url = await getDownloadURL(storageRef(storage, doc.storagePath));
       }
-      await triggerFileDownload(url, displayName);
+      const isPdf = isInlinePreviewable(doc.contentType, doc.fileName || url);
+      if (isPdf) {
+        window.open(url, '_blank', 'noopener');
+      } else {
+        await triggerFileDownload(url, displayName);
+      }
+      if (referenceKey) {
+        setOpenedReferenceDocs((prev) => {
+          const next = new Set(prev);
+          next.add(referenceKey);
+          return next;
+        });
+      }
     } catch (error) {
       console.error('Error downloading reference document:', error);
       const message = error?.message || 'Unable to download reference document at this time.';
@@ -1282,53 +1399,116 @@ export default function TraineeCaseViewPage({ params }) {
   const renderReferenceDownloadsBanner = () => {
     if (referenceDocuments.length === 0) {
       return (
-        <div className="bg-gray-50 border border-gray-200 text-gray-700 rounded-lg px-4 py-3">
+        <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
           Reference materials will appear here when provided by your instructor.
         </div>
       );
     }
 
+    const bannerClasses = mustOpenReference
+      ? apAgingOpened
+        ? 'border-emerald-200 bg-emerald-50'
+        : 'border-rose-200 bg-rose-50'
+      : 'border-blue-200 bg-blue-50';
+
+    const titleClasses = mustOpenReference
+      ? apAgingOpened
+        ? 'text-emerald-700'
+        : 'text-rose-700'
+      : 'text-blue-700';
+
+    const bodyClasses = mustOpenReference
+      ? apAgingOpened
+        ? 'text-emerald-900'
+        : 'text-rose-900'
+      : 'text-blue-900';
+
+    const bannerMessage = mustOpenReference
+      ? apAgingOpened
+        ? 'Reference material opened. You can now complete classifications.'
+        : 'Required before classifying: open the AP Aging reference.'
+      : 'Use these documents to complete the audit procedures. Download and keep them open while you classify.';
+
     return (
-      <div className="bg-indigo-50 border border-indigo-200 text-indigo-900 rounded-lg px-4 py-3 space-y-3">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-semibold uppercase tracking-wide">Reference Materials</h3>
-            <p className="text-xs sm:text-sm text-indigo-800">
-              Download the necessary reference documents before you begin classifying results.
-            </p>
+      <div className={`rounded-xl border px-4 py-3 shadow-sm ${bannerClasses}`}>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <p className={`text-xs font-semibold uppercase tracking-wide ${titleClasses}`}>Reference Materials</p>
+            <p className={`text-sm ${bodyClasses}`}>{bannerMessage}</p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {referenceDocuments.map((doc) => (
-              <Button
-                key={doc.id}
-                variant="secondary"
-                className="text-xs px-3 py-1 bg-white text-indigo-700 border border-indigo-200 hover:bg-indigo-100"
-                onClick={() => handleDownloadReferenceDoc(doc)}
-                isLoading={downloadingReferenceId === doc.id}
-                disabled={downloadingReferenceId && downloadingReferenceId !== doc.id}
-                title={doc.fileName}
-              >
-                <Download size={14} className="inline mr-1" />
-                <span className="max-w-[160px] truncate inline-block align-middle">{doc.fileName || 'Reference'}</span>
-              </Button>
-            ))}
+          <div className="flex w-full flex-wrap gap-3 sm:w-auto">
+            {referenceDocuments.map((doc) => {
+              const referenceKey = doc.id || doc.storagePath || doc.downloadURL || doc.fileName;
+              const isOpened = referenceKey ? openedReferenceDocs.has(referenceKey) : false;
+              return (
+                <Button
+                  key={doc.id}
+                  variant="secondary"
+                  className={`text-xs px-4 py-2 border ${
+                    isOpened ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-rose-200 bg-rose-50 text-rose-700'
+                  } hover:bg-white w-[260px]`}
+                  onClick={() => handleDownloadReferenceDoc(doc)}
+                  isLoading={downloadingReferenceId === doc.id}
+                  disabled={downloadingReferenceId && downloadingReferenceId !== doc.id}
+                  title={doc.fileName}
+                >
+                  <Download size={14} className="inline mr-2" />
+                  <span className="truncate inline-block align-middle">{doc.fileName || 'Reference'}</span>
+                </Button>
+              );
+            })}
           </div>
         </div>
       </div>
     );
   };
 
+  const renderInstructionStep = () => {
+    if (!caseData?.instruction) {
+      return (
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
+          <h2 className="text-2xl font-semibold text-slate-900">Step 1 — Instruction</h2>
+          <p className="text-sm text-slate-600 mt-2">
+            Instructional material is missing for this case. Ask your instructor to add a briefing and gate
+            check before continuing.
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-4">
+        <div>
+          <h2 className="text-2xl font-semibold text-slate-900">Step 1 — Instruction</h2>
+          <p className="text-sm text-slate-600">
+            Review the briefing and pass the gate check to unlock the simulation.
+          </p>
+        </div>
+        <InstructionView
+          instructionData={caseData.instruction}
+          ctaLabel="Enter the Simulation"
+          className="w-full max-w-[1400px]"
+          onStartSimulation={() => {
+            if (isLocked) return;
+            enqueueProgressSave(FLOW_STEPS.SELECTION);
+            setActiveStep(FLOW_STEPS.SELECTION);
+          }}
+        />
+      </div>
+    );
+  };
+
   const renderSelectionStep = () => (
-    <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-4">
+    <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6 space-y-4">
       <div>
-        <h2 className="text-2xl font-semibold text-gray-800">Step 1 — Select Disbursements</h2>
-        <p className="text-sm text-gray-500">
+        <h2 className="text-2xl font-semibold text-slate-900">Step 2 — Select Disbursements</h2>
+        <p className="text-sm text-slate-500">
           Choose which disbursements you want to test. You will review supporting documents on the next step.
         </p>
       </div>
 
       {disbursementList.length === 0 ? (
-        <p className="text-gray-500">No disbursements are available for this case.</p>
+        <p className="text-slate-500">No disbursements are available for this case.</p>
       ) : (
         <div className="space-y-3">
           {disbursementList.map((d, index) => {
@@ -1338,7 +1518,7 @@ export default function TraineeCaseViewPage({ params }) {
             return (
               <div
                 key={d.__rowKey}
-                className="flex items-center p-4 border border-gray-200 rounded-md hover:bg-gray-50 transition-colors"
+                className="flex items-center p-4 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors"
               >
                 <input
                   type="checkbox"
@@ -1346,29 +1526,24 @@ export default function TraineeCaseViewPage({ params }) {
                   checked={paymentId ? !!selectedDisbursements[paymentId] : false}
                   onChange={() => handleSelectionChange(paymentId)}
                   disabled={disabled}
-                  className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500 mr-4 cursor-pointer disabled:cursor-not-allowed"
+                  className="h-5 w-5 text-blue-600 border-slate-300 rounded focus:ring-blue-500 mr-4 cursor-pointer disabled:cursor-not-allowed"
                 />
                 <label
                   htmlFor={checkboxId}
                   className={`flex-grow grid grid-cols-1 md:grid-cols-3 gap-x-4 gap-y-1 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
                 >
-                  <span className="text-sm text-gray-700">
+                  <span className="text-sm text-slate-700">
                     <strong className="font-medium">ID:</strong> {paymentId || 'Missing payment ID'}
                   </span>
-                <span className="text-sm text-gray-700">
+                <span className="text-sm text-slate-700">
                   <strong className="font-medium">Payee:</strong> {d.payee}
                 </span>
-                <span className="text-sm text-gray-700">
+                <span className="text-sm text-slate-700">
                   <strong className="font-medium">Amount:</strong> {currencyFormatter.format(Number(d.amount) || 0)}
                 </span>
-                <span className="text-sm text-gray-700">
+                <span className="text-sm text-slate-700">
                   <strong className="font-medium">Date:</strong> {d.paymentDate}
                 </span>
-                {d.expectedClassification ? (
-                  <span className="text-xs text-gray-500">
-                    Expected classification: {d.expectedClassification}
-                  </span>
-                ) : null}
                   {!paymentId ? (
                     <span className="text-xs text-amber-700">
                       This disbursement is missing a payment ID and cannot be selected.
@@ -1395,15 +1570,45 @@ export default function TraineeCaseViewPage({ params }) {
   const renderTestingStep = () => {
     const missingDocuments = selectedEvidenceItems.filter((item) => !item?.hasLinkedDocument);
     const missingPaymentIds = Array.from(new Set(missingDocuments.map((item) => item?.paymentId || 'Unknown ID'))); 
+    const canMakeDecision = !mustOpenReference || apAgingOpened;
 
     return (
-      <div className="space-y-6">
-        <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-3">
-          <div>
-            <h2 className="text-2xl font-semibold text-gray-800">Step 2 — Classify Results</h2>
-            <p className="text-sm text-gray-500">
-              Review the supporting documents and allocate the disbursement amount across each classification category.
-            </p>
+      <div className="space-y-4">
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 space-y-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h2 className="text-2xl font-semibold text-slate-900">Step 3 — Classify Results</h2>
+              <p className="text-sm text-slate-600">
+                Review the supporting documents and allocate the disbursement amount across each classification category.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-3 sm:pt-1">
+              <Button
+                variant="ghost"
+                className="text-sm text-blue-700 hover:bg-blue-50"
+                onClick={() =>
+                  showModal(
+                    <div className="whitespace-pre-wrap text-sm text-slate-700">
+                      {caseData?.instructions || caseData?.description || 'No specific instructions provided.'}
+                    </div>,
+                    'Case Instructions'
+                  )
+                }
+              >
+                <BookOpen size={16} className="mr-2 inline" /> View Scenario
+              </Button>
+
+              <div className="text-xs font-medium uppercase tracking-wide text-slate-400">
+                {saveStatus === 'saving' ? (
+                  <span className="text-blue-600 animate-pulse">Saving...</span>
+                ) : saveStatus === 'saved' ? (
+                  <span className="text-emerald-600">All changes saved</span>
+                ) : (
+                  <span className="text-amber-600">Unsaved changes</span>
+                )}
+              </div>
+            </div>
           </div>
           {missingPaymentIds.length > 0 ? (
             <div className="border border-amber-300 bg-amber-50 text-amber-800 text-sm rounded-md px-4 py-3">
@@ -1415,9 +1620,10 @@ export default function TraineeCaseViewPage({ params }) {
             </div>
           ) : null}
         </div>
+        {renderReferenceDownloadsBanner()}
 
         {selectedIds.length === 0 ? (
-          <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 text-sm text-gray-600">
+          <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6 text-sm text-slate-600">
             You do not have any disbursements selected. Return to the selection step to add them before testing.
             <div className="mt-4">
               <Button variant="secondary" onClick={() => setActiveStep(FLOW_STEPS.SELECTION)}>
@@ -1427,57 +1633,132 @@ export default function TraineeCaseViewPage({ params }) {
           </div>
         ) : (
           <>
-            {renderReferenceDownloadsBanner()}
-            <div className="grid gap-6 md:grid-cols-2">
-              {renderEvidenceList(selectedEvidenceItems)}
-              {renderEvidenceViewer(selectedEvidenceItems)}
-            </div>
-
-            <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
-              <h3 className="text-xl font-semibold text-gray-800 mb-4">Audit Procedures</h3>
-              <div className="space-y-6">
-                {selectedDisbursementDetails.map((d) => {
-                  const allocation = classificationAmounts[d.paymentId] || createEmptyAllocation();
-                  const totalEntered = CLASSIFICATION_FIELDS.reduce((sum, { key }) => {
-                    const value = parseAmount(allocation[key]);
-                    return sum + (Number.isFinite(value) ? value : 0);
-                  }, 0);
-                  const amountNumber = Number(d.amount) || 0;
-                  const totalsMatch = Math.abs(totalEntered - amountNumber) <= 0.01;
-
-                  // 3. The Swap: Use Factory instead of manual divs
-                  return (
-                    <AuditItemCardFactory
-                      key={d.paymentId}
-                      item={d}
-                      allocation={allocation}
-                      classificationFields={CLASSIFICATION_FIELDS}
-                      splitAllocationHint="Enter amounts for each category."
-                      singleAllocationHint="Select a classification."
-                      onSplitToggle={(id, checked) => {
-                         // Simple local toggle logic or update allocation mode
-                         handleAllocationChange(id, 'mode', checked ? 'split' : 'single');
-                      }}
-                      onClassificationChange={(id, val) => handleAllocationChange(id, 'singleClassification', val)}
-                      onSplitAmountChange={(id, key, val) => handleAllocationChange(id, key, val)}
-                      onNoteChange={(id, val) => handleAllocationChange(id, 'workpaperNote', val)}
-                      onRationaleChange={handleRationaleChange} // <--- Pass the new handler
-                      isLocked={isLocked}
-                      totalsMatch={totalsMatch}
-                      totalEntered={totalEntered}
-                    />
-                  );
-                })}
+            <div className="lg:grid lg:grid-cols-12 lg:gap-6 lg:items-start">
+              <div className="lg:col-span-7 lg:sticky lg:top-20">
+                {renderEvidenceViewer(selectedEvidenceItems)}
               </div>
-            </div>
 
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-2">
-              <Button variant="secondary" onClick={() => setActiveStep(FLOW_STEPS.SELECTION)} disabled={isLocked}>
-                Back to Selection
-              </Button>
-              <Button onClick={handleSubmitTesting} disabled={!allClassified || isLocked}>
-                <Send size={18} className="inline mr-2" /> Submit Responses
-              </Button>
+              <div className="space-y-4 lg:col-span-5 mt-6 lg:mt-0">
+                <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
+                  <h3 className="text-lg font-semibold text-slate-900 mb-1">Audit Procedures</h3>
+                  <p className="text-xs text-slate-500 mb-1">
+                    Click a row to load its document on the left, then complete the workpaper to get the “green board” effect.
+                  </p>
+                  {!canMakeDecision ? (
+                    <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2">
+                      <p className={`text-xs font-medium ${decisionBlockedHint ? 'text-rose-700' : 'text-rose-600'}`}>
+                        Open the AP Aging reference to unlock classifications.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="mb-4" />
+                  )}
+                  <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+                    <div className="divide-y divide-slate-200 bg-white">
+                      {selectedDisbursementDetails.map((d) => {
+                        const allocation = classificationAmounts[d.paymentId] || createEmptyAllocation();
+                        const totalEntered = CLASSIFICATION_FIELDS.reduce((sum, { key }) => {
+                          const value = parseAmount(allocation[key]);
+                          return sum + (Number.isFinite(value) ? value : 0);
+                        }, 0);
+                        const amountNumber = Number(d.amount) || 0;
+                        const totalsMatch = Math.abs(totalEntered - amountNumber) <= 0.01;
+                        const isComplete = isAllocationComplete(d, allocation);
+                        const hasDecision = hasExplicitDecision(allocation);
+                        const isActive = activePaymentId === d.paymentId;
+
+                        return (
+                          <div
+                            id={d.paymentId}
+                            key={d.paymentId}
+                            className={`scroll-mt-28 border-l-4 ${
+                              isComplete ? 'border-emerald-500' : 'border-transparent'
+                            } ${isActive ? 'bg-blue-50/40' : 'bg-white'}`}
+                          >
+                            {!isActive ? (
+                              <button
+                                type="button"
+                                onClick={() => handleSelectPayment(d.paymentId)}
+                                className="grid w-full grid-cols-[24px_minmax(0,1fr)_120px_120px] items-center gap-3 px-3 py-2 text-left hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                                aria-expanded={false}
+                              >
+                                <div className="flex items-center justify-center">
+                                  <span
+                                    className={`h-2.5 w-2.5 rounded-full ${isComplete ? 'bg-emerald-500' : 'bg-slate-300'}`}
+                                    aria-label={isComplete ? 'Complete' : 'Incomplete'}
+                                  />
+                                </div>
+
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-semibold text-slate-900">{d.paymentId}</div>
+                                  <div className="truncate text-xs text-slate-500">{d.payee || 'Unknown payee'}</div>
+                                </div>
+
+                                <div className="min-w-0 text-right">
+                                  <div className="whitespace-nowrap text-sm font-semibold text-slate-900 tabular-nums">
+                                    {currencyFormatter.format(amountNumber)}
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center justify-end">
+                                  <span className="w-[96px] text-center shrink-0">
+                                    {hasDecision ? (
+                                      <span
+                                        className={`inline-flex w-full items-center justify-center rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide ${
+                                          allocation.isException ? 'bg-rose-50 text-rose-700' : 'bg-emerald-50 text-emerald-700'
+                                        }`}
+                                      >
+                                        {allocation.isException ? 'Exception' : 'Pass'}
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex w-full items-center justify-center rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+                                        Pending
+                                      </span>
+                                    )}
+                                  </span>
+                                </div>
+                              </button>
+                            ) : null}
+                            {isActive ? (
+                              <div className="bg-white px-3 py-4">
+                                <AuditItemCardFactory
+                                  item={d}
+                                  allocation={allocation}
+                                  classificationFields={CLASSIFICATION_FIELDS}
+                                  splitAllocationHint="Enter amounts for each category."
+                                  singleAllocationHint="Select a classification."
+                                  onSplitToggle={(id, checked) => {
+                                    handleAllocationChange(id, 'mode', checked ? 'split' : 'single');
+                                  }}
+                                  onClassificationChange={(id, val) => handleAllocationChange(id, 'singleClassification', val)}
+                                  onSplitAmountChange={(id, key, val) => handleAllocationChange(id, key, val)}
+                                  onNoteChange={(id, val) => handleAllocationChange(id, 'workpaperNote', val)}
+                                  onRationaleChange={handleRationaleChange}
+                                  canMakeDecision={canMakeDecision}
+                                  onDecisionBlocked={() => setDecisionBlockedHint(true)}
+                                  isLocked={isLocked}
+                                  totalsMatch={totalsMatch}
+                                  totalEntered={totalEntered}
+                                  isComplete={isComplete}
+                                />
+                              </div>
+                            ) : null}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-2 pb-10">
+                  <Button variant="secondary" onClick={() => setActiveStep(FLOW_STEPS.SELECTION)} disabled={isLocked}>
+                    Back to Selection
+                  </Button>
+                  <Button onClick={handleSubmitTesting} disabled={!allClassified || isLocked}>
+                    <Send size={18} className="inline mr-2" /> Submit Responses
+                  </Button>
+                </div>
+              </div>
             </div>
           </>
         )}
@@ -1488,10 +1769,10 @@ export default function TraineeCaseViewPage({ params }) {
   const renderResultsStep = () => {
     return (
       <div className="space-y-6">
-        <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
           <div className="mb-6">
-            <h1 className="text-2xl font-bold text-gray-900">Audit Completion Report</h1>
-            <p className="text-gray-600">Review your performance against the Virtual Senior&apos;s expectations.</p>
+            <h1 className="text-2xl font-bold text-slate-900">Audit Completion Report</h1>
+            <p className="text-slate-600">Review your performance against the Virtual Senior&apos;s expectations.</p>
           </div>
           
           <ResultsAnalysis 
@@ -1512,7 +1793,9 @@ export default function TraineeCaseViewPage({ params }) {
   };
 
   let stepContent = null;
-  if (activeStep === FLOW_STEPS.SELECTION) {
+  if (activeStep === FLOW_STEPS.INSTRUCTION) {
+    stepContent = renderInstructionStep();
+  } else if (activeStep === FLOW_STEPS.SELECTION) {
     stepContent = renderSelectionStep();
   } else if (activeStep === FLOW_STEPS.TESTING) {
     stepContent = renderTestingStep();
@@ -1522,13 +1805,7 @@ export default function TraineeCaseViewPage({ params }) {
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
-      <div className="max-w-5xl mx-auto space-y-6">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold text-gray-800">{caseTitle}</h1>
-            <p className="text-sm text-gray-500">Follow the steps to complete your testing workflow.</p>
-          </div>
-        </div>
+      <div className="w-full max-w-[1400px] mx-auto space-y-6">
         {renderStepper()}
         {stepContent}
       </div>

@@ -4,22 +4,31 @@ import { Button, appId } from '../../AppCore';
 import { saveSubmission } from '../../services/submissionService';
 import { saveProgress, subscribeProgressForCases } from '../../services/progressService';
 import { currencyFormatter } from '../../utils/formatters';
+import InstructionView from '../InstructionView';
 
 const FLOW_STEPS = Object.freeze({
+  INSTRUCTION: 'instruction',
   SELECTION: 'selection',
   TESTING: 'testing',
   RESULTS: 'results',
 });
 
-const STEP_SEQUENCE = [FLOW_STEPS.SELECTION, FLOW_STEPS.TESTING, FLOW_STEPS.RESULTS];
+const STEP_SEQUENCE = [
+  FLOW_STEPS.INSTRUCTION,
+  FLOW_STEPS.SELECTION,
+  FLOW_STEPS.TESTING,
+  FLOW_STEPS.RESULTS,
+];
 
 const STEP_LABELS = {
+  [FLOW_STEPS.INSTRUCTION]: 'Instruction',
   [FLOW_STEPS.SELECTION]: 'Select Sample',
   [FLOW_STEPS.TESTING]: 'Trace & Conclude',
   [FLOW_STEPS.RESULTS]: 'Review Outcome',
 };
 
 const STEP_DESCRIPTIONS = {
+  [FLOW_STEPS.INSTRUCTION]: 'Review the briefing and pass the gate check.',
   [FLOW_STEPS.SELECTION]: 'Pick the checks you will test from January clearings.',
   [FLOW_STEPS.TESTING]: 'Trace each selection to the register and the 12/31 outstanding list.',
   [FLOW_STEPS.RESULTS]: 'See your recap and any exceptions.',
@@ -47,6 +56,7 @@ const compareDatesYMD = (a, b) => {
 };
 
 const computePercentComplete = (step, selectedCount, completedCount) => {
+  if (step === FLOW_STEPS.INSTRUCTION) return 0;
   if (step === FLOW_STEPS.RESULTS) return 100;
   if (selectedCount <= 0) return 0;
   if (step === FLOW_STEPS.SELECTION) return 25;
@@ -182,13 +192,14 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
     return map;
   }, [caseData]);
 
-  const [activeStep, setActiveStep] = useState(FLOW_STEPS.SELECTION);
+  const [activeStep, setActiveStep] = useState(FLOW_STEPS.INSTRUCTION);
   const [selectedChecks, setSelectedChecks] = useState({});
   const [registerConfirmed, setRegisterConfirmed] = useState({});
   const [decisions, setDecisions] = useState({});
   const [exceptionNotes, setExceptionNotes] = useState({});
   const [isLocked, setIsLocked] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [furthestStepIndex, setFurthestStepIndex] = useState(0);
 
   const progressSaveTimeoutRef = useRef(null);
   const lastLocalChangeRef = useRef(0);
@@ -310,6 +321,10 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
 
   useEffect(() => {
     activeStepRef.current = activeStep;
+    const currentIndex = STEP_SEQUENCE.indexOf(activeStep);
+    if (currentIndex >= 0) {
+      setFurthestStepIndex((prev) => Math.max(prev, currentIndex));
+    }
   }, [activeStep]);
 
   useEffect(() => {
@@ -348,7 +363,7 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
         const entry = progressMap.get(caseId);
         if (!entry) return;
 
-        const nextStep = STEP_SEQUENCE.includes(entry.step) ? entry.step : FLOW_STEPS.SELECTION;
+        const nextStep = STEP_SEQUENCE.includes(entry.step) ? entry.step : FLOW_STEPS.INSTRUCTION;
         const recentlyChanged = Date.now() - lastLocalChangeRef.current < 900;
         if (!recentlyChanged && activeStepRef.current !== nextStep) {
           setActiveStep(nextStep);
@@ -521,7 +536,7 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
         patch: {
           percentComplete: 0,
           state: 'not_started',
-          step: FLOW_STEPS.SELECTION,
+          step: FLOW_STEPS.INSTRUCTION,
           draft: {
             selectedPaymentIds: [],
             outstandingCheckTesting: {
@@ -534,7 +549,8 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
         forceOverwrite: true,
       });
       setIsLocked(false);
-      setActiveStep(FLOW_STEPS.SELECTION);
+      setActiveStep(FLOW_STEPS.INSTRUCTION);
+      setFurthestStepIndex(0);
       setSelectedChecks({});
       setRegisterConfirmed({});
       setDecisions({});
@@ -645,31 +661,84 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
   const renderStepper = () => (
     <ol className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between bg-white rounded-lg shadow px-4 py-4">
       {STEP_SEQUENCE.map((stepKey, idx) => {
-        const isCompleted = stepIndex > idx;
+        const isCompleted = furthestStepIndex > idx;
         const isActive = stepIndex === idx;
+        const canNavigate = idx <= furthestStepIndex;
         return (
           <li key={stepKey} className="flex items-center space-x-3">
-            <span
-              className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold ${
-                isActive ? 'bg-blue-600 text-white' : isCompleted ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-600'
+            <button
+              type="button"
+              onClick={() => {
+                if (!canNavigate) return;
+                if (activeStep === stepKey) return;
+                setActiveStep(stepKey);
+              }}
+              className={`flex items-center space-x-3 text-left ${
+                canNavigate ? 'cursor-pointer' : 'cursor-not-allowed'
               }`}
+              disabled={!canNavigate}
             >
-              {isCompleted ? '✓' : idx + 1}
-            </span>
-            <div>
-              <p className={`text-sm font-semibold ${isActive ? 'text-blue-700' : 'text-gray-800'}`}>{STEP_LABELS[stepKey]}</p>
-              <p className="text-xs text-gray-500 hidden sm:block">{STEP_DESCRIPTIONS[stepKey]}</p>
-            </div>
+              <span
+                className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold ${
+                  isActive
+                    ? 'bg-blue-600 text-white'
+                    : isCompleted
+                    ? 'bg-green-500 text-white'
+                    : 'bg-gray-200 text-gray-600'
+                }`}
+              >
+                {isCompleted ? '✓' : idx + 1}
+              </span>
+              <div>
+                <p className={`text-sm font-semibold ${isActive ? 'text-blue-700' : 'text-gray-800'}`}>
+                  {STEP_LABELS[stepKey]}
+                </p>
+                <p className="text-xs text-gray-500 hidden sm:block">{STEP_DESCRIPTIONS[stepKey]}</p>
+              </div>
+            </button>
           </li>
         );
       })}
     </ol>
   );
 
+  const renderInstructionStep = () => {
+    if (!caseData?.instruction) {
+      return (
+        <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-2">
+          <h2 className="text-2xl font-semibold text-gray-800">Step 1 — Instruction</h2>
+          <p className="text-sm text-gray-500">
+            Instructional material is missing for this case. Ask your instructor to add a briefing and gate check before continuing.
+          </p>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-4">
+        <div>
+          <h2 className="text-2xl font-semibold text-gray-800">Step 1 — Instruction</h2>
+          <p className="text-sm text-gray-500">
+            Review the briefing and pass the gate check to unlock the simulation.
+          </p>
+        </div>
+        <InstructionView
+          instructionData={caseData.instruction}
+          ctaLabel="Enter the Simulation"
+          onStartSimulation={() => {
+            if (isLocked) return;
+            enqueueProgressSave(FLOW_STEPS.SELECTION);
+            setActiveStep(FLOW_STEPS.SELECTION);
+          }}
+        />
+      </div>
+    );
+  };
+
   const renderSelectionStep = () => (
     <div className="space-y-6">
       <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-2">
-        <h2 className="text-2xl font-semibold text-gray-800">Step 1 — Select Sample</h2>
+        <h2 className="text-2xl font-semibold text-gray-800">Step 2 — Select Sample</h2>
         <p className="text-sm text-gray-500">
           Select the January-clearing checks you will test (sampling is trainee-driven in this module).
         </p>
@@ -865,7 +934,7 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
   const renderTestingStep = () => (
     <div className="space-y-6">
       <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-2">
-        <h2 className="text-2xl font-semibold text-gray-800">Step 2 — Trace & Conclude</h2>
+        <h2 className="text-2xl font-semibold text-gray-800">Step 3 — Trace & Conclude</h2>
         <p className="text-sm text-gray-500">
           For each selection, confirm the written date from the check register. Only checks written on or before year-end are eligible to be on the 12/31 outstanding list.
         </p>
@@ -946,7 +1015,8 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
   );
 
   let stepContent = null;
-  if (activeStep === FLOW_STEPS.SELECTION) stepContent = renderSelectionStep();
+  if (activeStep === FLOW_STEPS.INSTRUCTION) stepContent = renderInstructionStep();
+  else if (activeStep === FLOW_STEPS.SELECTION) stepContent = renderSelectionStep();
   else if (activeStep === FLOW_STEPS.TESTING) stepContent = renderTestingStep();
   else stepContent = renderResultsStep();
 
