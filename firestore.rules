@@ -31,6 +31,10 @@ service cloud.firestore {
       return hasRole('trainee');
     }
 
+    function isInstructor() {
+      return hasRole('instructor');
+    }
+
     // Checks if the trainee can view the case currently being read
     function traineeCaseAccessible() {
       return (
@@ -38,6 +42,15 @@ service cloud.firestore {
         resource.data.visibleToUserIds.size() == 0 ||
         request.auth.uid in resource.data.visibleToUserIds
       );
+    }
+
+    function belongsToOrg(resourceData) {
+      return isAdmin() ||
+        resourceData.publicVisible == true ||
+        (
+          request.auth.token.orgId != null &&
+          resourceData.orgId == request.auth.token.orgId
+        );
     }
 
     function isValidSupportingDocument(doc) {
@@ -48,28 +61,52 @@ service cloud.firestore {
              (!('contentType' in doc) || doc.contentType == null || doc.contentType is string);
     }
 
-    function isValidDisbursementRecord(d) {
-      return d is map &&
-             d.keys().hasAll(['paymentId', 'payee', 'amount', 'paymentDate']) &&
-             d.paymentId is string &&
-             d.payee is string &&
-             (d.amount is string || d.amount is number) &&
-             d.paymentDate is string &&
-             (!('expectedClassification' in d) || d.expectedClassification == null || d.expectedClassification is string) &&
-             (!('storagePath' in d) || d.storagePath == null || d.storagePath is string) &&
-             (!('downloadURL' in d) || d.downloadURL == null || d.downloadURL is string) &&
-             (!('fileName' in d) || d.fileName == null || d.fileName is string) &&
-             (!('contentType' in d) || d.contentType == null || d.contentType is string) &&
-             (!('supportingDocuments' in d) || (
-               d.supportingDocuments is list &&
+    function isValidAnswerKey(ak) {
+      return ak is map &&
+             (!('properlyIncluded' in ak) || ak.properlyIncluded == null || ak.properlyIncluded is number) &&
+             (!('properlyExcluded' in ak) || ak.properlyExcluded == null || ak.properlyExcluded is number) &&
+             (!('improperlyIncluded' in ak) || ak.improperlyIncluded == null || ak.improperlyIncluded is number) &&
+             (!('improperlyExcluded' in ak) || ak.improperlyExcluded == null || ak.improperlyExcluded is number) &&
+             (!('explanation' in ak) || ak.explanation == null || ak.explanation is string);
+    }
+
+    function isValidAuditItem(item) {
+      return item is map &&
+             item.keys().hasAll(['id', 'type']) &&
+             item.id is string &&
+             item.type in ['transaction', 'inventory_count', 'payroll_record'] &&
+             (
+               (item.type == 'transaction' && item.keys().hasAll(['payee', 'amount', 'paymentDate'])) ||
+               (item.type == 'inventory_count' && item.keys().hasAll(['location', 'count', 'unitCost'])) ||
+               true
+             ) &&
+             (!('payee' in item) || item.payee == null || item.payee is string) &&
+             (!('amount' in item) || item.amount == null || (item.amount is string || item.amount is number)) &&
+             (!('paymentDate' in item) || item.paymentDate == null || item.paymentDate is string) &&
+             (!('expectedClassification' in item) || item.expectedClassification == null || item.expectedClassification is string) &&
+             (!('answerKey' in item) || item.answerKey == null) &&
+             (!('hasAnswerKey' in item) || item.hasAnswerKey == null || item.hasAnswerKey is bool) &&
+             (!('trapType' in item) || item.trapType == null || item.trapType is list || item.trapType is string) &&
+             (!('shouldFlag' in item) || item.shouldFlag == null || item.shouldFlag is bool) &&
+             (!('requiredAssertions' in item) || item.requiredAssertions == null || item.requiredAssertions is list) &&
+             (!('correctAssertions' in item) || item.correctAssertions == null || item.correctAssertions is list) &&
+             (!('errorReasons' in item) || item.errorReasons == null || item.errorReasons is list) &&
+             (!('validator' in item) || item.validator == null || item.validator is map) &&
+             (!('groundTruths' in item) || item.groundTruths == null) &&
+             (!('storagePath' in item) || item.storagePath == null || item.storagePath is string) &&
+             (!('downloadURL' in item) || item.downloadURL == null || item.downloadURL is string) &&
+             (!('fileName' in item) || item.fileName == null || item.fileName is string) &&
+             (!('contentType' in item) || item.contentType == null || item.contentType is string) &&
+             (!('supportingDocuments' in item) || (
+               item.supportingDocuments is list &&
                (
-                 d.supportingDocuments.size() == 0 ||
-                 isValidSupportingDocument(d.supportingDocuments[0])
+                 item.supportingDocuments.size() == 0 ||
+                 isValidSupportingDocument(item.supportingDocuments[0])
                )
              )) &&
-             (!('description' in d) || d.description == null || d.description is string) &&
-             (!('notes' in d) || d.notes == null || d.notes is string) &&
-             (!('meta' in d) || d.meta == null || d.meta is map);
+             (!('description' in item) || item.description == null || item.description is string) &&
+             (!('notes' in item) || item.notes == null || item.notes is string) &&
+             (!('meta' in item) || item.meta == null || item.meta is map);
     }
 
     function isValidInvoiceMapping(m) {
@@ -119,20 +156,69 @@ service cloud.firestore {
              (!('createdBy' in request.resource.data) || request.resource.data.createdBy == null || request.resource.data.createdBy is string) &&
              (!('dueAt' in request.resource.data) || request.resource.data.dueAt == null || request.resource.data.dueAt is timestamp) &&
              (!('opensAt' in request.resource.data) || request.resource.data.opensAt == null || request.resource.data.opensAt is timestamp) &&
+             (!('auditItems' in request.resource.data) || (
+               request.resource.data.auditItems is list &&
+               (
+                 request.resource.data.auditItems.size() == 0 ||
+                 isValidAuditItem(request.resource.data.auditItems[0])
+               )
+             )) &&
              (!('disbursements' in request.resource.data) || (
                request.resource.data.disbursements is list &&
                (
                  request.resource.data.disbursements.size() == 0 ||
-                 isValidDisbursementRecord(request.resource.data.disbursements[0])
+                 isValidAuditItem(request.resource.data.disbursements[0])
                )
              )) &&
              (!('invoiceMappings' in request.resource.data) || (
                request.resource.data.invoiceMappings is list &&
+             (
+               request.resource.data.invoiceMappings.size() == 0 ||
+               isValidInvoiceMapping(request.resource.data.invoiceMappings[0])
+             )
+           ));
+    }
+
+    function isValidCaseKeyEntry(entry) {
+      return entry is map &&
+             (!('answerKey' in entry) || entry.answerKey == null || isValidAnswerKey(entry.answerKey)) &&
+             (!('answerKeyMode' in entry) || entry.answerKeyMode == null || entry.answerKeyMode is string) &&
+             (!('answerKeySingleClassification' in entry) || entry.answerKeySingleClassification == null || entry.answerKeySingleClassification is string) &&
+             (!('groundTruths' in entry) || entry.groundTruths == null || entry.groundTruths is map) &&
+             (!('correctClassification' in entry) || entry.correctClassification == null || entry.correctClassification is string) &&
+             (!('primaryAssertion' in entry) || entry.primaryAssertion == null || entry.primaryAssertion is string);
+    }
+
+    function isValidCaseKeyDocument(data) {
+      return data is map &&
+             (!('items' in data) || (
+               data.items is map &&
                (
-                 request.resource.data.invoiceMappings.size() == 0 ||
-                 isValidInvoiceMapping(request.resource.data.invoiceMappings[0])
+                 data.items.size() == 0 ||
+                 isValidCaseKeyEntry(data.items[data.items.keys()[0]])
                )
-             ));
+             )) &&
+             (!('updatedAt' in data) || data.updatedAt == request.time);
+    }
+
+    function canAccessCaseKeys(appId, caseId) {
+      return isAdmin() ||
+        (
+          isInstructor() &&
+          request.auth.token.orgId != null &&
+          exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)) &&
+          get(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.orgId ==
+            request.auth.token.orgId
+        );
+    }
+
+    function gradeFieldUnchanged(field) {
+      return !(field in request.resource.data) ||
+             (
+               resource.data != null &&
+               (field in resource.data) &&
+               request.resource.data[field] == resource.data[field]
+             );
     }
 
     // Role documents store whether a user is an admin or trainee
@@ -150,24 +236,84 @@ service cloud.firestore {
       // For single document reads, the function is secure.
       allow get: if request.auth != null && (
         isAdmin() ||
-        (isTrainee() && traineeCaseAccessible())
+        resource.data.publicVisible == true ||
+        (
+          belongsToOrg(resource.data) &&
+          (
+            isInstructor() ||
+            (isTrainee() && traineeCaseAccessible())
+          )
+        )
       );
-      // For queries, client must filter by visibleToUserIds to get results.
-      allow list: if request.auth != null && (isAdmin() || isTrainee());
-      allow create, update: if request.auth != null && isAdmin() && isValidCaseDocument();
+      // For queries, allow any signed-in user; visibility is enforced by query filters (publicVisible/visibleToUserIds)
+      // and downstream UI guards.
+      allow list: if request.auth != null;
+      allow create: if request.auth != null &&
+        (
+          isAdmin() ||
+          (
+            isInstructor() &&
+            request.resource.data.orgId == request.auth.token.orgId &&
+            isValidCaseDocument()
+          )
+        );
+      allow update: if request.auth != null &&
+        (
+          isAdmin() ||
+          (
+            isInstructor() &&
+            resource.data.orgId == request.auth.token.orgId &&
+            isValidCaseDocument()
+          )
+        );
+      allow delete: if request.auth != null && isAdmin();
+    }
+
+    // Private answer keys stored under artifacts/{appId}/private/data/case_keys/{caseId}
+    match /artifacts/{appId}/private/data/case_keys/{caseId} {
+      allow read: if request.auth != null && canAccessCaseKeys(appId, caseId);
+      allow create, update: if request.auth != null &&
+                               canAccessCaseKeys(appId, caseId) &&
+                               isValidCaseKeyDocument(request.resource.data);
       allow delete: if request.auth != null && isAdmin();
     }
 
     // Profile information is private to each user
+    match /artifacts/{appId}/users/{userId} {
+      allow read: if request.auth != null && isAdmin();
+      allow write: if false;
+    }
+
     match /artifacts/{appId}/users/{userId}/userProfileData/profile {
       allow read: if request.auth != null && (request.auth.uid == userId || isAdmin());
       allow write: if request.auth != null && request.auth.uid == userId;
     }
 
+    function isSubmissionOwner(path) {
+      return request.auth != null &&
+             request.auth.uid is string &&
+             path.matches('^artifacts/[^/]+/users/' + request.auth.uid + '$');
+    }
+
     // Trainees submit their work under this path
     match /artifacts/{appId}/users/{userId}/caseSubmissions/{caseId} {
       allow read: if request.auth != null && (isAdmin() || request.auth.uid == userId);
-      allow write: if request.auth != null && request.auth.uid == userId && isTrainee();
+      allow create, update: if request.auth != null &&
+                               request.auth.uid == userId &&
+                               isTrainee() &&
+                               gradeFieldUnchanged('grade') &&
+                               gradeFieldUnchanged('gradedAt');
+      allow delete: if false;
+    }
+
+    match /{path=**}/caseSubmissions/{caseId} {
+      allow read: if request.auth != null && isAdmin();
+      allow create, update: if request.auth != null &&
+                               isSubmissionOwner(path) &&
+                               isTrainee() &&
+                               gradeFieldUnchanged('grade') &&
+                               gradeFieldUnchanged('gradedAt');
+      allow delete: if false;
     }
 
 

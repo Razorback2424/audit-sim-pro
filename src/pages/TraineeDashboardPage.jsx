@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, ListChecks, BookOpen } from 'lucide-react';
 import { Button, useRoute, useModal, useAuth, appId } from '../AppCore';
 import { listStudentCases } from '../services/caseService';
@@ -51,6 +51,11 @@ export default function TraineeDashboardPage() {
   const { navigate } = useRoute();
   const { userId } = useAuth();
   const { showModal } = useModal();
+  const showModalRef = useRef(showModal);
+
+  useEffect(() => {
+    showModalRef.current = showModal;
+  }, [showModal]);
 
   /** @type {[CaseModel[], React.Dispatch<React.SetStateAction<CaseModel[]>>]} */
   const [cases, setCases] = useState([]);
@@ -95,28 +100,39 @@ export default function TraineeDashboardPage() {
           includeOpensAtGate: false,
         });
 
-        if (process.env.NODE_ENV !== 'production') {
-          console.info('[dashboard] fetch success', { count: result.items.length });
+        if (!result || !Array.isArray(result.items)) {
+          if (process.env.NODE_ENV !== 'production' && process.env.NODE_ENV !== 'test') {
+            console.warn('[dashboard] unexpected listStudentCases payload', result);
+          }
         }
 
-        setCases((prev) => (append ? [...prev, ...result.items] : result.items));
-        setNextCursor(result.nextCursor || null);
+        const items = Array.isArray(result?.items) ? result.items : [];
+
+        if (process.env.NODE_ENV !== 'production') {
+          console.info('[dashboard] fetch success', { count: items.length });
+        }
+
+        setCases((prev) => (append ? [...prev, ...items] : items));
+        setNextCursor(result?.nextCursor || null);
         setError('');
       } catch (err) {
-        console.error('Error fetching cases for trainee:', err);
+        if (process.env.NODE_ENV !== 'test') {
+          console.error('Error fetching cases for trainee:', err);
+        }
         const message = err?.message || 'Unable to load cases.';
         setError(message);
         if (!append) {
           setCases([]);
           setNextCursor(null);
         }
-        showModal(message, 'Error');
+        const modal = showModalRef.current;
+        if (modal) modal(message, 'Error');
       } finally {
         setLoading(false);
         setInitialLoad(false);
       }
     },
-    [userId, sortBy, showModal]
+    [userId, sortBy]
   );
 
   useEffect(() => {
@@ -154,6 +170,17 @@ export default function TraineeDashboardPage() {
       progress: progress.get(caseData.id) || toProgressModel(null, caseData.id),
     }));
   }, [cases, progress]);
+
+  const isCaseCompleted = useCallback((caseData) => {
+    const state = (caseData?.progress?.state || '').toUpperCase();
+    const pct = Number(caseData?.progress?.percentComplete || 0);
+    // Treat SUBMITTED/COMPLETED as done; also hide anything that is 100% complete.
+    return state === 'SUBMITTED' || state === 'COMPLETED' || pct >= 100;
+  }, []);
+
+  const visibleCases = useMemo(() => {
+    return casesWithProgress.filter((c) => !isCaseCompleted(c));
+  }, [casesWithProgress, isCaseCompleted]);
 
   const now = useMemo(() => getNow().date, []);
   if (!userId && initialLoad) {
@@ -200,6 +227,13 @@ export default function TraineeDashboardPage() {
               <option value="due">Soonest due</option>
               <option value="title">Title A–Z</option>
             </select>
+            <Button
+              variant="secondary"
+              onClick={() => navigate('/trainee/submission-history')}
+              className="text-sm"
+            >
+              View Submission History
+            </Button>
           </div>
         </div>
 
@@ -214,7 +248,7 @@ export default function TraineeDashboardPage() {
             <Loader2 size={32} className="animate-spin text-gray-500 mx-auto mb-3" />
             <p className="text-gray-600">Loading available cases…</p>
           </div>
-        ) : cases.length === 0 ? (
+        ) : visibleCases.length === 0 ? (
           <div className="text-center py-10 bg-white rounded-lg shadow">
             <ListChecks size={48} className="mx-auto text-gray-400 mb-4" />
             <p className="text-gray-600 text-xl">No cases currently assigned or available to you.</p>
@@ -222,7 +256,7 @@ export default function TraineeDashboardPage() {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {casesWithProgress.map((caseData) => {
+            {visibleCases.map((caseData) => {
               const { isOpen, message } = getOpenState(caseData);
               return (
                 <div key={caseData.id} className="bg-white p-6 rounded-lg shadow-md hover:shadow-lg transition-shadow flex flex-col justify-between">

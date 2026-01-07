@@ -2,22 +2,19 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Button, useRoute, useModal } from '../AppCore';
 import { fetchCase } from '../services/caseService';
 import { fetchSubmission } from '../services/submissionService';
-
-const CLASSIFICATION_FIELDS = [
-  { key: 'properlyIncluded', label: 'Properly Included' },
-  { key: 'properlyExcluded', label: 'Properly Excluded' },
-  { key: 'improperlyIncluded', label: 'Improperly Included' },
-  { key: 'improperlyExcluded', label: 'Improperly Excluded' },
-];
+import { getClassificationFields } from '../constants/classificationFields';
+import { DEFAULT_AUDIT_AREA } from '../models/caseConstants';
 
 export default function AdminSubmissionDetailPage({ params }) {
   const { caseId, userId } = params;
   const { navigate } = useRoute();
   const { showModal } = useModal();
   const [caseName, setCaseName] = useState('');
+  const [auditArea, setAuditArea] = useState(DEFAULT_AUDIT_AREA);
   const [submission, setSubmission] = useState(null);
   const [loading, setLoading] = useState(true);
   const currency = useMemo(() => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }), []);
+  const classificationFields = useMemo(() => getClassificationFields(auditArea), [auditArea]);
 
   useEffect(() => {
     if (!caseId || !userId) {
@@ -26,7 +23,14 @@ export default function AdminSubmissionDetailPage({ params }) {
     }
     setLoading(true);
     fetchCase(caseId).then((c) => {
-      if (c) setCaseName(c.caseName);
+      if (c) {
+        setCaseName(c.caseName);
+        if (typeof c.auditArea === 'string' && c.auditArea.trim()) {
+          setAuditArea(c.auditArea.trim());
+        } else {
+          setAuditArea(DEFAULT_AUDIT_AREA);
+        }
+      }
     });
     fetchSubmission(userId, caseId)
       .then((doc) => {
@@ -92,10 +96,26 @@ export default function AdminSubmissionDetailPage({ params }) {
                       attempt.disbursementClassifications && attempt.disbursementClassifications[pid]
                         ? attempt.disbursementClassifications[pid]
                         : null;
+                    const traineeMeta = traineeAnswer && typeof traineeAnswer === 'object' ? traineeAnswer : {};
                     const expectedAnswer =
                       attempt.expectedClassifications && attempt.expectedClassifications[pid]
                         ? attempt.expectedClassifications[pid]
                         : null;
+                    const workspaceNote =
+                      attempt.workspaceNotes && attempt.workspaceNotes[pid] && typeof attempt.workspaceNotes[pid] === 'object'
+                        ? attempt.workspaceNotes[pid]
+                        : null;
+                    const workpaperNoteText = String(
+                      workspaceNote?.workpaperNote ||
+                        workspaceNote?.note ||
+                        workspaceNote?.notes ||
+                        traineeMeta.workpaperNote ||
+                        traineeMeta.notes ||
+                        traineeMeta.note ||
+                        ''
+                    ).trim();
+                    const assertionText = String(traineeMeta.assertion || workspaceNote?.assertionSelection || '').trim();
+                    const reasonText = String(traineeMeta.reason || workspaceNote?.reasonSelection || '').trim();
                     return (
                       <li key={pid} className="break-all">
                         {pid}
@@ -105,7 +125,7 @@ export default function AdminSubmissionDetailPage({ params }) {
                             <table className="min-w-[280px] text-xs text-left text-gray-700">
                               <thead className="bg-gray-100">
                                 <tr>
-                                  {CLASSIFICATION_FIELDS.map(({ label }) => (
+                                  {classificationFields.map(({ label }) => (
                                     <th key={label} className="px-2 py-1 font-semibold text-gray-600">
                                       {label}
                                     </th>
@@ -114,7 +134,7 @@ export default function AdminSubmissionDetailPage({ params }) {
                               </thead>
                               <tbody>
                                 <tr>
-                                  {CLASSIFICATION_FIELDS.map(({ key, label }) => (
+                                  {classificationFields.map(({ key, label }) => (
                                     <td key={label} className="px-2 py-1">
                                       {currency.format(Number(traineeAnswer[key] || 0))}
                                     </td>
@@ -122,6 +142,21 @@ export default function AdminSubmissionDetailPage({ params }) {
                                 </tr>
                               </tbody>
                             </table>
+                          </div>
+                        ) : null}
+                        {workpaperNoteText ? (
+                          <div className="mt-2 ml-4 rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+                            <div className="text-[11px] font-semibold uppercase tracking-wide text-gray-600">
+                              Workpaper note
+                            </div>
+                            {(assertionText || reasonText) && (
+                              <div className="mt-1 text-xs text-gray-600">
+                                {assertionText ? <span>Assertion: {assertionText}</span> : null}
+                                {assertionText && reasonText ? <span> · </span> : null}
+                                {reasonText ? <span>Reason: {reasonText}</span> : null}
+                              </div>
+                            )}
+                            <p className="mt-1 whitespace-pre-wrap text-sm text-gray-800">{workpaperNoteText}</p>
                           </div>
                         ) : null}
                         {traineeAnswer && typeof traineeAnswer !== 'object' ? ` — ${traineeAnswer}` : ''}

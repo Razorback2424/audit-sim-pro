@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { storage, Button, useRoute, useModal } from '../AppCore';
 import { fetchCase } from '../services/caseService';
+import { getAuditAreaLabel, getCaseGroupLabel } from '../models/caseConstants';
 
 export default function AdminCaseOverviewPage({ params }) {
   const { caseId } = params;
@@ -62,6 +63,8 @@ export default function AdminCaseOverviewPage({ params }) {
       ? caseData.publicVisible
       : !(Array.isArray(caseData.visibleToUserIds) && caseData.visibleToUserIds.length > 0);
   const caseTitle = caseData.title || caseData.caseName || 'Audit Case';
+  const auditAreaLabel = getAuditAreaLabel(caseData.auditArea);
+  const caseGroupLabel = getCaseGroupLabel(caseData.caseGroupId);
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
@@ -85,6 +88,8 @@ export default function AdminCaseOverviewPage({ params }) {
             </div>
             <div><strong>Opens At:</strong> {formatTimestamp(caseData.opensAt)}</div>
             <div><strong>Due At:</strong> {formatTimestamp(caseData.dueAt)}</div>
+            <div><strong>Audit Area:</strong> {auditAreaLabel}</div>
+            <div><strong>Case Group:</strong> {caseGroupLabel}</div>
           </div>
           <h2 className="text-xl font-semibold text-gray-700 mt-4 mb-2">Disbursements</h2>
           {caseData.disbursements && caseData.disbursements.length > 0 ? (
