@@ -6,6 +6,7 @@ import getUUID from '../utils/getUUID';
 import { mergeDisbursementDocuments } from '../utils/caseFormTransforms';
 import { AUDIT_AREAS } from '../models/caseConstants';
 import { ANSWER_KEY_FIELDS, ANSWER_KEY_TOLERANCE, ANSWER_KEY_PLACEHOLDER } from '../utils/caseFormHelpers';
+import { queueCaseGenerationJob, saveCaseGenerationPlan } from '../services/caseGenerationService';
 
 const canUseLocalStorage = () => {
   try {
@@ -68,6 +69,7 @@ export function createCaseFormSubmitHandler({
     referenceDocuments,
     cashArtifacts,
     originalCaseData,
+    generationPlan,
   },
   user: { userId, userProfile, role },
   ui: { showModal, navigate, setLoading },
@@ -493,6 +495,7 @@ export function createCaseFormSubmitHandler({
       if (doc.fileName) return true;
       if (doc.downloadURL) return true;
       if (doc.storagePath) return true;
+      if (doc.generationSpec && typeof doc.generationSpec === 'object') return true;
       return false;
     });
 
@@ -501,16 +504,38 @@ export function createCaseFormSubmitHandler({
       const hasUpload = !!doc.clientSideFile;
       const hasUrl = !!doc.downloadURL;
       const hasStoragePath = !!doc.storagePath;
+      const hasGenerationSpec = doc.generationSpec && typeof doc.generationSpec === 'object';
       if (!name) return true;
-      if (!hasUpload && !hasUrl && !hasStoragePath) return true;
+      if (!hasUpload && !hasUrl && !hasStoragePath && !hasGenerationSpec) return true;
       return false;
     });
 
     if (referenceValidationFailed) {
       logValidationFail('reference-doc-missing-data', { activeReferenceDocsCount: activeReferenceDocs.length });
       showModal(
-        'Reference documents must include a display name and either an uploaded file, download URL, or storage path.',
+        'Reference documents must include a display name and either an uploaded file, download URL, storage path, or a generation spec.',
         'Validation Error'
+      );
+      setLoading(false);
+      return;
+    }
+
+    const generationOnlyDocs = activeReferenceDocs.filter(
+      (doc) =>
+        doc &&
+        doc.generationSpec &&
+        !doc.clientSideFile &&
+        !doc.downloadURL &&
+        !doc.storagePath
+    );
+    if (generationOnlyDocs.length > 0 && status !== 'draft') {
+      logValidationFail('reference-doc-generation-pending', {
+        count: generationOnlyDocs.length,
+        status,
+      });
+      showModal(
+        'Reference documents are waiting on generation. Set status to Draft or run generation before publishing.',
+        'Generation Pending'
       );
       setLoading(false);
       return;
@@ -833,6 +858,30 @@ export function createCaseFormSubmitHandler({
       });
 
       await updateCase(currentCaseId, caseDataPayload);
+
+    if (generationPlan) {
+      try {
+        await saveCaseGenerationPlan({ caseId: currentCaseId, plan: generationPlan });
+        ulog('case-save:generation-plan:stored', { caseId: currentCaseId });
+      } catch (err) {
+        ulog('case-save:generation-plan:error', { caseId: currentCaseId, error: err?.message });
+        console.warn('[CaseForm] Failed to store generation plan', err);
+      }
+    }
+
+    if (generationPlan?.referenceDocumentSpecs?.length) {
+      try {
+        const queued = await queueCaseGenerationJob({
+          caseId: currentCaseId,
+          plan: generationPlan,
+          appId,
+        });
+        ulog('case-save:generation-job:queued', { caseId: currentCaseId, job: queued?.jobId });
+      } catch (err) {
+        ulog('case-save:generation-job:error', { caseId: currentCaseId, error: err?.message });
+        console.warn('[CaseForm] Failed to queue generation job', err);
+      }
+    }
 
       showModal(`Case ${isNewCaseCreation ? 'created' : 'updated'} successfully!`, 'Success');
       try {

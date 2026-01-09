@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useAuth, useRoute, useModal } from '../AppCore';
-import { fetchCase } from '../services/caseService';
-import { fetchUserRosterOptions } from '../services/userService';
+import { getDownloadURL, ref as storageRef } from 'firebase/storage';
+import { useAuth, useRoute, useModal, appId, storage } from '../AppCore';
+import { fetchCase, createCase } from '../services/caseService';
+import { fetchUserRosterOptions, getCurrentUserOrgId } from '../services/userService';
 import getUUID from '../utils/getUUID';
 import {
   AUDIT_AREA_VALUES,
@@ -41,6 +42,13 @@ import { useUser } from '../AppCore';
 import { createCaseFormUploadHandlers } from './useCaseFormUploads';
 import { createCaseFormCsvImportHandler } from './useCaseFormCsvImport';
 import { createCaseFormSubmitHandler } from './useCaseFormSubmit';
+import {
+  fetchCaseGenerationPlan,
+  queueCaseGenerationJob,
+  saveCaseGenerationPlan,
+} from '../services/caseGenerationService';
+import { buildCaseDraftFromRecipe } from '../generation/buildCaseDraft';
+import { listCaseRecipes } from '../generation/recipeRegistry';
 
 const DRAFT_STORAGE_KEY = 'audit_sim_case_draft_v1';
 const DEFAULT_LAYOUT_TYPE = 'two_pane';
@@ -116,6 +124,9 @@ function useCaseForm({ params }) {
   const [instruction, setInstruction] = useState(initialInstruction());
   const [isHydratedForDrafts, setIsHydratedForDrafts] = useState(false);
   const [draftCaseId, setDraftCaseId] = useState(null);
+  const [generationPlan, setGenerationPlan] = useState(null);
+  const [generationPolling, setGenerationPolling] = useState(false);
+  const [hasGeneratedDraft, setHasGeneratedDraft] = useState(false);
 
   const disbursementCsvInputRef = useRef(null);
   const draftPermissionRef = useRef(null);
@@ -124,11 +135,13 @@ function useCaseForm({ params }) {
   const highlightInflightRef = useRef({});
   const mappingInflightRef = useRef({});
   const disbursementsRef = useRef(disbursements);
+  const generationPollingRef = useRef(false);
 
   const auditAreaSelectOptions = useMemo(
     () => AUDIT_AREA_VALUES.map((value) => ({ value, label: AUDIT_AREA_LABELS[value] || value })),
     []
   );
+  const caseRecipeOptions = useMemo(() => listCaseRecipes(), []);
 
   const caseGroupSelectOptions = useMemo(() => {
     const baseOptions = CASE_GROUP_VALUES.map((value) => ({
@@ -186,11 +199,30 @@ function useCaseForm({ params }) {
         if (parsed.faAdditions) setFaAdditions(parsed.faAdditions);
         if (parsed.faDisposals) setFaDisposals(parsed.faDisposals);
         if (parsed.referenceDocuments) setReferenceDocuments(parsed.referenceDocuments);
+        if (parsed.generationPlan) setGenerationPlan(parsed.generationPlan);
       }
     } catch (err) {
       console.error('Failed to restore draft', err);
     }
   }, [draftStorageKey, isEditing]);
+
+  const normalizeReferenceDocumentsForForm = useCallback((docs) => {
+    if (!Array.isArray(docs) || docs.length === 0) {
+      return [initialReferenceDocument()];
+    }
+    return docs.map((doc) => ({
+      _tempId: doc._tempId || getUUID(),
+      fileName: doc.fileName || '',
+      storagePath: doc.storagePath || '',
+      downloadURL: doc.downloadURL || '',
+      clientSideFile: null,
+      uploadProgress: doc.storagePath ? 100 : undefined,
+      uploadError: null,
+      contentType: doc.contentType || '',
+      generationSpec: doc.generationSpec || null,
+      generationSpecId: doc.generationSpecId || null,
+    }));
+  }, []);
 
   useEffect(() => {
     disbursementsRef.current = disbursements;
@@ -243,6 +275,7 @@ function useCaseForm({ params }) {
         const { clientSideFile, ...rest } = doc;
         return rest;
       }),
+      generationPlan,
       draftCaseId,
       updatedAt: Date.now(),
     };
@@ -273,6 +306,7 @@ function useCaseForm({ params }) {
     faAdditions,
     faDisposals,
     referenceDocuments,
+    generationPlan,
     draftCaseId,
     draftStorageKey,
     isHydratedForDrafts,
@@ -331,6 +365,144 @@ function useCaseForm({ params }) {
       console.warn('[case-upload] validation-failed', { reason, ...extra });
     } catch {}
   };
+  const formatGenerationError = useCallback((error, fallback) => {
+    if (!error) return fallback || 'Unable to queue generation job.';
+    const message = typeof error.message === 'string' ? error.message.trim() : '';
+    const code = error.code ? String(error.code).trim() : '';
+    if (
+      (code === 'internal' || code === 'functions/internal') &&
+      (!message || message.toLowerCase() === 'internal')
+    ) {
+      return 'Cloud Function not reachable. Confirm Functions are deployed and region matches (default us-central1).';
+    }
+    let details = '';
+    if (error.details) {
+      if (typeof error.details === 'string') {
+        details = error.details.trim();
+      } else {
+        try {
+          details = JSON.stringify(error.details);
+        } catch {
+          details = '';
+        }
+      }
+    }
+    const parts = [];
+    if (message) parts.push(message);
+    if (code && code !== message) parts.push(`(${code})`);
+    if (details && details !== message) parts.push(details);
+    return parts.length ? parts.join(' ') : fallback || 'Unable to queue generation job.';
+  }, []);
+
+  const computeGenerationCounts = useCallback((docs) => {
+    if (!Array.isArray(docs)) {
+      return { total: 0, ready: 0, pending: 0 };
+    }
+    const generated = docs.filter(
+      (doc) => doc && doc.generationSpec && typeof doc.generationSpec === 'object'
+    );
+    const ready = generated.filter((doc) => doc.downloadURL || doc.storagePath).length;
+    return {
+      total: generated.length,
+      ready,
+      pending: Math.max(0, generated.length - ready),
+    };
+  }, []);
+
+  const resolveReferenceDownloadUrls = useCallback(async (docs) => {
+    if (!Array.isArray(docs) || docs.length === 0) return docs;
+    const resolved = await Promise.all(
+      docs.map(async (doc) => {
+        if (!doc || doc.downloadURL || !doc.storagePath) return doc;
+        try {
+          const url = await getDownloadURL(storageRef(storage, doc.storagePath));
+          return { ...doc, downloadURL: url };
+        } catch (err) {
+          console.warn('[case-form] Failed to resolve download URL', err);
+          return doc;
+        }
+      })
+    );
+    return resolved;
+  }, []);
+
+  const toSafeDate = useCallback((value) => {
+    if (!value) return null;
+    if (typeof value?.toDate === 'function') {
+      const asDate = value.toDate();
+      return Number.isNaN(asDate?.getTime()) ? null : asDate;
+    }
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }, []);
+
+  const pollGenerationUpdates = useCallback(
+    async (caseIdForJob) => {
+      if (!caseIdForJob || generationPollingRef.current) return;
+      generationPollingRef.current = true;
+      setGenerationPolling(true);
+      const maxAttempts = 180;
+      let lastJobStatus = null;
+      let lastErrorCount = 0;
+      let terminalCountdown = null;
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        // eslint-disable-next-line no-await-in-loop
+        const updated = await fetchCase(caseIdForJob).catch(() => null);
+        if (updated?.referenceDocuments) {
+          const normalized = normalizeReferenceDocumentsForForm(updated.referenceDocuments);
+          const resolved = await resolveReferenceDownloadUrls(normalized);
+          setReferenceDocuments(resolved);
+          const counts = computeGenerationCounts(updated.referenceDocuments);
+          if (counts.pending === 0) {
+            // continue to refresh job status before breaking
+          }
+        }
+        // eslint-disable-next-line no-await-in-loop
+        const refreshedPlan = await fetchCaseGenerationPlan({ caseId: caseIdForJob }).catch(() => null);
+        if (refreshedPlan) {
+          setGenerationPlan(refreshedPlan);
+          lastJobStatus = refreshedPlan?.lastJob?.status || null;
+          lastErrorCount = refreshedPlan?.lastJob?.errorCount || 0;
+        }
+        const counts =
+          updated?.referenceDocuments ? computeGenerationCounts(updated.referenceDocuments) : null;
+        const pending = counts ? counts.pending : null;
+        const terminalStatus =
+          lastJobStatus === 'completed' || lastJobStatus === 'partial' || lastJobStatus === 'error';
+        if (terminalStatus) {
+          if (pending === 0 || pending === null) {
+            break;
+          }
+          if (terminalCountdown === null) {
+            terminalCountdown = 3;
+          } else {
+            terminalCountdown -= 1;
+          }
+          if (terminalCountdown <= 0) {
+            break;
+          }
+        }
+      }
+      generationPollingRef.current = false;
+      setGenerationPolling(false);
+      if (lastJobStatus === 'error' || lastErrorCount > 0) {
+        showModal(
+          'Some documents failed to generate. Review the generation status in the Review step.',
+          'Generation Error'
+        );
+      }
+    },
+    [
+      setReferenceDocuments,
+      normalizeReferenceDocumentsForForm,
+      resolveReferenceDownloadUrls,
+      setGenerationPlan,
+      computeGenerationCounts,
+      showModal,
+    ]
+  );
 
   const {
     uploadFileAndGetMetadata,
@@ -403,6 +575,7 @@ function useCaseForm({ params }) {
       referenceDocuments,
       cashArtifacts,
       originalCaseData,
+      generationPlan,
     },
     user: { userId, userProfile, role },
     ui: { showModal, navigate, setLoading },
@@ -485,6 +658,8 @@ function useCaseForm({ params }) {
     setLayoutType(DEFAULT_LAYOUT_TYPE);
     setLayoutConfigRaw('');
     setOriginalCaseData(null);
+    setGenerationPlan(null);
+    setHasGeneratedDraft(false);
     setAuditArea(DEFAULT_AUDIT_AREA);
     setCaseGroupSelection('__none');
     setCustomCaseGroupId('');
@@ -497,6 +672,8 @@ function useCaseForm({ params }) {
         .then((data) => {
           if (data) {
             setOriginalCaseData(data);
+            setGenerationPlan(null);
+            setHasGeneratedDraft(false);
             setCaseName(data.caseName || data.title || '');
             const inferredPublic =
               typeof data.publicVisible === 'boolean'
@@ -656,18 +833,7 @@ function useCaseForm({ params }) {
 
             setDisbursements(disbursementsWithMappings);
             setReferenceDocuments(
-              data.referenceDocuments && data.referenceDocuments.length > 0
-                ? data.referenceDocuments.map((doc) => ({
-                    _tempId: doc._tempId || getUUID(),
-                    fileName: doc.fileName || '',
-                    storagePath: doc.storagePath || '',
-                    downloadURL: doc.downloadURL || '',
-                    clientSideFile: null,
-                    uploadProgress: doc.storagePath ? 100 : undefined,
-                    uploadError: null,
-                    contentType: doc.contentType || '',
-                  }))
-                : [initialReferenceDocument()]
+              normalizeReferenceDocumentsForForm(data.referenceDocuments)
             );
             setAuditArea(
               typeof data.auditArea === 'string' && data.auditArea.trim()
@@ -711,6 +877,16 @@ function useCaseForm({ params }) {
           setLoading(false);
           restoreDraftFromStorage();
           setIsHydratedForDrafts(true);
+
+          fetchCaseGenerationPlan({ caseId: editingCaseId })
+            .then((plan) => {
+              if (plan) {
+                setGenerationPlan(plan);
+              }
+            })
+            .catch((error) => {
+              console.warn('[case-form] Failed to load generation plan', error);
+            });
         })
         .catch((error) => {
           console.error('Error fetching case for editing:', error);
@@ -726,7 +902,203 @@ function useCaseForm({ params }) {
       restoreDraftFromStorage();
       setIsHydratedForDrafts(true);
     }
-  }, [isEditing, editingCaseId, navigate, showModal, resetFormForNewCase, restoreDraftFromStorage]);
+  }, [
+    isEditing,
+    editingCaseId,
+    navigate,
+    showModal,
+    resetFormForNewCase,
+    restoreDraftFromStorage,
+    normalizeReferenceDocumentsForForm,
+  ]);
+
+  const queueGenerationJob = useCallback(async () => {
+    if (!generationPlan) {
+      showModal('No generation plan found for this case.', 'Generation');
+      return;
+    }
+    if (role && role !== 'admin' && role !== 'instructor') {
+      showModal('Only admins or instructors can generate reference documents.', 'Permission Needed');
+      return;
+    }
+    if (!appId) {
+      showModal(
+        'Missing appId. Please ensure the app is initialized (window.__app_id) before generating documents.',
+        'Generation Error'
+      );
+      return;
+    }
+    let caseIdForJob = editingCaseId || draftCaseId;
+    const jobStatus = generationPlan?.lastJob?.status;
+    const lastJobId = generationPlan?.lastJob?.jobId || '';
+    const lastJobUpdatedAt = toSafeDate(generationPlan?.lastJob?.updatedAt);
+    const jobAgeMs = lastJobUpdatedAt ? Date.now() - lastJobUpdatedAt.getTime() : null;
+    const jobFresh = jobAgeMs !== null && jobAgeMs < 5 * 60 * 1000;
+    if ((jobStatus === 'queued' || jobStatus === 'processing') && lastJobId && jobFresh) {
+      pollGenerationUpdates(caseIdForJob);
+      return;
+    }
+    if (!caseIdForJob) {
+      const orgIdFromToken = await getCurrentUserOrgId().catch((e) => {
+        console.warn('[CaseForm] Failed to fetch orgId from token (generation)', e);
+        return null;
+      });
+      const resolvedOrgId = orgIdFromToken ?? userProfile?.orgId ?? null;
+      const resolvedRole = role || 'unknown';
+
+      if (resolvedRole !== 'admin' && !resolvedOrgId) {
+        showModal(
+          'Your account is missing an orgId. Please contact an admin to set your organization before generating documents.',
+          'Permission Needed'
+        );
+        return;
+      }
+
+      let parsedLayoutConfig = {};
+      if (layoutConfigRaw && layoutConfigRaw.trim()) {
+        try {
+          const parsed = JSON.parse(layoutConfigRaw);
+          if (parsed && typeof parsed === 'object') parsedLayoutConfig = parsed;
+        } catch {
+          // Keep generation resilient; layout config can be fixed before final publish.
+        }
+      }
+
+      const rosterIds = Array.isArray(selectedUserIds)
+        ? Array.from(new Set(selectedUserIds)).filter(Boolean)
+        : [];
+      const visibleToUserIds = publicVisible ? [] : rosterIds;
+      const resolvedCaseGroupId =
+        caseGroupSelection === '__custom'
+          ? (customCaseGroupId || '').trim() || null
+          : caseGroupSelection && caseGroupSelection !== '__none'
+          ? caseGroupSelection
+          : null;
+
+      const title = (caseName || '').trim() || 'Untitled draft';
+
+      const draftPayload = {
+        caseName: title,
+        title,
+        orgId: resolvedOrgId,
+        workpaper: { layoutType, layoutConfig: parsedLayoutConfig },
+        instruction,
+        disbursements,
+        invoiceMappings: [],
+        referenceDocuments,
+        visibleToUserIds,
+        publicVisible,
+        status: 'draft',
+        opensAt: null,
+        dueAt: null,
+        createdBy: userId,
+        _deleted: false,
+        auditArea,
+        caseGroupId: resolvedCaseGroupId,
+      };
+
+      try {
+        caseIdForJob = await createCase(draftPayload);
+        setDraftCaseId(caseIdForJob);
+        try {
+          await saveCaseGenerationPlan({ caseId: caseIdForJob, plan: generationPlan });
+        } catch (err) {
+          console.warn('[case-form] Failed to store generation plan for draft case', err);
+          if (err?.code === 'permission-denied') {
+            showModal(
+              'Permission denied saving generation plan. Confirm your role is admin/instructor and Firestore rules are deployed.',
+              'Generation Error'
+            );
+            return;
+          }
+        }
+      } catch (error) {
+        console.error('[case-form] Failed to create draft case for generation', error);
+        showModal(error?.message || 'Unable to create a draft case for generation.', 'Generation Error');
+        return;
+      }
+    }
+    try {
+      let planForJob = generationPlan;
+      if (
+        !planForJob ||
+        !Array.isArray(planForJob.referenceDocumentSpecs) ||
+        planForJob.referenceDocumentSpecs.length === 0
+      ) {
+        const refreshedPlan = await fetchCaseGenerationPlan({ caseId: caseIdForJob }).catch(() => null);
+        if (refreshedPlan) {
+          setGenerationPlan(refreshedPlan);
+          planForJob = refreshedPlan;
+        }
+      }
+      if (
+        !planForJob ||
+        !Array.isArray(planForJob.referenceDocumentSpecs) ||
+        planForJob.referenceDocumentSpecs.length === 0
+      ) {
+        showModal('No valid generation plan found for this case.', 'Generation Error');
+        return;
+      }
+
+      let result = await queueCaseGenerationJob({
+        caseId: caseIdForJob,
+        plan: planForJob,
+        appId,
+      });
+      if (!result?.jobId) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        result = await queueCaseGenerationJob({
+          caseId: caseIdForJob,
+          plan: planForJob,
+          appId,
+        });
+      }
+      if (!result?.jobId) {
+        showModal('Generation job did not return an id. Please retry.', 'Generation Error');
+        return;
+      }
+      setGenerationPlan((prev) =>
+        prev
+          ? {
+              ...prev,
+              lastJob: {
+                ...(prev.lastJob || {}),
+                jobId: result.jobId,
+                status: 'queued',
+                updatedAt: new Date().toISOString(),
+              },
+            }
+          : prev
+      );
+      pollGenerationUpdates(caseIdForJob);
+    } catch (error) {
+      console.error('[case-form] Failed to queue generation job', error);
+      showModal(formatGenerationError(error, 'Unable to queue generation job.'), 'Generation Error');
+    }
+  }, [
+    generationPlan,
+    editingCaseId,
+    draftCaseId,
+    showModal,
+    setGenerationPlan,
+    layoutConfigRaw,
+    selectedUserIds,
+    publicVisible,
+    caseGroupSelection,
+    customCaseGroupId,
+    caseName,
+    userProfile,
+    role,
+    userId,
+    auditArea,
+    instruction,
+    disbursements,
+    referenceDocuments,
+    layoutType,
+    formatGenerationError,
+    pollGenerationUpdates,
+    toSafeDate,
+  ]);
 
   const handleDisbursementChange = (index, updatedItem) => {
     setDisbursements((prev) =>
@@ -876,6 +1248,40 @@ function useCaseForm({ params }) {
 
   const goBack = () => navigate('/admin');
 
+  const generateCaseDraft = useCallback(
+    (recipeId, overrides = {}) => {
+      try {
+        const draft = buildCaseDraftFromRecipe({ recipeId, overrides });
+        setCaseName(draft.caseName);
+        setAuditArea(draft.auditArea);
+        setLayoutType(draft.layoutType);
+        setLayoutConfigRaw(draft.layoutConfigRaw || '');
+        setInstruction(draft.instruction);
+        setDisbursements(draft.disbursements);
+        setReferenceDocuments(draft.referenceDocuments);
+        if (draft.cashContext) setCashContext(draft.cashContext);
+        if (draft.cashOutstandingItems) setCashOutstandingItems(draft.cashOutstandingItems);
+        if (draft.cashCutoffItems) setCashCutoffItems(draft.cashCutoffItems);
+        if (draft.cashRegisterItems) setCashRegisterItems(draft.cashRegisterItems);
+        if (draft.cashReconciliationMap) setCashReconciliationMap(draft.cashReconciliationMap);
+        if (draft.faSummary) setFaSummary(draft.faSummary);
+        if (draft.faRisk) setFaRisk(draft.faRisk);
+        if (draft.faAdditions) setFaAdditions(draft.faAdditions);
+        if (draft.faDisposals) setFaDisposals(draft.faDisposals);
+        setGenerationPlan(draft.generationPlan || null);
+        setHasGeneratedDraft(true);
+      } catch (error) {
+        console.error('[case-form] Failed to generate case draft', error);
+        showModal(error.message || 'Unable to generate case draft.', 'Generation Error');
+      }
+    },
+    [showModal]
+  );
+
+  const resetGeneratedDraft = useCallback(() => {
+    resetFormForNewCase();
+  }, [resetFormForNewCase]);
+
   const basics = {
     caseName,
     setCaseName,
@@ -1000,7 +1406,15 @@ function useCaseForm({ params }) {
     answerKey,
     instructionData,
     files,
-    actions: { handleSubmit, goBack },
+    generation: {
+      recipes: caseRecipeOptions,
+      generationPlan,
+      generateCaseDraft,
+      queueGenerationJob,
+      hasGeneratedDraft,
+      generationPolling,
+    },
+    actions: { handleSubmit, goBack, resetGeneratedDraft },
   };
 }
 

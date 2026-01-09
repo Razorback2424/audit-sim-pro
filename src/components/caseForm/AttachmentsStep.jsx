@@ -5,7 +5,7 @@ import { AUDIT_AREAS } from '../../models/caseConstants';
 import StepIntro from './StepIntro';
 import { CASH_ARTIFACT_TYPES } from '../../constants/caseFormOptions';
 
-export default function AttachmentsStep({ attachments, files }) {
+export default function AttachmentsStep({ attachments, files, generation }) {
   const {
     disbursements,
     referenceDocuments,
@@ -20,6 +20,29 @@ export default function AttachmentsStep({ attachments, files }) {
   } = attachments;
   const { FILE_INPUT_ACCEPT } = files;
   const isCash = auditArea === AUDIT_AREAS.CASH;
+  const planSpecCount = Array.isArray(generation?.generationPlan?.referenceDocumentSpecs)
+    ? generation.generationPlan.referenceDocumentSpecs.length
+    : 0;
+  const hasGenerationPlan = planSpecCount > 0;
+  const generationDocs = referenceDocuments.filter(
+    (doc) => doc && doc.generationSpec && typeof doc.generationSpec === 'object'
+  );
+  const generationReady = generationDocs.filter((doc) => doc.downloadURL || doc.storagePath).length;
+  const generationTotal = Math.max(generationDocs.length, planSpecCount);
+  const generationPending = Math.max(0, generationTotal - generationReady);
+  const generationPct = generationTotal > 0 ? Math.round((generationReady / generationTotal) * 100) : 0;
+  const generationJobStatus = generation?.generationPlan?.lastJob?.status || null;
+  const generationInFlight =
+    generation?.generationPolling || generationJobStatus === 'queued' || generationJobStatus === 'processing';
+  const generationStatusLabel = generationInFlight
+    ? 'Generating PDFs'
+    : generationJobStatus === 'completed'
+    ? 'Generation complete'
+    : generationJobStatus === 'partial'
+    ? 'Generation partially complete'
+    : generationJobStatus === 'error'
+    ? 'Generation error'
+    : 'Ready to generate';
 
   return (
     <div className="space-y-6">
@@ -153,6 +176,50 @@ export default function AttachmentsStep({ attachments, files }) {
             ? 'Upload the bank statement or other global evidence trainees will reference. Mark key files so they are easy to find.'
             : 'Provide supplemental files (e.g., AP aging, accrual schedules). Expand an item to configure download URLs or storage paths.'}
         </p>
+        {hasGenerationPlan ? (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Button
+              onClick={() => generation?.queueGenerationJob?.()}
+              variant="secondary"
+              type="button"
+              disabled={generationInFlight}
+            >
+              {generationInFlight ? 'Generating PDFs…' : 'Generate Invoice PDFs'}
+            </Button>
+            <span className="text-xs text-gray-500">
+              Generates PDFs from the current recipe and links them to disbursements.
+            </span>
+          </div>
+        ) : null}
+        {hasGenerationPlan && (generationTotal > 0 || generationJobStatus) ? (
+          <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-600">
+              {generationTotal > 0 ? (
+                <span>
+                  {generationReady} of {generationTotal} PDFs generated
+                </span>
+              ) : (
+                <span>Generation status</span>
+              )}
+              <span className="font-semibold text-gray-700">{generationStatusLabel}</span>
+            </div>
+            {generationTotal > 0 ? (
+              <>
+                <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-white">
+                  <div
+                    className="h-full rounded-full bg-blue-500 transition-all"
+                    style={{ width: `${generationPct}%` }}
+                  />
+                </div>
+                {generationPending > 0 ? (
+                  <p className="mt-2 text-xs text-gray-500">
+                    {generationPending} remaining. This will refresh automatically as files finish.
+                  </p>
+                ) : null}
+              </>
+            ) : null}
+          </div>
+        ) : null}
         <div className="mt-4 space-y-4">
           {referenceDocuments.map((item, index) => (
             <ReferenceDocumentItem
@@ -257,6 +324,7 @@ const ReferenceDocumentItem = ({ item, index, onChange, onRemove, onFileSelect, 
     if (item.clientSideFile) return item.clientSideFile.name;
     if (storagePathLabel) return storagePathLabel;
     if (downloadUrlLabel) return downloadUrlLabel;
+    if (item.generationSpec) return `Generated via ${item.generationSpec.templateId || 'template'}`;
     return 'No attachment yet';
   })();
 
@@ -396,6 +464,11 @@ const ReferenceDocumentItem = ({ item, index, onChange, onRemove, onFileSelect, 
           {item.uploadError ? (
             <p className="flex items-center text-xs text-red-500">
               <AlertTriangle size={14} className="mr-1" /> {item.uploadError}
+            </p>
+          ) : null}
+          {item.generationSpec && !item.clientSideFile && !item.storagePath && !item.downloadURL ? (
+            <p className="text-xs text-amber-700">
+              This file will be generated from a template when the generation job runs.
             </p>
           ) : null}
         </div>

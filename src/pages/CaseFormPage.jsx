@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button } from '../AppCore';
+import { Button, useModal } from '../AppCore';
 import { AnswerKeyStep } from '../components/caseForm/AnswerKeyCard';
 import { CaseFormStepNav, ReviewStep } from '../components/caseForm/CaseFormNavigation';
 import CaseBasicsStep from '../components/caseForm/CaseBasicsStep';
@@ -29,12 +29,41 @@ export default function CaseFormPage({ params }) {
     attachments,
     answerKey,
     files,
-    actions: { handleSubmit, goBack },
+    generation,
+    actions: { handleSubmit, goBack, resetGeneratedDraft },
   } = useCaseForm({ params });
+  const { showModal } = useModal();
 
   const [activeStep, setActiveStep] = useState(0);
   const [availableSkillTags, setAvailableSkillTags] = useState(DEFAULT_SKILL_CATEGORIES);
   const [availableErrorReasons, setAvailableErrorReasons] = useState(DEFAULT_ERROR_REASONS);
+  const recipeOptions = useMemo(() => generation?.recipes || [], [generation?.recipes]);
+  const [selectedRecipeId, setSelectedRecipeId] = useState(recipeOptions[0]?.id || '');
+  const generationPlan = generation?.generationPlan;
+  const hasGeneratedDraft = Boolean(generation?.hasGeneratedDraft);
+  const handleQueueGenerationJob = useCallback(async () => {
+    if (!generation?.queueGenerationJob) return;
+    await generation.queueGenerationJob();
+  }, [generation]);
+
+  const handleDownloadGenerationPlan = useCallback(() => {
+    if (!generationPlan) return;
+    const blob = new Blob([JSON.stringify(generationPlan, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `case-generation-plan-${Date.now()}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }, [generationPlan]);
+
+  useEffect(() => {
+    if (!selectedRecipeId && recipeOptions.length > 0) {
+      setSelectedRecipeId(recipeOptions[0].id);
+    }
+  }, [recipeOptions, selectedRecipeId]);
 
   useEffect(() => {
     let isMounted = true;
@@ -98,8 +127,32 @@ export default function CaseFormPage({ params }) {
     );
     const attachmentCount = attachments.referenceDocuments.filter((item) => {
       if (!item) return false;
-      return Boolean(item.fileName || item.clientSideFile || item.downloadURL || item.storagePath);
+      return Boolean(
+        item.fileName ||
+          item.clientSideFile ||
+          item.downloadURL ||
+          item.storagePath ||
+          (item.generationSpec && typeof item.generationSpec === 'object')
+      );
     }).length;
+    const referenceDocs = Array.isArray(attachments.referenceDocuments)
+      ? attachments.referenceDocuments
+      : [];
+    const planSpecCount = Array.isArray(generationPlan?.referenceDocumentSpecs)
+      ? generationPlan.referenceDocumentSpecs.length
+      : 0;
+    const generatedDocCount = referenceDocs.filter(
+      (doc) => doc && doc.generationSpec && typeof doc.generationSpec === 'object'
+    ).length;
+    const generationReadyCount = referenceDocs.filter(
+      (doc) =>
+        doc &&
+        doc.generationSpec &&
+        !doc.clientSideFile &&
+        (doc.downloadURL || doc.storagePath)
+    ).length;
+    const generationTotalCount = Math.max(generatedDocCount, planSpecCount);
+    const generationPendingCount = Math.max(0, generationTotalCount - generationReadyCount);
 
     return {
       caseName: basics.caseName,
@@ -111,6 +164,8 @@ export default function CaseFormPage({ params }) {
       disbursementCount,
       mappingCount,
       attachmentCount,
+      generationTotalCount,
+      generationPendingCount,
     };
   }, [
     basics.caseName,
@@ -121,6 +176,123 @@ export default function CaseFormPage({ params }) {
     audience.dueAtStr,
     transactions.disbursements,
     attachments.referenceDocuments,
+    generationPlan,
+  ]);
+
+  const generationReview = useMemo(() => {
+    const disbursements = Array.isArray(transactions.disbursements) ? transactions.disbursements : [];
+    const referenceDocs = Array.isArray(attachments.referenceDocuments)
+      ? attachments.referenceDocuments
+      : [];
+    const yearEnd = generation?.generationPlan?.yearEnd || '20X2-12-31';
+    const parsePseudoDate = (value) => {
+      if (!value) return null;
+      const normalized = String(value).replace(/^20X/, '200');
+      const parsed = new Date(normalized);
+      if (Number.isNaN(parsed.getTime())) return null;
+      return parsed;
+    };
+    const parseHumanDate = (value) => {
+      if (!value) return null;
+      const normalized = String(value).replace(/20X(\d)/g, '200$1');
+      const parsed = new Date(normalized);
+      if (Number.isNaN(parsed.getTime())) return null;
+      return parsed;
+    };
+    const parseCutoffDate = (value) => parsePseudoDate(value) || parseHumanDate(value);
+    const yearEndDate = parseCutoffDate(yearEnd);
+    const computeInvoiceTotal = (data) => {
+      const items = Array.isArray(data?.items) ? data.items : [];
+      const subtotal = items.reduce(
+        (sum, item) => sum + Number(item.qty || 0) * Number(item.unitPrice || 0),
+        0
+      );
+      const tax = subtotal * Number(data?.taxRate || 0);
+      const shipping = Number(data?.shipping || 0);
+      return subtotal + tax + shipping;
+    };
+
+    const invoices = referenceDocs
+      .filter((doc) => doc?.generationSpec?.templateId === 'invoice.promotador.v1')
+      .map((doc) => {
+        const serviceDate = doc.generationSpec?.serviceDate || '';
+        const shippingDate = doc.generationSpec?.shippingDate || '';
+        const shouldBeInAging = (() => {
+          if (!yearEndDate) return false;
+          const parsedService = parseCutoffDate(serviceDate);
+          const parsedShipping = parseCutoffDate(shippingDate);
+          if (!parsedService && !parsedShipping) return false;
+          if (parsedService && parsedService.getTime() > yearEndDate.getTime()) return false;
+          if (parsedShipping && parsedShipping.getTime() > yearEndDate.getTime()) return false;
+          return true;
+        })();
+        return {
+          id: doc.generationSpecId || doc._tempId || doc.fileName,
+          fileName: doc.fileName,
+          paymentId: doc.generationSpec?.linkToPaymentId || '',
+          serviceDate,
+          shippingDate,
+          amount: Number(
+            doc.generationSpec?.invoiceTotal ??
+              computeInvoiceTotal(doc.generationSpec?.data) ??
+              0
+          ),
+          isRecorded: doc.generationSpec?.isRecorded !== false,
+          shouldBeInAging,
+          downloadURL: doc.downloadURL,
+          storagePath: doc.storagePath,
+        };
+      });
+
+    const apAgingDoc = referenceDocs.find(
+      (doc) => doc?.generationSpec?.templateId === 'refdoc.ap-aging.v1'
+    );
+
+    const invoicesByPayment = new Map();
+    invoices.forEach((invoice) => {
+      const list = invoicesByPayment.get(invoice.paymentId) || [];
+      list.push(invoice);
+      invoicesByPayment.set(invoice.paymentId, list);
+    });
+
+    const disbursementRows = disbursements.map((disbursement) => {
+      const linked = invoicesByPayment.get(disbursement.paymentId) || [];
+      const invoiceTotal = linked.reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
+      const hasTrap = linked.some((invoice) => invoice.shouldBeInAging && !invoice.isRecorded);
+      return {
+        paymentId: disbursement.paymentId,
+        payee: disbursement.payee,
+        paymentDate: disbursement.paymentDate,
+        amount: Number(disbursement.amount || 0),
+        classification: disbursement.answerKeySingleClassification || '',
+        explanation: disbursement.answerKey?.explanation || '',
+        invoiceCount: linked.length,
+        invoiceTotal,
+        hasTrap,
+        invoiceLinks: linked
+          .filter((invoice) => invoice.downloadURL)
+          .map((invoice) => ({ fileName: invoice.fileName, url: invoice.downloadURL })),
+      };
+    });
+
+    return {
+      disbursements: disbursementRows,
+      invoices,
+      apAgingDoc: apAgingDoc
+        ? {
+            fileName: apAgingDoc.fileName,
+            downloadURL: apAgingDoc.downloadURL,
+            storagePath: apAgingDoc.storagePath,
+          }
+        : null,
+      yearEnd,
+      jobStatus: generation?.generationPlan?.lastJob || null,
+    };
+  }, [
+    attachments.referenceDocuments,
+    generation?.generationPlan?.lastJob,
+    generation?.generationPlan?.yearEnd,
+    transactions.disbursements,
   ]);
 
   const reviewChecklist = useMemo(() => {
@@ -229,7 +401,12 @@ export default function CaseFormPage({ params }) {
       if (!hasAnyContent) return;
       const trimmedName = (doc.fileName || '').trim();
       const hasDisplayName = trimmedName.length > 0;
-      const hasSource = Boolean(doc.clientSideFile || doc.downloadURL || doc.storagePath);
+      const hasSource = Boolean(
+        doc.clientSideFile ||
+          doc.downloadURL ||
+          doc.storagePath ||
+          (doc.generationSpec && typeof doc.generationSpec === 'object')
+      );
       if (!hasDisplayName) {
         referenceIssues.push(`Reference document #${index + 1} is missing a display name.`);
       }
@@ -250,9 +427,13 @@ export default function CaseFormPage({ params }) {
           ? referenceDocs.some(
               (doc) =>
                 doc &&
-                (doc.clientSideFile || doc.fileName || doc.downloadURL || doc.storagePath)
+                (doc.clientSideFile ||
+                  doc.fileName ||
+                  doc.downloadURL ||
+                  doc.storagePath ||
+                  (doc.generationSpec && typeof doc.generationSpec === 'object'))
             )
-            ? 'All reference documents include names and accessible files or links.'
+            ? 'All reference documents include names and accessible files, links, or generation specs.'
             : 'No reference documents have been added yet.'
           : referenceIssues.join(' '),
     });
@@ -343,6 +524,109 @@ export default function CaseFormPage({ params }) {
           <p className="mt-2 text-sm text-gray-500">
             Move through each step to update the case. Your progress is saved only when you finish the final review.
           </p>
+          {!isEditing && !hasGeneratedDraft && recipeOptions.length > 0 ? (
+            <div className="mt-4 rounded-2xl border border-gray-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-gray-700">Generate a case draft</div>
+              <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end">
+                <label className="flex flex-1 flex-col text-xs font-medium text-gray-600">
+                  Recipe
+                  <select
+                    className="mt-1 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800"
+                    value={selectedRecipeId}
+                    onChange={(event) => setSelectedRecipeId(event.target.value)}
+                  >
+                    {recipeOptions.map((recipe) => (
+                      <option key={recipe.id} value={recipe.id}>
+                        {recipe.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <Button
+                  type="button"
+                  variant="primary"
+                  className="justify-center"
+                  onClick={() => {
+                    if (!selectedRecipeId) return;
+                    generation?.generateCaseDraft(selectedRecipeId);
+                    setActiveStep(0);
+                  }}
+                >
+                  Generate Draft
+                </Button>
+                {generationPlan ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="justify-center"
+                    onClick={handleDownloadGenerationPlan}
+                  >
+                    Download Plan JSON
+                  </Button>
+                ) : null}
+              </div>
+              {generation?.generationPlan?.notes ? (
+                <p className="mt-3 text-xs text-amber-700">{generation.generationPlan.notes}</p>
+              ) : null}
+            </div>
+          ) : null}
+          {!isEditing && hasGeneratedDraft ? (
+            <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-sm font-semibold text-amber-800">Draft generated</p>
+                  <p className="text-xs text-amber-700">
+                    Generate Draft is hidden to prevent overwriting. Start over to clear this case.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="justify-center"
+                  onClick={() =>
+                    showModal(
+                      'This will clear all case data and reset the draft. Continue?',
+                      'Start Over',
+                      (hideModal) => (
+                        <div className="flex items-center gap-2">
+                          <Button onClick={hideModal} variant="secondary">
+                            Cancel
+                          </Button>
+                          <Button
+                            onClick={() => {
+                              hideModal();
+                              resetGeneratedDraft();
+                            }}
+                            variant="danger"
+                          >
+                            Start Over
+                          </Button>
+                        </div>
+                      )
+                    )
+                  }
+                >
+                  Start Over
+                </Button>
+              </div>
+            </div>
+          ) : null}
+          {isEditing && generationPlan ? (
+            <div className="mt-4 rounded-2xl border border-gray-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-gray-700">Case generation plan</div>
+              <p className="mt-1 text-xs text-gray-500">
+                This case includes a stored generation plan. Queue document generation if references need to be rebuilt.
+              </p>
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                <Button type="button" variant="secondary" className="justify-center" onClick={handleDownloadGenerationPlan}>
+                  Download Plan JSON
+                </Button>
+                <Button type="button" variant="primary" className="justify-center" onClick={handleQueueGenerationJob}>
+                  Queue Doc Generation
+                </Button>
+              </div>
+            </div>
+          ) : null}
 
           <CaseFormStepNav steps={steps} activeStep={activeStep} onStepChange={setActiveStep} disabled={loading} />
 
@@ -365,8 +649,10 @@ export default function CaseFormPage({ params }) {
                 onAddGlobalTag={handleAddGlobalTag}
               />
             ) : null}
-            {activeStep === 4 ? <AttachmentsStep attachments={attachments} files={files} /> : null}
-            {activeStep === 5 ? (
+            {activeStep === 4 ? (
+              <AttachmentsStep attachments={attachments} files={files} generation={generation} />
+            ) : null}
+              {activeStep === 5 ? (
               <AnswerKeyStep
                 disbursements={answerKey.disbursements}
                 onUpdate={answerKey.updateAnswerKeyForDisbursement}
@@ -380,6 +666,7 @@ export default function CaseFormPage({ params }) {
                 summaryData={summaryData}
                 reviewChecklist={reviewChecklist}
                 allChecklistItemsReady={allChecklistItemsReady}
+                generationReview={generationReview}
               />
             ) : null}
 

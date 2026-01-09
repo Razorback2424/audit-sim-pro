@@ -46,7 +46,13 @@ export const appId = typeof __app_id !== 'undefined' ? __app_id : window.__app_i
 export const firebaseApp = initializeApp(firebaseConfig);
 export const auth = getAuth(firebaseApp);
 export const db = getFirestore(firebaseApp);
-export const functions = getFunctions(firebaseApp);
+const functionsRegion =
+  process.env.REACT_APP_FUNCTIONS_REGION ||
+  firebaseConfig.functionsRegion ||
+  process.env.REACT_APP_FIREBASE_FUNCTIONS_REGION ||
+  'us-central1';
+
+export const functions = getFunctions(firebaseApp, functionsRegion);
 
 const resolveStorageBucketUrl = (rawBucket) => {
   if (!rawBucket || typeof rawBucket !== 'string') return null;
@@ -92,6 +98,8 @@ export const FirestorePaths = {
   // Keys are stored under /private/data/case_keys (keep doc/collection parity for Firestore).
   CASE_KEYS_COLLECTION: () => `artifacts/${appId}/private/data/case_keys`,
   CASE_KEYS_DOCUMENT: (caseId) => `artifacts/${appId}/private/data/case_keys/${caseId}`,
+  CASE_GENERATION_PLAN_DOCUMENT: (caseId) =>
+    `artifacts/${appId}/private/data/case_generation_plans/${caseId}`,
   USERS_COLLECTION: () => `artifacts/${appId}/users`,
   USER_SUBMISSIONS_COLLECTION: (appIdValue, userId) =>
     `artifacts/${appIdValue}/users/${userId}/caseSubmissions`,

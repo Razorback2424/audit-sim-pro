@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { LayoutGrid, LogOut } from 'lucide-react';
-import { Button, useAuth, useUser, useRoute, appId } from '../../AppCore';
+import { Button, useAuth, useRoute, appId } from '../../AppCore';
 
 export default function AppLayout() {
   const { currentUser, logout } = useAuth();

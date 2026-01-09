@@ -276,17 +276,27 @@ const normalizeReferenceDocuments = (documents = []) => {
     const storagePath = toOptionalString(item.storagePath);
     const downloadURL = toOptionalString(item.downloadURL);
     const contentType = toOptionalString(item.contentType);
+    const generationSpec = isRecord(item.generationSpec) ? item.generationSpec : null;
+    const generationSpecId = toOptionalString(item.generationSpecId);
     if (!fileName) return;
-    if (!storagePath && !downloadURL) return;
-    const key = `${fileName}|${storagePath ?? ''}|${downloadURL ?? ''}|${contentType ?? ''}`;
+    if (!storagePath && !downloadURL && !generationSpec) return;
+    const generationKey = generationSpec ? JSON.stringify(generationSpec) : '';
+    const key = `${fileName}|${storagePath ?? ''}|${downloadURL ?? ''}|${contentType ?? ''}|${generationKey}|${generationSpecId ?? ''}`;
     if (seen.has(key)) return;
     seen.add(key);
-    normalized.push({
+    const doc = {
       fileName,
       storagePath: storagePath ?? null,
       downloadURL: downloadURL ?? null,
       contentType: contentType ?? null,
-    });
+    };
+    if (generationSpec) {
+      doc.generationSpec = generationSpec;
+    }
+    if (generationSpecId) {
+      doc.generationSpecId = generationSpecId;
+    }
+    normalized.push(doc);
   });
   return normalized;
 };
@@ -778,7 +788,10 @@ const buildCaseRepairPatch = (data = {}) => {
         return (
           doc.fileName !== toOptionalString(original.fileName) ||
           doc.storagePath !== (toOptionalString(original.storagePath) ?? null) ||
-          doc.downloadURL !== (toOptionalString(original.downloadURL) ?? null)
+          doc.downloadURL !== (toOptionalString(original.downloadURL) ?? null) ||
+          doc.generationSpecId !== (toOptionalString(original.generationSpecId) ?? null) ||
+          JSON.stringify(doc.generationSpec || null) !==
+            JSON.stringify(isRecord(original.generationSpec) ? original.generationSpec : null)
         );
       });
     if (hasMismatch) {

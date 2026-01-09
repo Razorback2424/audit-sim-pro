@@ -278,6 +278,16 @@ service cloud.firestore {
       allow delete: if request.auth != null && isAdmin();
     }
 
+    // Private case generation plans stored under artifacts/{appId}/private/data/case_generation_plans/{caseId}
+    match /artifacts/{appId}/private/data/case_generation_plans/{caseId} {
+      allow read: if request.auth != null && canAccessCaseKeys(appId, caseId);
+      allow create, update: if request.auth != null &&
+                               canAccessCaseKeys(appId, caseId) &&
+                               request.resource.data.plan is map &&
+                               request.resource.data.updatedAt == request.time;
+      allow delete: if request.auth != null && isAdmin();
+    }
+
     // Profile information is private to each user
     match /artifacts/{appId}/users/{userId} {
       allow read: if request.auth != null && isAdmin();
