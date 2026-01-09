@@ -38,13 +38,23 @@ export default function useReferenceDownloads(referenceDocuments = [], showModal
       }
 
       const displayName = (doc.fileName || 'reference-document').trim() || 'reference-document';
-      let url = (doc.downloadURL || '').trim();
+      let url = '';
+      const fallbackUrl = (doc.downloadURL || '').trim();
 
-      if (!url) {
-        if (!doc.storagePath) {
-          throw new Error('Reference document is missing a download link.');
+      if (doc.storagePath) {
+        try {
+          url = await getDownloadURL(storageRef(storage, doc.storagePath));
+        } catch (err) {
+          if (fallbackUrl) {
+            url = fallbackUrl;
+          } else {
+            throw err;
+          }
         }
-        url = await getDownloadURL(storageRef(storage, doc.storagePath));
+      } else if (fallbackUrl) {
+        url = fallbackUrl;
+      } else {
+        throw new Error('Reference document is missing a download link.');
       }
 
       await triggerFileDownload(url, displayName);

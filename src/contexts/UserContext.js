@@ -18,7 +18,11 @@ const ROLE_PRIORITY = {
   admin: 3,
 };
 
-const normalizeRoleValue = (value) => (typeof value === 'string' ? value.toLowerCase() : value);
+const normalizeRoleValue = (value) => {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  return trimmed ? trimmed.toLowerCase() : null;
+};
 
 const shouldUpdateRoleDoc = (existingRole, incomingRole) => {
   const normalizedExisting = normalizeRoleValue(existingRole);
@@ -61,17 +65,18 @@ export const UserProvider = ({ children }) => {
       }
 
       setLoadingRole(true);
-      const cachedRole = getCachedRole(currentUser.uid);
+      const cachedRole = normalizeRoleValue(getCachedRole(currentUser.uid));
       if (cachedRole) {
         setRoleState(cachedRole);
         console.info('[UserProvider] Using cached role for initial render', { cachedRole });
       }
 
       let claimRole = cachedRole;
+      let roleFromDoc = null;
 
       try {
         const idTokenResult = await currentUser.getIdTokenResult(true);
-        claimRole = idTokenResult.claims.role ?? null;
+        claimRole = normalizeRoleValue(idTokenResult.claims.role ?? null);
         console.info('[UserProvider] Retrieved token role', { claimRole });
         if (claimRole) {
           cacheRole(currentUser.uid, claimRole);
@@ -82,13 +87,26 @@ export const UserProvider = ({ children }) => {
 
       try {
         const roleRef = doc(db, FirestorePaths.ROLE_DOCUMENT(currentUser.uid));
+
+        try {
+          const roleSnap = await getDoc(roleRef);
+          roleFromDoc = roleSnap.exists() ? normalizeRoleValue(roleSnap.data()?.role ?? null) : null;
+          if (roleFromDoc) {
+            setRoleState(roleFromDoc);
+            cacheRole(currentUser.uid, roleFromDoc);
+          }
+        } catch (err) {
+          console.warn('[UserProvider] Failed to fetch role document:', err);
+        }
+
         unsubscribeRole = onSnapshot(
           roleRef,
           (snapshot) => {
             if (!active) return;
-            const docRole = snapshot.exists() ? snapshot.data()?.role ?? null : null;
+            const docRole = snapshot.exists() ? normalizeRoleValue(snapshot.data()?.role ?? null) : null;
+            roleFromDoc = docRole ?? roleFromDoc;
             const nextRole = docRole ?? claimRole ?? null;
-            const normalizedRole = typeof nextRole === 'string' ? nextRole.toLowerCase() : nextRole;
+            const normalizedRole = normalizeRoleValue(nextRole);
             console.info('[UserProvider] Role snapshot update', {
               docRole,
               claimRole,
@@ -101,9 +119,8 @@ export const UserProvider = ({ children }) => {
           (error) => {
             if (!active) return;
             console.error('[UserProvider] Role snapshot error:', error);
-            const fallbackRole = claimRole ?? null;
-            const normalizedRole =
-              typeof fallbackRole === 'string' ? fallbackRole.toLowerCase() : fallbackRole;
+            const fallbackRole = roleFromDoc ?? claimRole ?? cachedRole ?? null;
+            const normalizedRole = normalizeRoleValue(fallbackRole);
             setRoleState(normalizedRole);
             if (normalizedRole) cacheRole(currentUser.uid, normalizedRole);
             setLoadingRole(false);
@@ -116,9 +133,8 @@ export const UserProvider = ({ children }) => {
       } catch (err) {
         if (active) {
           console.error('[UserProvider] Failed to subscribe to role document:', err);
-          const fallbackRole = claimRole ?? null;
-          const normalizedRole =
-            typeof fallbackRole === 'string' ? fallbackRole.toLowerCase() : fallbackRole;
+          const fallbackRole = roleFromDoc ?? claimRole ?? cachedRole ?? null;
+          const normalizedRole = normalizeRoleValue(fallbackRole);
           setRoleState(normalizedRole);
           if (normalizedRole) cacheRole(currentUser.uid, normalizedRole);
           setLoadingRole(false);
@@ -149,7 +165,7 @@ export const UserProvider = ({ children }) => {
           // Fall back to profile role if we still don't have a resolved role from claims/doc.
           setRoleState((prev) => {
             if (prev) return prev;
-            const profileRole = typeof nextProfile?.role === 'string' ? nextProfile.role.toLowerCase() : null;
+            const profileRole = normalizeRoleValue(nextProfile?.role ?? null);
             if (profileRole) {
               cacheRole(currentUser.uid, profileRole);
               return profileRole;
@@ -234,7 +250,7 @@ export const UserProvider = ({ children }) => {
   }, [currentUser, role]);
 
   const setRole = async (newRole, userOverride = null) => {
-    const normalizedRole = typeof newRole === 'string' ? newRole.toLowerCase() : newRole;
+    const normalizedRole = normalizeRoleValue(newRole);
     const user = userOverride || currentUser;
     if (!user) {
       if (showModal) showModal('Cannot set role: not signed in.', 'Authentication Error');

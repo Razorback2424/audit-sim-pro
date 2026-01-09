@@ -49,6 +49,106 @@ const ensureSafeFileName = (fileName = '') => {
   return withoutPaths.replace(/[^\w.\-()\s]/g, '').replace(/\s+/g, ' ').trim();
 };
 
+const normalizeStoragePath = (rawPath, bucketName) => {
+  if (typeof rawPath !== 'string') return null;
+  const trimmed = rawPath.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('gs://')) {
+    const match = trimmed.match(/^gs:\/\/([^/]+)\/(.+)$/);
+    if (!match) return null;
+    if (bucketName && match[1] !== bucketName) return null;
+    return match[2];
+  }
+  if (trimmed.startsWith('https://firebasestorage.googleapis.com/')) {
+    const match = trimmed.match(/^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/([^/]+)\/o\/([^?]+)/);
+    if (!match) return null;
+    if (bucketName && match[1] !== bucketName) return null;
+    return decodeURIComponent(match[2]);
+  }
+  if (trimmed.startsWith('https://storage.googleapis.com/')) {
+    const match = trimmed.match(/^https:\/\/storage\.googleapis\.com\/([^/]+)\/(.+)$/);
+    if (!match) return null;
+    if (bucketName && match[1] !== bucketName) return null;
+    return match[2];
+  }
+  return trimmed.replace(/^\/+/, '');
+};
+
+const collectCaseStoragePaths = (caseData, bucketName) => {
+  const paths = new Set();
+  const addPath = (value) => {
+    const normalized = normalizeStoragePath(value, bucketName);
+    if (normalized) paths.add(normalized);
+  };
+  const addDocument = (doc) => {
+    if (!doc || typeof doc !== 'object') return;
+    addPath(doc.storagePath);
+    if (!doc.storagePath && doc.downloadURL) {
+      addPath(doc.downloadURL);
+    }
+  };
+  const addDocuments = (docs) => {
+    if (!Array.isArray(docs)) return;
+    docs.forEach((doc) => addDocument(doc));
+  };
+  const addItemDocuments = (item) => {
+    if (!item || typeof item !== 'object') return;
+    addPath(item.storagePath);
+    if (!item.storagePath && item.downloadURL) {
+      addPath(item.downloadURL);
+    }
+    addDocument(item.highlightedDocument);
+    addDocuments(item.supportingDocuments);
+  };
+  const addItems = (items) => {
+    if (!Array.isArray(items)) return;
+    items.forEach((item) => addItemDocuments(item));
+  };
+
+  addDocuments(caseData?.referenceDocuments);
+  addDocuments(caseData?.invoiceMappings);
+  addItems(caseData?.auditItems);
+  addItems(caseData?.disbursements);
+
+  return Array.from(paths);
+};
+
+const collectInvoiceStoragePaths = (caseData, bucketName) => {
+  const paths = new Set();
+  const addPath = (value) => {
+    const normalized = normalizeStoragePath(value, bucketName);
+    if (normalized) paths.add(normalized);
+  };
+  const addDocument = (doc) => {
+    if (!doc || typeof doc !== 'object') return;
+    addPath(doc.storagePath);
+    if (!doc.storagePath && doc.downloadURL) {
+      addPath(doc.downloadURL);
+    }
+  };
+  const addDocuments = (docs) => {
+    if (!Array.isArray(docs)) return;
+    docs.forEach((doc) => addDocument(doc));
+  };
+  const addItemDocuments = (item) => {
+    if (!item || typeof item !== 'object') return;
+    addPath(item.storagePath);
+    if (!item.storagePath && item.downloadURL) {
+      addPath(item.downloadURL);
+    }
+  };
+  const addItems = (items) => {
+    if (!Array.isArray(items)) return;
+    items.forEach((item) => addItemDocuments(item));
+  };
+
+  addDocuments(caseData?.invoiceMappings);
+  addItems(caseData?.auditItems);
+  addItems(caseData?.disbursements);
+
+  return Array.from(paths);
+};
+
 const renderPdfFromHtml = async (html, pdfOptions = {}) => {
   let chromium;
   let executablePath;
@@ -201,6 +301,53 @@ exports.onRoleChangeSetCustomClaim = functions.firestore
     }
   });
 
+exports.onCaseDeletedCleanupStorage = functions.firestore
+  .document('artifacts/{appId}/public/data/cases/{caseId}')
+  .onWrite(async (change, context) => {
+    const after = change.after.exists ? change.after.data() : null;
+    const before = change.before.exists ? change.before.data() : null;
+    const wasDeleted = before?._deleted === true;
+    const isDeleted = after?._deleted === true;
+
+    if (!isDeleted || wasDeleted) {
+      return null;
+    }
+
+    const caseData = after || before || {};
+    const bucket = admin.storage().bucket();
+    const bucketName = bucket.name;
+    const storagePaths = collectCaseStoragePaths(caseData, bucketName);
+
+    if (storagePaths.length === 0) {
+      console.log('[caseCleanup] No storage paths found', {
+        caseId: context.params.caseId,
+        appId: context.params.appId,
+      });
+      return null;
+    }
+
+    await Promise.all(
+      storagePaths.map(async (path) => {
+        try {
+          await bucket.file(path).delete({ ignoreNotFound: true });
+        } catch (err) {
+          console.warn('[caseCleanup] Failed to delete file', {
+            path,
+            error: err?.message || err,
+          });
+        }
+      })
+    );
+
+    console.log('[caseCleanup] Deleted case storage', {
+      caseId: context.params.caseId,
+      appId: context.params.appId,
+      count: storagePaths.length,
+    });
+
+    return null;
+  });
+
 const resolveRequesterIdentity = async ({ context, appId, firestore, logLabel }) => {
   const requesterRole = context.auth.token?.role;
   let requesterOrgId = context.auth.token?.orgId ?? null;
@@ -309,6 +456,103 @@ exports.listRosterOptions = functions.https.onCall(async (data, context) => {
   }
 
   return { roster };
+});
+
+exports.auditOrphanedInvoices = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
+  }
+
+  const appId = data?.appId;
+  if (!appId || typeof appId !== 'string') {
+    throw new functions.https.HttpsError('invalid-argument', 'appId is required.');
+  }
+
+  const sampleSizeRaw = Number(data?.sampleSize);
+  const sampleSize = Number.isFinite(sampleSizeRaw)
+    ? Math.min(Math.max(sampleSizeRaw, 0), 50)
+    : 10;
+  const deleteFiles = Boolean(data?.deleteFiles);
+
+  const firestore = admin.firestore();
+  const { resolvedRole } = await resolveRequesterIdentity({
+    context,
+    appId,
+    firestore,
+    logLabel: 'auditOrphanedInvoices',
+  });
+
+  if (resolvedRole !== 'admin') {
+    throw new functions.https.HttpsError('permission-denied', 'Insufficient permissions.');
+  }
+
+  const casesSnap = await firestore.collection(`artifacts/${appId}/public/data/cases`).get();
+  const activeCaseIds = new Set();
+  const referencedInvoicePaths = new Set();
+
+  casesSnap.forEach((docSnap) => {
+    const data = docSnap.data() || {};
+    if (data._deleted === true) {
+      return;
+    }
+    activeCaseIds.add(docSnap.id);
+    const invoicePaths = collectInvoiceStoragePaths(data, null);
+    invoicePaths.forEach((path) => referencedInvoicePaths.add(path));
+  });
+
+  const bucket = admin.storage().bucket();
+  const prefix = `artifacts/${appId}/case_documents/`;
+  const allFiles = [];
+  let pageToken;
+
+  do {
+    const [files, , response] = await bucket.getFiles({
+      prefix,
+      autoPaginate: false,
+      pageToken,
+      maxResults: 1000,
+    });
+    allFiles.push(...files);
+    pageToken = response?.nextPageToken;
+  } while (pageToken);
+
+  const orphaned = [];
+
+  allFiles.forEach((file) => {
+    const filePath = file?.name || '';
+    if (!filePath.startsWith(prefix)) return;
+    const remainder = filePath.slice(prefix.length);
+    const caseId = remainder.split('/')[0] || null;
+    const hasActiveCase = caseId ? activeCaseIds.has(caseId) : false;
+    const isReferenced = referencedInvoicePaths.has(filePath);
+    if (!hasActiveCase || !isReferenced) {
+      orphaned.push(filePath);
+    }
+  });
+
+  let deletedCount = 0;
+  if (deleteFiles && orphaned.length > 0) {
+    await Promise.all(
+      orphaned.map(async (path) => {
+        try {
+          await bucket.file(path).delete({ ignoreNotFound: true });
+          deletedCount += 1;
+        } catch (err) {
+          console.warn('[auditOrphanedInvoices] Failed to delete file', {
+            path,
+            error: err?.message || err,
+          });
+        }
+      })
+    );
+  }
+
+  return {
+    totalFiles: allFiles.length,
+    orphanedCount: orphaned.length,
+    orphanedSample: orphaned.slice(0, sampleSize),
+    deletedCount,
+  };
 });
 
 const resolveCaseAppId = async (firestore, appId, caseId) => {

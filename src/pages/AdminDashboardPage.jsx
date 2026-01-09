@@ -24,6 +24,7 @@ import {
   CASE_SORT_CHOICES,
   DEFAULT_CASE_SORT,
 } from '../services/caseService';
+import { auditOrphanedInvoices } from '../services/storageAuditService';
 import { subscribeToRecentSubmissionActivity } from '../services/submissionService';
 import { fetchUsersWithProfiles } from '../services/userService';
 import AdvancedToolsMenu from '../components/admin/AdvancedToolsMenu';
@@ -107,6 +108,7 @@ export default function AdminDashboardPage() {
   const { role, loadingRole } = useUser();
   const [refreshToken, setRefreshToken] = useState(0);
   const [repairingCases, setRepairingCases] = useState(false);
+  const [auditingOrphanedInvoices, setAuditingOrphanedInvoices] = useState(false);
   const [dashboardSummary, setDashboardSummary] = useState({
     activeCases: 0,
     totalDisbursements: 0,
@@ -510,6 +512,83 @@ export default function AdminDashboardPage() {
     }
   };
 
+  const handleAuditOrphanedInvoices = async () => {
+    if (auditingOrphanedInvoices) return;
+    setAuditingOrphanedInvoices(true);
+    try {
+      const result = await auditOrphanedInvoices({ deleteFiles: false, sampleSize: 8 });
+      const totalFiles = result?.totalFiles ?? 0;
+      const orphanedCount = result?.orphanedCount ?? 0;
+      const orphanedSample = Array.isArray(result?.orphanedSample) ? result.orphanedSample : [];
+
+      if (orphanedCount === 0) {
+        showModal(
+          `No orphaned invoices found. ${totalFiles} invoice file${totalFiles === 1 ? '' : 's'} scanned.`,
+          'Storage Check Complete'
+        );
+        return;
+      }
+
+      showModal(
+        <>
+          <p className="text-gray-700">
+            Found {orphanedCount} orphaned invoice file{orphanedCount === 1 ? '' : 's'} out of {totalFiles}{' '}
+            scanned. These are invoices not tied to an active or draft case.
+          </p>
+          {orphanedSample.length > 0 && (
+            <ul className="mt-3 max-h-40 overflow-auto text-xs text-gray-600 space-y-1">
+              {orphanedSample.map((path) => (
+                <li key={path} className="truncate">
+                  {path}
+                </li>
+              ))}
+              {orphanedCount > orphanedSample.length && (
+                <li>…and {orphanedCount - orphanedSample.length} more.</li>
+              )}
+            </ul>
+          )}
+          <p className="mt-3 text-sm text-gray-600">Delete these orphaned invoices now?</p>
+        </>,
+        'Orphaned Invoices Found',
+        (hideModal) => (
+          <>
+            <Button onClick={hideModal} variant="secondary">
+              Cancel
+            </Button>
+            <Button
+              onClick={async () => {
+                hideModal();
+                setAuditingOrphanedInvoices(true);
+                try {
+                  const cleanup = await auditOrphanedInvoices({ deleteFiles: true, sampleSize: 0 });
+                  const deletedCount = cleanup?.deletedCount ?? 0;
+                  showModal(
+                    `${deletedCount} orphaned invoice file${deletedCount === 1 ? '' : 's'} deleted.`,
+                    'Cleanup Complete'
+                  );
+                } catch (error) {
+                  console.error('Error deleting orphaned invoices:', error);
+                  showModal(error?.message || 'Unable to delete orphaned invoices.', 'Error');
+                } finally {
+                  setAuditingOrphanedInvoices(false);
+                }
+              }}
+              variant="danger"
+              className="ml-2"
+            >
+              Delete orphaned invoices
+            </Button>
+          </>
+        )
+      );
+    } catch (error) {
+      console.error('Error auditing orphaned invoices:', error);
+      showModal(error?.message || 'Unable to audit orphaned invoices.', 'Error');
+    } finally {
+      setAuditingOrphanedInvoices(false);
+    }
+  };
+
   const deleteCase = async (caseId) => {
     showModal(
       <>
@@ -901,6 +980,8 @@ export default function AdminDashboardPage() {
               onNavigateDataAudit={() => navigate('/admin/case-data-audit')}
               onRepairCases={handleRepairCases}
               isRepairingCases={repairingCases}
+              onAuditOrphanedInvoices={handleAuditOrphanedInvoices}
+              isAuditingOrphanedInvoices={auditingOrphanedInvoices}
             />
           </div>
         </div>

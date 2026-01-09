@@ -30,6 +30,37 @@ export const surlPromotadorCutoffV1 = {
   label: 'SURL Cutoff (Generated)',
   description: 'Unrecorded liability trap with post-close disbursements and service-date cutoff.',
   build: () => {
+    const seed = getUUID();
+    const hashSeed = (value) => {
+      let hash = 2166136261;
+      const str = String(value);
+      for (let i = 0; i < str.length; i += 1) {
+        hash ^= str.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+      }
+      return hash >>> 0;
+    };
+    const createRng = (value) => {
+      let state = hashSeed(value);
+      return () => {
+        state += 0x6d2b79f5;
+        let t = Math.imul(state ^ (state >>> 15), 1 | state);
+        t ^= t + Math.imul(t ^ (t >>> 7), 61 | t);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    };
+    const rng = createRng(seed);
+    const randomInt = (min, max) =>
+      Math.floor(rng() * (max - min + 1)) + min;
+    const shuffle = (list) => {
+      const next = [...list];
+      for (let i = next.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(rng() * (i + 1));
+        [next[i], next[j]] = [next[j], next[i]];
+      }
+      return next;
+    };
+
     const instruction = {
       ...initialInstruction(),
       title: 'Search for Unrecorded Liabilities',
@@ -114,20 +145,60 @@ export const surlPromotadorCutoffV1 = {
 
     const yearEndDate = parseCutoffDate(yearEnd);
 
-    const disbursementTargets = [
-      { paymentId: 'P-101', payee: 'Redwood Printing', paymentDate: '20X3-01-08', amount: 1850, invoiceCount: 1, serviceTiming: 'pre', trap: false },
-      { paymentId: 'P-102', payee: 'Blue Harbor Logistics', paymentDate: '20X3-01-12', amount: 2450, invoiceCount: 1, serviceTiming: 'pre', trap: true },
-      { paymentId: 'P-103', payee: 'Brightline Media', paymentDate: '20X3-01-16', amount: 1320, invoiceCount: 1, serviceTiming: 'pre', trap: false },
-      { paymentId: 'P-104', payee: 'Northwind Office Furniture', paymentDate: '20X3-01-20', amount: 2100, invoiceCount: 1, serviceTiming: 'post', trap: false },
-      { paymentId: 'P-105', payee: 'Summit Electrical', paymentDate: '20X3-01-25', amount: 980, invoiceCount: 1, serviceTiming: 'pre', trap: false },
-      { paymentId: 'P-106', payee: 'Kiteway Security', paymentDate: '20X3-01-29', amount: 1560, invoiceCount: 1, serviceTiming: 'post', trap: false },
-      { paymentId: 'P-107', payee: 'Atlas IT Services', paymentDate: '20X3-02-02', amount: 3750, invoiceCount: 1, serviceTiming: 'pre', trap: false },
-      { paymentId: 'P-108', payee: 'Stonebridge Catering', paymentDate: '20X3-02-05', amount: 890, invoiceCount: 1, serviceTiming: 'post', trap: false },
-      { paymentId: 'P-109', payee: 'Lumen Fabricators', paymentDate: '20X3-02-10', amount: 2000, invoiceCount: 2, serviceTiming: 'pre', trap: false },
-      { paymentId: 'P-110', payee: 'Apex Facilities', paymentDate: '20X3-02-14', amount: 1550, invoiceCount: 2, serviceTiming: 'post', trap: false },
-      { paymentId: 'P-111', payee: 'Metro Office Supply', paymentDate: '20X3-02-18', amount: 1125, invoiceCount: 1, serviceTiming: 'pre', trap: false },
-      { paymentId: 'P-112', payee: 'Coastal Freight', paymentDate: '20X3-02-22', amount: 1640, invoiceCount: 1, serviceTiming: 'pre', trap: false },
+    const payeePool = [
+      'Redwood Printing',
+      'Blue Harbor Logistics',
+      'Brightline Media',
+      'Northwind Office Furniture',
+      'Summit Electrical',
+      'Kiteway Security',
+      'Atlas IT Services',
+      'Stonebridge Catering',
+      'Lumen Fabricators',
+      'Apex Facilities',
+      'Metro Office Supply',
+      'Coastal Freight',
+      'Summit Ridge Maintenance',
+      'Pioneer Packaging',
+      'Silverline Logistics',
+      'Harborview Services',
+      'Evergreen Industrial',
+      'Crestline Consultants',
     ];
+
+    const disbursementCount = randomInt(10, 15);
+    const offsets = shuffle(Array.from({ length: 31 }, (_, idx) => 30 + idx))
+      .slice(0, disbursementCount)
+      .sort((a, b) => a - b);
+    const payees = shuffle(payeePool).slice(0, disbursementCount);
+    const amountSet = new Set();
+    const serviceTiming = Array.from({ length: disbursementCount }, () =>
+      rng() < 0.45 ? 'pre' : 'post'
+    );
+    if (!serviceTiming.includes('pre')) {
+      serviceTiming[0] = 'pre';
+    }
+    const preIndexes = serviceTiming
+      .map((value, index) => (value === 'pre' ? index : null))
+      .filter((value) => value !== null);
+    const trapIndex = preIndexes[randomInt(0, preIndexes.length - 1)];
+
+    const disbursementTargets = offsets.map((offset, index) => {
+      let amount = Math.round(randomInt(800, 4200) / 5) * 5;
+      while (amountSet.has(amount)) {
+        amount += 5;
+      }
+      amountSet.add(amount);
+      return {
+        paymentId: `P-${101 + index}`,
+        payee: payees[index],
+        paymentDate: addDaysPseudo(yearEnd, offset),
+        amount,
+        invoiceCount: rng() < 0.25 ? 2 : 1,
+        serviceTiming: serviceTiming[index],
+        trap: index === trapIndex,
+      };
+    });
 
     const normalizeTargets = (targets, issues) => {
       let nextTargets = [...targets];
@@ -230,7 +301,7 @@ export const surlPromotadorCutoffV1 = {
     };
 
     const buildCaseData = (targets) => {
-      let invoiceIndex = 1000;
+      let invoiceIndex = 1000 + randomInt(0, 99);
       const invoiceCatalog = [];
       targets.forEach((target) => {
         const invoices = buildInvoicesForTarget(target, invoiceIndex);
@@ -497,6 +568,7 @@ export const surlPromotadorCutoffV1 = {
       disbursements,
       referenceDocuments,
       generationPlan: {
+        seed,
         yearEnd,
         notes:
           'Reference documents are generated from templates; run the PDF generator to populate storagePath/downloadURL.',

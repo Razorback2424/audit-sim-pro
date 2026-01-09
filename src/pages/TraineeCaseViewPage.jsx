@@ -48,6 +48,17 @@ const CLASSIFICATION_FIELDS = [
 
 const hasExplicitDecision = (allocation) => allocation?.isException === true || allocation?.isException === false;
 
+const isInvoiceReferenceDoc = (doc) => {
+  if (!doc || typeof doc !== 'object') return false;
+  const templateId = typeof doc.generationSpec?.templateId === 'string'
+    ? doc.generationSpec.templateId.toLowerCase()
+    : '';
+  if (templateId.startsWith('invoice.')) return true;
+  if (doc.generationSpec?.linkToPaymentId) return true;
+  if (doc.linkToPaymentId) return true;
+  return false;
+};
+
 const isInlinePreviewable = (contentType, fileNameOrPath) => {
   const normalizedType = typeof contentType === 'string' ? contentType.toLowerCase() : '';
   if (normalizedType === 'application/pdf' || normalizedType === 'application/x-pdf') {
@@ -298,6 +309,13 @@ export default function TraineeCaseViewPage({ params }) {
       if (!hasExplicitDecision(allocation)) return false;
       const amountNumber = Number(disbursement?.amount);
       if (!Number.isFinite(amountNumber)) return false;
+      const isSplit = allocation.mode === 'split';
+      const singleClassification = typeof allocation.singleClassification === 'string' ? allocation.singleClassification : '';
+      if (allocation?.isException === false && !isSplit) {
+        if (singleClassification !== 'properlyIncluded' && singleClassification !== 'properlyExcluded') {
+          return false;
+        }
+      }
       if (allocation?.isException === true) {
         const noteText =
           typeof allocation.workpaperNote === 'string'
@@ -308,12 +326,22 @@ export default function TraineeCaseViewPage({ params }) {
         if (noteText.trim().length === 0) return false;
       }
       let sum = 0;
+      let singleValue = 0;
       for (const { key } of CLASSIFICATION_FIELDS) {
         const value = parseAmount(allocation[key]);
         if (!Number.isFinite(value) || value < 0) {
           return false;
         }
+        if (!isSplit && singleClassification && key !== singleClassification && value !== 0) {
+          return false;
+        }
+        if (!isSplit && key === singleClassification) {
+          singleValue = value;
+        }
         sum += value;
+      }
+      if (!isSplit && allocation?.isException === false) {
+        if (Math.abs(singleValue - amountNumber) > 0.01) return false;
       }
       return Math.abs(sum - amountNumber) <= 0.01;
     },
@@ -496,6 +524,7 @@ export default function TraineeCaseViewPage({ params }) {
 
     docs.forEach((doc, index) => {
       if (!doc) return;
+      if (isInvoiceReferenceDoc(doc)) return;
       const fileName = (doc.fileName || '').trim() || `Reference document ${index + 1}`;
       const storagePath = (doc.storagePath || '').trim();
       const downloadURL = (doc.downloadURL || '').trim();
@@ -1299,6 +1328,9 @@ export default function TraineeCaseViewPage({ params }) {
       : null;
     const nowViewingLabel =
       activeEvidence?.evidenceFileName || activeEvidence?.paymentId || 'Supporting document';
+    const activePaymentDocs = activePaymentId
+      ? items.filter((item) => item.paymentId === activePaymentId)
+      : [];
 
     return (
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm flex flex-col min-h-[560px]">
@@ -1312,6 +1344,31 @@ export default function TraineeCaseViewPage({ params }) {
                 ? `Now viewing: ${nowViewingLabel}`
                 : 'Select a disbursement to view its document.'}
             </p>
+            {viewerEnabled && activePaymentDocs.length > 1 ? (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {activePaymentDocs.map((doc, index) => {
+                  const isActive = doc.evidenceId === activeEvidenceId;
+                  const label = doc.evidenceFileName || `Invoice ${index + 1}`;
+                  return (
+                    <button
+                      key={doc.evidenceId}
+                      type="button"
+                      onClick={() => {
+                        setActiveEvidenceId(doc.evidenceId);
+                        if (doc.paymentId) setActivePaymentId(doc.paymentId);
+                      }}
+                      className={`rounded-full border px-2.5 py-1 text-xs font-semibold transition ${
+                        isActive
+                          ? 'border-blue-500 bg-blue-50 text-blue-700'
+                          : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
           </div>
           {viewerEnabled && activeEvidenceId ? (
             (() => {
@@ -1367,12 +1424,22 @@ export default function TraineeCaseViewPage({ params }) {
     const referenceKey = doc.id || doc.storagePath || doc.downloadURL || doc.fileName;
     try {
       setDownloadingReferenceId(doc.id);
-      let url = (doc.downloadURL || '').trim();
-      if (!url) {
-        if (!doc.storagePath) {
-          throw new Error('Reference document is missing a download link.');
+      let url = '';
+      const fallbackUrl = (doc.downloadURL || '').trim();
+      if (doc.storagePath) {
+        try {
+          url = await getDownloadURL(storageRef(storage, doc.storagePath));
+        } catch (err) {
+          if (fallbackUrl) {
+            url = fallbackUrl;
+          } else {
+            throw err;
+          }
         }
-        url = await getDownloadURL(storageRef(storage, doc.storagePath));
+      } else if (fallbackUrl) {
+        url = fallbackUrl;
+      } else {
+        throw new Error('Reference document is missing a download link.');
       }
       const isPdf = isInlinePreviewable(doc.contentType, doc.fileName || url);
       if (isPdf) {
@@ -1657,6 +1724,7 @@ export default function TraineeCaseViewPage({ params }) {
                     <div className="divide-y divide-slate-200 bg-white">
                       {selectedDisbursementDetails.map((d) => {
                         const allocation = classificationAmounts[d.paymentId] || createEmptyAllocation();
+                        const docCount = collectSupportingDocuments(d).length;
                         const totalEntered = CLASSIFICATION_FIELDS.reduce((sum, { key }) => {
                           const value = parseAmount(allocation[key]);
                           return sum + (Number.isFinite(value) ? value : 0);
@@ -1691,7 +1759,10 @@ export default function TraineeCaseViewPage({ params }) {
 
                                 <div className="min-w-0">
                                   <div className="truncate text-sm font-semibold text-slate-900">{d.paymentId}</div>
-                                  <div className="truncate text-xs text-slate-500">{d.payee || 'Unknown payee'}</div>
+                                  <div className="truncate text-xs text-slate-500">
+                                    {d.payee || 'Unknown payee'}
+                                    {docCount > 1 ? ` | ${docCount} invoices` : ''}
+                                  </div>
                                 </div>
 
                                 <div className="min-w-0 text-right">

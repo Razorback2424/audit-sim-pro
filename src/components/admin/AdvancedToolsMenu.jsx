@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '../../AppCore';
-import { ListFilter, Loader2, MoreHorizontal, Users2, Wrench } from 'lucide-react';
+import { ListFilter, Loader2, MoreHorizontal, Search, Users2, Wrench } from 'lucide-react';
 
 const noop = () => {};
 
@@ -11,6 +11,8 @@ const AdvancedToolsMenu = ({
   onNavigateDataAudit = noop,
   onRepairCases = noop,
   isRepairingCases = false,
+  onAuditOrphanedInvoices = noop,
+  isAuditingOrphanedInvoices = false,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
@@ -42,8 +44,23 @@ const AdvancedToolsMenu = ({
         disabled: isRepairingCases,
         inProgress: isRepairingCases,
       },
+      {
+        id: 'audit-orphaned-invoices',
+        label: isAuditingOrphanedInvoices ? 'Checking invoices…' : 'Check orphaned invoices',
+        icon: Search,
+        onSelect: onAuditOrphanedInvoices,
+        disabled: isAuditingOrphanedInvoices,
+        inProgress: isAuditingOrphanedInvoices,
+      },
     ],
-    [onNavigateUserManagement, onNavigateDataAudit, onRepairCases, isRepairingCases]
+    [
+      onNavigateUserManagement,
+      onNavigateDataAudit,
+      onRepairCases,
+      isRepairingCases,
+      onAuditOrphanedInvoices,
+      isAuditingOrphanedInvoices,
+    ]
   );
 
   useEffect(() => {
