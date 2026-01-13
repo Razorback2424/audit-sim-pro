@@ -28,6 +28,11 @@ import { Timestamp } from 'firebase/firestore';
  * @property {Timestamp} updatedAt
  * @property {ProgressStep} step
  * @property {ProgressDraft} draft
+ * @property {Record<string, any>} activeAttempt
+ * @property {boolean} hasSuccessfulAttempt
+ * @property {Timestamp} lastAttemptAt
+ * @property {Timestamp} successfulAttemptAt
+ * @property {number} attemptCount
  */
 
 const VALID_STATES = ['not_started', 'in_progress', 'submitted'];
@@ -55,6 +60,8 @@ const normalizeDraft = (draft) => {
   };
 };
 
+const normalizeTimestamp = (value) => (value instanceof Timestamp ? value : new Timestamp(0, 0));
+
 /**
  * Safely converts a Firestore document to a ProgressModel, with defaults.
  * @param {any} data The firestore document data.
@@ -62,7 +69,8 @@ const normalizeDraft = (draft) => {
  * @returns {ProgressModel}
  */
 export const toProgressModel = (data, caseId) => {
-  const { state, percentComplete, updatedAt, step, draft } = data || {};
+  const { state, percentComplete, updatedAt, step, draft, activeAttempt, hasSuccessfulAttempt, lastAttemptAt, successfulAttemptAt, attemptCount } =
+    data || {};
 
   const normalizedDraft = normalizeDraft(draft);
 
@@ -70,8 +78,13 @@ export const toProgressModel = (data, caseId) => {
     caseId: caseId,
     state: VALID_STATES.includes(state) ? state : DEFAULT_STATE,
     percentComplete: normalizeNumber(percentComplete, 0),
-    updatedAt: updatedAt instanceof Timestamp ? updatedAt : new Timestamp(0, 0),
+    updatedAt: normalizeTimestamp(updatedAt),
     step: typeof step === 'string' ? step : DEFAULT_STEP,
     draft: normalizedDraft,
+    activeAttempt: isRecord(activeAttempt) ? { ...activeAttempt } : {},
+    hasSuccessfulAttempt: typeof hasSuccessfulAttempt === 'boolean' ? hasSuccessfulAttempt : false,
+    lastAttemptAt: normalizeTimestamp(lastAttemptAt),
+    successfulAttemptAt: normalizeTimestamp(successfulAttemptAt),
+    attemptCount: normalizeNumber(attemptCount, 0),
   };
 };

@@ -28,7 +28,7 @@ const STEP_LABELS = {
 };
 
 const STEP_DESCRIPTIONS = {
-  [FLOW_STEPS.INSTRUCTION]: 'Review the briefing and pass the gate check.',
+  [FLOW_STEPS.INSTRUCTION]: 'Review the materials and successfully answer the knowledge check questions to access the simulation.',
   [FLOW_STEPS.SELECTION]: 'Pick the checks you will test from January clearings.',
   [FLOW_STEPS.TESTING]: 'Trace each selection to the register and the 12/31 outstanding list.',
   [FLOW_STEPS.RESULTS]: 'See your recap and any exceptions.',
@@ -719,7 +719,7 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
         <div>
           <h2 className="text-2xl font-semibold text-gray-800">Step 1 — Instruction</h2>
           <p className="text-sm text-gray-500">
-            Review the briefing and pass the gate check to unlock the simulation.
+            Review the materials and successfully answer the knowledge check questions to access the simulation.
           </p>
         </div>
         <InstructionView

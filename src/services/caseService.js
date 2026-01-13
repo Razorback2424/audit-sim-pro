@@ -26,6 +26,8 @@ import {
   CASE_GROUP_VALUES,
   DEFAULT_AUDIT_AREA,
   DEFAULT_ITEM_TYPE,
+  CASE_LEVEL_VALUES,
+  normalizeCaseLevel,
 } from '../models/caseConstants';
 
 const VALID_CASE_STATUSES = ['assigned', 'in_progress', 'submitted', 'archived', 'draft'];
@@ -139,6 +141,13 @@ const normalizeAuditAreaFilter = (value) => {
   return AUDIT_AREA_VALUES.includes(trimmed) ? trimmed : null;
 };
 
+const normalizeCaseLevelFilter = (value) => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return null;
+  return CASE_LEVEL_VALUES.includes(trimmed) ? trimmed : null;
+};
+
 const toVisibilityBooleanFilters = (filters) => {
   if (!Array.isArray(filters) || filters.length === 0) return [];
   const mapped = filters.map((value) => (value === 'public' ? true : false));
@@ -153,6 +162,27 @@ const normalizeSearchValue = (value) => {
 const toOptionalString = (value) => {
   const trimmed = toTrimmedString(value);
   return trimmed === '' ? null : trimmed;
+};
+
+const VALID_TIERS = new Set(['foundations', 'core', 'advanced']);
+
+const normalizeTier = (value) => {
+  const trimmed = toOptionalString(value);
+  if (!trimmed) return null;
+  const normalized = trimmed.toLowerCase();
+  return VALID_TIERS.has(normalized) ? normalized : null;
+};
+
+const normalizeStringArray = (value) =>
+  Array.isArray(value)
+    ? value
+        .map((entry) => toTrimmedString(entry))
+        .filter((entry) => entry.length > 0)
+    : [];
+
+const normalizeNumberOrNull = (value) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
 };
 
 const extractPrivateCaseKeyEntries = (items = []) => {
@@ -603,7 +633,14 @@ const mergeCaseKeysIntoCaseModel = (caseModel, caseKeysData) => {
   };
 };
 
-const buildAdminCasesQueryParts = ({ searchTerm, statusFilters, visibilityFilters, auditAreaFilter, sortKey }) => {
+const buildAdminCasesQueryParts = ({
+  searchTerm,
+  statusFilters,
+  visibilityFilters,
+  auditAreaFilter,
+  caseLevelFilter,
+  sortKey,
+}) => {
   const deletedFilter = where('_deleted', '==', false);
   const filters = [deletedFilter];
 
@@ -620,6 +657,10 @@ const buildAdminCasesQueryParts = ({ searchTerm, statusFilters, visibilityFilter
 
   if (auditAreaFilter) {
     filters.push(where('auditArea', '==', auditAreaFilter));
+  }
+
+  if (caseLevelFilter) {
+    filters.push(where('caseLevel', '==', caseLevelFilter));
   }
 
   const order = [];
@@ -687,6 +728,19 @@ const sanitizeCaseWriteData = (rawData = {}, { isCreate = false } = {}) => {
 
   sanitized.auditArea = normalizeAuditArea(sanitized.auditArea);
   sanitized.caseGroupId = normalizeCaseGroupId(sanitized.caseGroupId);
+  sanitized.caseLevel = normalizeCaseLevel(sanitized.caseLevel);
+
+  sanitized.pathId = toOptionalString(sanitized.pathId) || toOptionalString(sanitized.auditArea);
+  sanitized.pathCategory = toOptionalString(sanitized.pathCategory);
+  sanitized.pathTitle = toTrimmedString(sanitized.pathTitle);
+  sanitized.pathDescription = toTrimmedString(sanitized.pathDescription);
+  sanitized.tier = normalizeTier(sanitized.tier);
+  sanitized.moduleId = toOptionalString(sanitized.moduleId);
+  sanitized.moduleTitle = toTrimmedString(sanitized.moduleTitle) || toTrimmedString(sanitized.title);
+  sanitized.primarySkill = toTrimmedString(sanitized.primarySkill);
+  sanitized.secondarySkills = normalizeStringArray(sanitized.secondarySkills);
+  sanitized.estimatedMinutes = normalizeNumberOrNull(sanitized.estimatedMinutes);
+  sanitized.orderIndex = normalizeNumberOrNull(sanitized.orderIndex);
 
   const normalizedCaseName = toTrimmedString(sanitized.caseName);
   const fallbackTitle = toTrimmedString(sanitized.title);
@@ -737,6 +791,10 @@ const buildCaseRepairPatch = (data = {}) => {
 
   if (!data.auditArea || !AUDIT_AREA_VALUES.includes(toOptionalString(data.auditArea))) {
     patch.auditArea = normalizeAuditArea(data.auditArea);
+  }
+
+  if (!data.caseLevel || !CASE_LEVEL_VALUES.includes(toOptionalString(data.caseLevel))) {
+    patch.caseLevel = normalizeCaseLevel(data.caseLevel);
   }
 
   const normalizedCaseName = toTrimmedString(data.caseName);
@@ -807,6 +865,7 @@ export const fetchCasesPage = async ({
   status = [],
   visibility = [],
   auditArea = '',
+  caseLevel = '',
   sort = DEFAULT_CASE_SORT,
   page = 1,
   limit: limitInput = 12,
@@ -817,6 +876,7 @@ export const fetchCasesPage = async ({
   const statusFilters = normalizeStatusFilters(status);
   const visibilityFilters = normalizeVisibilityFilters(visibility);
   const auditAreaFilter = normalizeAuditAreaFilter(auditArea);
+  const caseLevelFilter = normalizeCaseLevelFilter(caseLevel);
   const sortKey = CASE_SORT_CONFIG[sort] ? sort : DEFAULT_CASE_SORT;
 
   const parsedPage = Number.parseInt(page, 10);
@@ -829,6 +889,7 @@ export const fetchCasesPage = async ({
     statusFilters,
     visibilityFilters,
     auditAreaFilter,
+    caseLevelFilter,
     sortKey,
   });
 
@@ -905,6 +966,7 @@ export const fetchCasesPage = async ({
     statusFilters,
     visibilityFilters,
     auditAreaFilter,
+    caseLevelFilter,
   };
 };
 

@@ -2,14 +2,15 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { Timestamp } from 'firebase/firestore';
 import { storage, Button, useRoute, useAuth, useModal, appId } from '../AppCore';
-import { subscribeToCase } from '../services/caseService';
+import { listStudentCases, subscribeToCase } from '../services/caseService';
 import { saveSubmission } from '../services/submissionService';
-import { saveProgress, subscribeProgressForCases } from '../services/progressService';
+import { fetchProgressForCases, saveProgress, subscribeProgressForCases } from '../services/progressService';
 import { Send, Loader2, ExternalLink, Download, BookOpen } from 'lucide-react';
 import ResultsAnalysis from '../components/trainee/ResultsAnalysis';
 import AuditItemCardFactory from '../components/trainee/AuditItemCardFactory';
 import OutstandingCheckTestingModule from '../components/trainee/OutstandingCheckTestingModule';
 import InstructionView from '../components/InstructionView';
+import { getCaseLevelLabel, normalizeCaseLevel } from '../models/caseConstants';
 
 const FLOW_STEPS = Object.freeze({
   INSTRUCTION: 'instruction',
@@ -33,7 +34,7 @@ const STEP_LABELS = {
 };
 
 const STEP_DESCRIPTIONS = {
-  [FLOW_STEPS.INSTRUCTION]: 'Review the briefing and pass the gate check.',
+  [FLOW_STEPS.INSTRUCTION]: 'Review the materials and successfully answer the knowledge check questions to access the simulation.',
   [FLOW_STEPS.SELECTION]: 'Choose which disbursements you will test.',
   [FLOW_STEPS.TESTING]: 'Allocate the amounts across each classification and review documents.',
   [FLOW_STEPS.RESULTS]: 'See a recap of your responses.',
@@ -201,6 +202,7 @@ export default function TraineeCaseViewPage({ params }) {
   const [isRetakeResetting, setIsRetakeResetting] = useState(false);
   const [saveStatus, setSaveStatus] = useState('saved');
   const [furthestStepIndex, setFurthestStepIndex] = useState(0);
+  const [levelGate, setLevelGate] = useState({ locked: false, message: '' });
 
   const lastResolvedEvidenceRef = useRef({ evidenceId: null, storagePath: null, url: null, inlineNotSupported: false });
   const progressSaveTimeoutRef = useRef(null);
@@ -214,6 +216,7 @@ export default function TraineeCaseViewPage({ params }) {
   const retakeHandledRef = useRef(false);
   const retakeResettingRef = useRef(false);
   const decisionHintTimeoutRef = useRef(null);
+  const lockNoticeRef = useRef(false);
 
   const createEmptyAllocation = useCallback(() => {
     const template = {};
@@ -355,6 +358,13 @@ export default function TraineeCaseViewPage({ params }) {
     },
     [parseAmount]
   );
+
+  const isProgressComplete = useCallback((progress) => {
+    const state = typeof progress?.state === 'string' ? progress.state.toLowerCase() : '';
+    const pct = Number(progress?.percentComplete || 0);
+    const step = typeof progress?.step === 'string' ? progress.step.toLowerCase() : '';
+    return state === 'submitted' || pct >= 100 || step === 'results';
+  }, []);
 
   useEffect(() => {
     activeStepRef.current = activeStep;
@@ -514,6 +524,70 @@ export default function TraineeCaseViewPage({ params }) {
 
     return () => unsubscribe();
   }, [caseId, userId, normalizePaymentId]);
+
+  useEffect(() => {
+    if (!caseData || !userId) return;
+    const level = normalizeCaseLevel(caseData?.caseLevel);
+    if (level === 'basic') {
+      setLevelGate({ locked: false, message: '' });
+      return;
+    }
+
+    let isActive = true;
+    const checkGate = async () => {
+      try {
+        const result = await listStudentCases({
+          appId,
+          uid: userId,
+          pageSize: 200,
+          includeOpensAtGate: false,
+          sortBy: 'due',
+        });
+        const items = Array.isArray(result?.items) ? result.items : [];
+        const caseIds = items.map((item) => item.id).filter(Boolean);
+        const progressMap = await fetchProgressForCases({ appId, uid: userId, caseIds });
+        const completion = { basic: false, intermediate: false };
+        items.forEach((item) => {
+          const progress = progressMap.get(item.id);
+          if (!isProgressComplete(progress)) return;
+          const itemLevel = normalizeCaseLevel(item.caseLevel);
+          if (itemLevel === 'basic') completion.basic = true;
+          if (itemLevel === 'intermediate') completion.intermediate = true;
+        });
+
+        let locked = false;
+        let message = '';
+        if (level === 'intermediate' && !completion.basic) {
+          locked = true;
+          message = 'Complete a Basic case to unlock Intermediate.';
+        } else if (level === 'advanced' && !completion.intermediate) {
+          locked = true;
+          message = 'Complete an Intermediate case to unlock Advanced.';
+        }
+
+        if (isActive) {
+          setLevelGate({ locked, message });
+        }
+      } catch (error) {
+        console.error('Error checking difficulty gate:', error);
+        if (isActive) {
+          setLevelGate({ locked: false, message: '' });
+        }
+      }
+    };
+
+    checkGate();
+    return () => {
+      isActive = false;
+    };
+  }, [caseData, userId, isProgressComplete]);
+
+  useEffect(() => {
+    if (!levelGate.locked || lockNoticeRef.current) return;
+    lockNoticeRef.current = true;
+    showModal(levelGate.message || 'This case is locked until prerequisite cases are completed.', 'Locked');
+    navigate('/trainee');
+  }, [levelGate, navigate, showModal]);
 
   const disbursementList = useMemo(
     () =>
@@ -1254,7 +1328,8 @@ export default function TraineeCaseViewPage({ params }) {
   };
 
   const caseTitle = caseData?.title || caseData?.caseName || 'Audit Case';
-  const caseSubtitle = '';
+  const caseLevelLabel = getCaseLevelLabel(caseData?.caseLevel);
+  const caseSubtitle = caseLevelLabel ? `Level: ${caseLevelLabel}` : '';
 
   useEffect(() => {
     sessionStorage.setItem('auditsim:moduleTitle', caseTitle);
@@ -1268,6 +1343,9 @@ export default function TraineeCaseViewPage({ params }) {
   }, [caseSubtitle, caseTitle]);
 
   if (loading) return <div className="p-4 text-center">Loading case details...</div>;
+  if (levelGate.locked) {
+    return <div className="p-4 text-center">This case is locked. {levelGate.message}</div>;
+  }
   if (!caseData) return <div className="p-4 text-center">Case not found or you may not have access. Redirecting...</div>;
 
   const isOutstandingCheckTesting =
@@ -1556,7 +1634,7 @@ export default function TraineeCaseViewPage({ params }) {
         <div>
           <h2 className="text-2xl font-semibold text-slate-900">Step 1 — Instruction</h2>
           <p className="text-sm text-slate-600">
-            Review the briefing and pass the gate check to unlock the simulation.
+            Review the materials and successfully answer the knowledge check questions to access the simulation.
           </p>
         </div>
         <InstructionView

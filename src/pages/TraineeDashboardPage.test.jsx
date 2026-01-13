@@ -9,7 +9,7 @@ jest.mock('../services/caseService', () => ({
 jest.mock('../AppCore', () => ({
   Button: ({ children, ...rest }) => <button {...rest}>{children}</button>,
   useRoute: () => ({ navigate: jest.fn() }),
-  useModal: () => ({ showModal: jest.fn() }),
+  useModal: () => ({ showModal: jest.fn(), hideModal: jest.fn() }),
   useAuth: () => ({ userId: 'u1' }),
   appId: 'test-app'
 }));
@@ -24,10 +24,10 @@ describe('TraineeDashboardPage', () => {
     jest.clearAllMocks();
   });
 
-  it('renders trainee dashboard heading', async () => {
+  it('renders trainee dashboard empty state', async () => {
     render(<TraineeDashboardPage />);
-    expect(await screen.findByText(/available audit cases/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no activities assigned yet/i)).toBeInTheDocument();
     expect(listStudentCases).toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: /view submission history/i })).toBeInTheDocument();
+    expect(screen.getByText(/current path/i)).toBeInTheDocument();
   });
 });

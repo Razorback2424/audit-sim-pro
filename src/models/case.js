@@ -1,4 +1,10 @@
-import { DEFAULT_AUDIT_AREA, DEFAULT_ITEM_TYPE, AUDIT_AREAS } from './caseConstants';
+import {
+  DEFAULT_AUDIT_AREA,
+  DEFAULT_CASE_LEVEL,
+  DEFAULT_ITEM_TYPE,
+  AUDIT_AREAS,
+  normalizeCaseLevel,
+} from './caseConstants';
 
 /**
  * @typedef {import('firebase/firestore').Timestamp} FirestoreTimestamp
@@ -101,9 +107,21 @@ import { DEFAULT_AUDIT_AREA, DEFAULT_ITEM_TYPE, AUDIT_AREAS } from './caseConsta
  * @property {Array<{ paymentId: string, storagePath: string|null, downloadURL: string|null, fileName: string|null, contentType: string|null }>} [invoiceMappings]
  * @property {CaseReferenceDocument[]} [referenceDocuments]
  * @property {string} auditArea
+ * @property {string} [caseLevel]
  * @property {string|null} [caseGroupId]
  * @property {CaseWorkpaper} [workpaper]
  * @property {CaseInstruction} [instruction]
+ * @property {string} [pathId]
+ * @property {string} [pathCategory]
+ * @property {string} [pathTitle]
+ * @property {string} [pathDescription]
+ * @property {'foundations' | 'core' | 'advanced'} [tier]
+ * @property {string} [moduleId]
+ * @property {string} [moduleTitle]
+ * @property {string} [primarySkill]
+ * @property {string[]} [secondarySkills]
+ * @property {number} [estimatedMinutes]
+ * @property {number} [orderIndex]
  */
 
 export {}; // eslint-disable-line
@@ -170,10 +188,55 @@ export const toCaseModel = (id, data) => {
       typeof sanitizedCase?.auditArea === 'string' && sanitizedCase.auditArea.trim()
         ? sanitizedCase.auditArea.trim()
         : DEFAULT_AUDIT_AREA,
+    caseLevel:
+      typeof sanitizedCase?.caseLevel === 'string' && sanitizedCase.caseLevel.trim()
+        ? normalizeCaseLevel(sanitizedCase.caseLevel)
+        : DEFAULT_CASE_LEVEL,
     caseGroupId:
       typeof sanitizedCase?.caseGroupId === 'string' && sanitizedCase.caseGroupId.trim()
         ? sanitizedCase.caseGroupId.trim()
         : null,
+    pathId:
+      typeof sanitizedCase?.pathId === 'string' && sanitizedCase.pathId.trim()
+        ? sanitizedCase.pathId.trim()
+        : null,
+    pathCategory:
+      typeof sanitizedCase?.pathCategory === 'string' && sanitizedCase.pathCategory.trim()
+        ? sanitizedCase.pathCategory.trim()
+        : null,
+    pathTitle:
+      typeof sanitizedCase?.pathTitle === 'string' && sanitizedCase.pathTitle.trim()
+        ? sanitizedCase.pathTitle.trim()
+        : '',
+    pathDescription:
+      typeof sanitizedCase?.pathDescription === 'string' && sanitizedCase.pathDescription.trim()
+        ? sanitizedCase.pathDescription.trim()
+        : '',
+    tier:
+      typeof sanitizedCase?.tier === 'string' && sanitizedCase.tier.trim()
+        ? sanitizedCase.tier.trim().toLowerCase()
+        : null,
+    moduleId:
+      typeof sanitizedCase?.moduleId === 'string' && sanitizedCase.moduleId.trim()
+        ? sanitizedCase.moduleId.trim()
+        : null,
+    moduleTitle:
+      typeof sanitizedCase?.moduleTitle === 'string' && sanitizedCase.moduleTitle.trim()
+        ? sanitizedCase.moduleTitle.trim()
+        : '',
+    primarySkill:
+      typeof sanitizedCase?.primarySkill === 'string' && sanitizedCase.primarySkill.trim()
+        ? sanitizedCase.primarySkill.trim()
+        : '',
+    secondarySkills: Array.isArray(sanitizedCase?.secondarySkills)
+      ? sanitizedCase.secondarySkills.filter((skill) => typeof skill === 'string' && skill.trim())
+      : [],
+    estimatedMinutes: Number.isFinite(Number(sanitizedCase?.estimatedMinutes))
+      ? Number(sanitizedCase.estimatedMinutes)
+      : null,
+    orderIndex: Number.isFinite(Number(sanitizedCase?.orderIndex))
+      ? Number(sanitizedCase.orderIndex)
+      : null,
     workpaper:
       sanitizedCase?.workpaper && typeof sanitizedCase.workpaper === 'object'
         ? {

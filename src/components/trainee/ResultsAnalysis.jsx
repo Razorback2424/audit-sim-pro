@@ -196,10 +196,11 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
   const [highlightError, setHighlightError] = useState('');
   const [highlightInlineNotSupported, setHighlightInlineNotSupported] = useState(false);
 
-  const { traps, decoys, issues, falsePositiveCount } = useMemo(() => {
+  const { traps, decoys, issues, falsePositiveCount, caughtTraps } = useMemo(() => {
     const traps = [];
     const decoys = [];
     const issues = [];
+    const caughtTraps = [];
     let falsePositiveCount = 0;
 
     (disbursements || []).forEach((item) => {
@@ -234,7 +235,11 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
               studentDecision,
               correctDecision,
             });
+          } else {
+            caughtTraps.push({ item, studentDecision, correctDecision });
           }
+        } else {
+          caughtTraps.push({ item, studentDecision, correctDecision });
         }
       } else {
         decoys.push(item);
@@ -242,7 +247,7 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
       }
     });
 
-    return { traps, decoys, issues, falsePositiveCount };
+    return { traps, decoys, issues, falsePositiveCount, caughtTraps };
   }, [disbursements, studentAnswers]);
 
   const currentIssue = issues[activeIssueIndex] || null;
@@ -545,6 +550,50 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
           ) : null}
         </div>
       )}
+
+      {caughtTraps.length > 0 ? (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
+            <div className="text-xs font-semibold uppercase tracking-wide text-gray-600">Good catches</div>
+            <div className="text-sm text-gray-800">You flagged these traps correctly.</div>
+          </div>
+          <div className="divide-y divide-gray-200">
+            {caughtTraps.map(({ item, correctDecision }, index) => {
+              const correctLabel = correctDecisionLabel({ item, correctDecision });
+              return (
+                <div key={item.paymentId || item.id || index} className="px-6 py-5 space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-2">
+                    <div>
+                      <div className="text-lg font-semibold text-gray-900">{item?.payee || 'Vendor'}</div>
+                      {item?.paymentId ? (
+                        <div className="text-xs text-gray-500">Payment ID: {item.paymentId}</div>
+                      ) : null}
+                    </div>
+                    <div className="text-lg font-bold text-emerald-700">
+                      {currencyFormatter.format(Number(item?.amount) || 0)}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+                    Good catch — you flagged this as an exception.
+                  </div>
+                  <div>
+                    <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Why it was a trap</div>
+                    <p className="mt-2 text-sm text-gray-800 leading-relaxed">
+                      {item?.answerKey?.explanation || 'No explanation provided yet for this item.'}
+                    </p>
+                  </div>
+                  {correctLabel !== 'Unclassified' ? (
+                    <div className="text-sm text-gray-700">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Correct call</span>{' '}
+                      <span className="ml-2 font-semibold text-gray-900">{correctLabel}</span>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
 
       {decoys.length > 0 ? (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">

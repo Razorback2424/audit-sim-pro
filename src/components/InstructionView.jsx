@@ -149,25 +149,10 @@ const InstructionView = ({
           ) : null}
         </div>
         <h1 className="text-3xl font-bold text-gray-900">{instructionData?.title || 'Mission Briefing'}</h1>
-        {instructionData?.hook?.body ? (
-          <p className="text-gray-600 text-lg leading-relaxed">{instructionData.hook.body}</p>
-        ) : null}
       </header>
 
       <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
         <section className="xl:col-span-3 space-y-4">
-          <div className="rounded-xl border border-blue-100 bg-blue-50 px-5 py-4">
-            <p className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-1">Hook</p>
-            <p className="text-blue-900 text-base leading-relaxed">
-              {instructionData?.hook?.headline || instructionData?.hook?.title || 'Why this matters'}
-            </p>
-            {instructionData?.hook?.risk ? (
-              <p className="text-sm text-blue-800 mt-2">
-                Risk: <span className="font-semibold">{instructionData.hook.risk}</span>
-              </p>
-            ) : null}
-          </div>
-
           <div className="rounded-xl border border-gray-200 bg-gray-50 p-4 min-h-[280px]">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Visual Model</p>
             <div className="aspect-video">{renderVisualAsset()}</div>
@@ -175,16 +160,6 @@ const InstructionView = ({
         </section>
 
         <aside className="xl:col-span-2 space-y-4">
-          <div className="rounded-xl border border-amber-100 bg-amber-50 px-5 py-4">
-            <p className="text-xs font-semibold text-amber-700 uppercase tracking-wide mb-2">Heuristic</p>
-            <p className="text-lg font-semibold text-amber-900">
-              {instructionData?.heuristic?.rule_text || instructionData?.heuristic?.ruleText || 'Insert the golden rule for this trap.'}
-            </p>
-            {instructionData?.heuristic?.reminder ? (
-              <p className="mt-2 text-sm text-amber-800">{instructionData.heuristic.reminder}</p>
-            ) : null}
-          </div>
-
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm space-y-4">
             <div className="flex items-center justify-between">
               <div>

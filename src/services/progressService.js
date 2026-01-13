@@ -18,6 +18,8 @@ const RETRY_DELAY_MS = 500;
 
 const offlineQueue = new Map();
 
+const isRecord = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
+
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   const markerKey = '__auditsimProgressOnlineListenerBound';
   if (!window[markerKey]) {
@@ -198,6 +200,7 @@ export const saveProgress = async ({ appId, uid, caseId, patch, forceOverwrite =
     try {
       const serverDoc = await getDoc(progressRef);
       const serverData = serverDoc.data();
+      const serverHasSuccess = Boolean(serverData?.hasSuccessfulAttempt);
 
       const serverUpdatedAtMs =
         serverData?.updatedAt && typeof serverData.updatedAt.toMillis === 'function'
@@ -215,6 +218,26 @@ export const saveProgress = async ({ appId, uid, caseId, patch, forceOverwrite =
         } else {
           patch.state = 'not_started';
         }
+      }
+
+      if (patch.hasSuccessfulAttempt === undefined) {
+        const inferredSuccess =
+          state === 'submitted' || patch.percentComplete >= 100 || patch.step === 'results';
+        patch.hasSuccessfulAttempt = serverHasSuccess || inferredSuccess;
+      } else if (!forceOverwrite && serverHasSuccess) {
+        patch.hasSuccessfulAttempt = true;
+      }
+
+      if (patch.activeAttempt === undefined && isRecord(patch.draft)) {
+        patch.activeAttempt = {
+          draft: patch.draft,
+          updatedAt: serverTimestamp(),
+        };
+      } else if (isRecord(patch.activeAttempt) && !patch.activeAttempt.updatedAt) {
+        patch.activeAttempt = {
+          ...patch.activeAttempt,
+          updatedAt: serverTimestamp(),
+        };
       }
 
       await setDoc(progressRef, { ...patch, state, updatedAt: serverTimestamp() }, { merge: true });
