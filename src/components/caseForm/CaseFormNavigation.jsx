@@ -164,33 +164,25 @@ function ReviewStep({
   reviewChecklist = [],
   allChecklistItemsReady = true,
   generationReview = null,
+  onQueueGeneration,
+  isQueueing = false,
 }) {
-  const formatDateTime = (value) => {
-    if (!value) return 'Not set';
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return 'Not set';
-    return new Intl.DateTimeFormat(undefined, {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    }).format(date);
-  };
-
-  const audienceLabel = summaryData.publicVisible
-    ? 'Visible to all trainees'
-    : `${summaryData.selectedUserIds.length} specific user${summaryData.selectedUserIds.length === 1 ? '' : 's'}`;
   const generationTotal = summaryData.generationTotalCount || 0;
   const generationPending = summaryData.generationPendingCount || 0;
   const generationReady = Math.max(0, generationTotal - generationPending);
   const generationPct = generationTotal > 0 ? Math.round((generationReady / generationTotal) * 100) : 0;
+  const shouldOfferQueue =
+    !!onQueueGeneration &&
+    (!generationReview || (Array.isArray(generationReview.invoices) && generationReview.invoices.length === 0));
 
   return (
     <div className="space-y-6">
       <StepIntro
         title="Before you publish"
         items={[
-          'Double-check the basics and audience visibility.',
-          'Confirm transactions and answer keys are complete.',
-          'Ensure reference documents are uploaded and accessible.',
+          'Confirm the basics and generation plan.',
+          'Make sure the instruction video and gate check are ready.',
+          'Validate the reference documents are attached.',
         ]}
       />
 
@@ -201,28 +193,17 @@ function ReviewStep({
             <span className="text-xs uppercase tracking-wide text-gray-500">Case</span>
             <h3 className="text-lg font-semibold text-gray-900">{summaryData.caseName || 'Untitled Case'}</h3>
             <p className="mt-1 text-sm text-gray-500 capitalize">Status: {summaryData.status}</p>
+            <p className="mt-1 text-sm text-gray-500">
+              Type: {summaryData.caseTypeLabel || summaryData.auditArea || '—'} · Level:{' '}
+              {(summaryData.caseLevel || '').charAt(0).toUpperCase()}
+              {(summaryData.caseLevel || '').slice(1) || '—'} · Year-End: {summaryData.yearEnd || '—'}
+            </p>
           </div>
 
           <div className="rounded-lg border border-gray-100 bg-gray-50 p-3">
-            <span className="text-xs uppercase tracking-wide text-gray-500">Audience</span>
-            <h3 className="text-lg font-semibold text-gray-900">{audienceLabel}</h3>
-            <p className="mt-1 text-sm text-gray-500">
-              Opens: {formatDateTime(summaryData.opensAtStr)} · Due: {formatDateTime(summaryData.dueAtStr)}
-            </p>
-            {!summaryData.publicVisible && summaryData.selectedUserIds.length > 0 ? (
-              <ul className="mt-2 flex flex-wrap gap-2 text-xs text-gray-600">
-                {summaryData.selectedUserIds.slice(0, 6).map((id) => (
-                  <li key={id} className="rounded bg-white px-2 py-1 shadow-sm">
-                    {id}
-                  </li>
-                ))}
-                {summaryData.selectedUserIds.length > 6 ? (
-                  <li className="rounded bg-white px-2 py-1 shadow-sm text-gray-500">
-                    +{summaryData.selectedUserIds.length - 6} more
-                  </li>
-                ) : null}
-              </ul>
-            ) : null}
+            <span className="text-xs uppercase tracking-wide text-gray-500">Publishing</span>
+            <h3 className="text-lg font-semibold text-gray-900">Visible to all trainees</h3>
+            <p className="mt-1 text-sm text-gray-500">Opens on publish · No due date</p>
           </div>
         </div>
 
@@ -257,6 +238,25 @@ function ReviewStep({
           </div>
         ) : null}
       </div>
+
+      {shouldOfferQueue ? (
+        <div className="rounded-lg border border-dashed border-gray-300 bg-white p-4 text-sm text-gray-600">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="font-semibold text-gray-800">Reference documents pending</p>
+              <p className="mt-1">Queue document generation to build invoice PDFs.</p>
+            </div>
+            <button
+              type="button"
+              onClick={onQueueGeneration}
+              disabled={isQueueing}
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {isQueueing ? 'Queueing…' : 'Queue Document Generation'}
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {generationReview ? (
         <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
@@ -371,6 +371,11 @@ function ReviewStep({
                         >
                           {invoice.isRecorded ? 'Recorded' : 'Not recorded'}
                         </span>
+                        {invoice.templateId ? (
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 font-semibold text-slate-600">
+                            {invoice.templateId}
+                          </span>
+                        ) : null}
                         {invoice.downloadURL ? (
                           <a
                             href={invoice.downloadURL}
@@ -438,7 +443,11 @@ function ReviewStep({
                   generationReview.jobStatus.errors.length > 0 ? (
                     <ul className="mt-2 list-disc pl-4">
                       {generationReview.jobStatus.errors.map((err, index) => (
-                        <li key={index}>{err?.error || 'Generation error'}</li>
+                        <li key={index}>
+                          {err?.fileName ? `${err.fileName}: ` : ''}
+                          {err?.templateId ? `${err.templateId} · ` : ''}
+                          {err?.error || 'Generation error'}
+                        </li>
                       ))}
                     </ul>
                   ) : null}

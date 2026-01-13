@@ -1,3 +1,6 @@
+const fs = require('fs');
+const path = require('path');
+
 const escapeHtml = (value) => {
   if (value === null || value === undefined) return '';
   return String(value)
@@ -19,6 +22,18 @@ const computeTotals = ({ items = [], taxRate = 0, shipping = 0 }) => {
   const tax = subtotal * Number(taxRate || 0);
   const ship = Number(shipping || 0);
   return { subtotal, tax, ship, grandTotal: subtotal + tax + ship };
+};
+
+const moneyNumber = (value, { minimumFractionDigits = 2, maximumFractionDigits = 2 } = {}) =>
+  Number(value || 0).toLocaleString('en-US', { minimumFractionDigits, maximumFractionDigits });
+
+const formatTaxPercent = (rate) => {
+  const percent = Number(rate || 0) * 100;
+  const rounded = Math.round(percent * 100) / 100;
+  if (Math.abs(rounded - Math.round(rounded)) < 0.005) {
+    return String(Math.round(rounded));
+  }
+  return rounded.toFixed(2);
 };
 
 const renderPromotadorInvoiceV1 = ({ data = {}, theme = {}, layout = {} }) => {
@@ -56,10 +71,10 @@ const renderPromotadorInvoiceV1 = ({ data = {}, theme = {}, layout = {} }) => {
 
   const l = {
     pageMargin: '0.65in',
-    colDesc: '52%',
+    colDesc: '50%',
     colQty: '12%',
     colPrice: '18%',
-    colTotal: '18%',
+    colTotal: '20%',
     ...layout,
   };
 
@@ -108,7 +123,11 @@ const renderPromotadorInvoiceV1 = ({ data = {}, theme = {}, layout = {} }) => {
         <div class="shipping">
           <div class="labelStrong">Shipping Info:</div>
           <div class="blockText">
-            <span class="mutedLabel">Date Shipped:</span> ${escapeHtml(shippingInfo.dateShipped)}<br />
+            <span class="mutedLabel">${escapeHtml(
+              shippingInfo.dateLabel || 'Date Shipped'
+            )}:</span> ${escapeHtml(
+              shippingInfo.dateValue || shippingInfo.dateShipped
+            )}<br />
             <span class="mutedLabel">Shipping Terms:</span> ${escapeHtml(shippingInfo.terms)}
           </div>
         </div>
@@ -143,7 +162,7 @@ const renderPromotadorInvoiceV1 = ({ data = {}, theme = {}, layout = {} }) => {
             <tr class="totalsRow">
               <td class="cDesc totalsSpacer"></td>
               <td class="cQty totalsSpacer"></td>
-              <td class="cPrice totalsLabel">TAX (${Math.round(taxRate * 100)}%)</td>
+              <td class="cPrice totalsLabel">TAX (${formatTaxPercent(taxRate)}%)</td>
               <td class="cTotal totalsValue">${escapeHtml(money(totals.tax, currency))}</td>
             </tr>
             <tr class="totalsRow">
@@ -305,6 +324,10 @@ body { color: ${t.ink}; font-family: system-ui, -apple-system, Segoe UI, Roboto,
   font-size: 24px;
   border-bottom: 2px solid ${t.ink};
 }
+.items tfoot td.cPrice,
+.items tfoot td.cTotal {
+  padding-right: 10px;
+}
 
 .items tfoot tr:first-child td { border-top: 2px solid ${t.ink}; }
 
@@ -314,7 +337,678 @@ body { color: ${t.ink}; font-family: system-ui, -apple-system, Segoe UI, Roboto,
 .totalsRow.grand .totalsLabel,
 .totalsRow.grand .totalsValue {
   font-weight: 900;
-  font-size: 28px;
+  font-size: 26px;
+}
+`;
+
+  return { html, css, pdfOptions: { format: 'Letter' } };
+};
+
+const renderEndeavorrInvoiceV1 = ({ data = {}, theme = {}, layout = {} }) => {
+  const {
+    brandName = 'ENDEAVORR',
+    invoiceNumber = '',
+    invoiceDate = '',
+    issuedTo = {},
+    shippingInfo = {},
+    items = [],
+    taxRate = 0.05,
+    shipping = 0,
+  } = data || {};
+
+  const totals = computeTotals({ items, taxRate, shipping });
+  const dataInvoiceTotal = Number(data?.invoiceTotal);
+  if (Number.isFinite(dataInvoiceTotal)) {
+    const adjustedSubtotal = dataInvoiceTotal - totals.tax - totals.ship;
+    if (adjustedSubtotal >= 0) {
+      totals.subtotal = adjustedSubtotal;
+      totals.grandTotal = dataInvoiceTotal;
+    }
+  }
+
+  const t = {
+    ink: '#111',
+    muted: '#5c5c5c',
+    rule: '#c9c2bf',
+    tableBorder: '#b9b1ad',
+    hdrBg: '#ded4cf',
+    totalBg: '#b1aba7',
+    ...theme,
+  };
+
+  const l = {
+    pageWidth: '8.5in',
+    pageHeight: '11in',
+    contentSide: '0.85in',
+    contentTop: '1.15in',
+    contentBottom: '0.85in',
+    ...layout,
+  };
+
+  const itemCount = Math.max(1, Array.isArray(items) ? items.length : 0);
+  const spacerHeight = Math.max(0, 3.85 - Math.max(0, itemCount - 2) * 1.18);
+  const brandText = escapeHtml(brandName);
+  const brandLength = String(brandName || '').replace(/\s+/g, '').length;
+  const brandClass =
+    brandLength > 20 ? 'brand tiny' : brandLength > 14 ? 'brand small' : 'brand';
+
+  const issuedLines = [
+    issuedTo.name ? `<div class="name">${escapeHtml(issuedTo.name)}</div>` : '',
+    issuedTo.line1 ? `<div>${escapeHtml(issuedTo.line1)}</div>` : '',
+    issuedTo.line2 ? `<div>${escapeHtml(issuedTo.line2)}</div>` : '',
+    issuedTo.line3 ? `<div>${escapeHtml(issuedTo.line3)}</div>` : '',
+  ]
+    .filter(Boolean)
+    .join('');
+
+  const rowsHtml = items
+    .map((item, index) => {
+      const description = escapeHtml(item.description || '').replace(/\n/g, '<br />');
+      const lineTotal = Number(item.qty || 0) * Number(item.unitPrice || 0);
+      return `
+        <tr>
+          <td class="mono cell-center">${index + 1}</td>
+          <td class="mono desc">${description}</td>
+          <td class="mono cell-center">${escapeHtml(item.qty)}</td>
+          <td class="mono money"><span class="dollar">$</span>${escapeHtml(
+            moneyNumber(item.unitPrice, { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+          )}</td>
+          <td class="mono money"><span class="dollar">$</span>${escapeHtml(moneyNumber(lineTotal))}</td>
+        </tr>`;
+    })
+    .join('');
+
+  const html = `
+    <div class="page" role="document" aria-label="Invoice ${escapeHtml(invoiceNumber)}">
+      <div class="invoice-no">
+        <div class="label">Invoice No:</div>
+        <div class="value">#${escapeHtml(invoiceNumber)}</div>
+      </div>
+
+      <div class="content">
+        <div class="brand-row">
+          <div class="${brandClass}">${brandText}</div>
+          <div class="brand-rule"></div>
+        </div>
+
+        <div class="details">
+          <div>
+            <div class="detail-label">Invoice Date:</div>
+            <div class="detail-value">${escapeHtml(invoiceDate)}</div>
+
+            <div class="detail-label">${escapeHtml(
+              shippingInfo.dateLabel || 'Date Shipped'
+            )}:</div>
+            <div class="detail-value">${escapeHtml(
+              shippingInfo.dateValue || shippingInfo.dateShipped
+            )}</div>
+
+            <div class="detail-label">FOB:</div>
+            <div class="detail-value">${escapeHtml(shippingInfo.terms || 'Shipping Point')}</div>
+          </div>
+
+          <div>
+            <div class="detail-label">Issued to:</div>
+            <div class="detail-value">${issuedLines}</div>
+          </div>
+        </div>
+
+        <div class="items-wrap">
+          <table class="items" aria-label="Invoice line items">
+            <thead>
+              <tr>
+                <th class="c-no">NO</th>
+                <th class="c-desc">DESCRIPTION</th>
+                <th class="c-qty">QTY</th>
+                <th class="c-price">PRICE</th>
+                <th class="c-sub">SUBTOTAL</th>
+              </tr>
+            </thead>
+
+            <tbody>
+              ${rowsHtml}
+              <tr class="spacer" style="--spacer-height: ${spacerHeight}in;">
+                <td></td>
+                <td></td>
+                <td></td>
+                <td></td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="totals-block">
+            <div class="totals-row">
+              <div class="label">Subtotal</div>
+              <div class="value"><span class="dollar">$</span>${escapeHtml(moneyNumber(totals.subtotal))}</div>
+            </div>
+            <div class="totals-row">
+              <div class="label">Shipping and Handling</div>
+              <div class="value"><span class="dollar">$</span>${escapeHtml(moneyNumber(totals.ship))}</div>
+            </div>
+            <div class="totals-row">
+              <div class="label">Sales Tax (${formatTaxPercent(taxRate)}%)</div>
+              <div class="value"><span class="dollar">$</span>${escapeHtml(moneyNumber(totals.tax))}</div>
+            </div>
+            <div class="totals-row grand">
+              <div class="label">Grand Total</div>
+              <div class="value"><span class="dollar">$</span>${escapeHtml(
+                moneyNumber(totals.grandTotal)
+              )}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const css = `
+@page { size: Letter; margin: 0; }
+html, body { margin: 0; padding: 0; }
+body { background: #fff; color: ${t.ink}; }
+
+.page{
+  width: ${l.pageWidth};
+  min-height: ${l.pageHeight};
+  background: #fff;
+  margin: 0 auto;
+  position: relative;
+  overflow: visible;
+}
+
+.invoice-no{
+  position: absolute;
+  top: 0.55in;
+  right: ${l.contentSide};
+  text-align: right;
+  font-family: "Montserrat", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  letter-spacing: .12em;
+  color: #2d2d2d;
+}
+.invoice-no .label{
+  font-size: 12px;
+  font-weight: 400;
+}
+.invoice-no .value{
+  margin-top: 12px;
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: .16em;
+}
+
+.content{
+  padding: ${l.contentTop} ${l.contentSide} ${l.contentBottom};
+}
+
+.brand-row{
+  display: flex;
+  align-items: center;
+  gap: 22px;
+}
+.brand{
+  font-family: "Montserrat", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  font-size: 62px;
+  font-weight: 300;
+  letter-spacing: .22em;
+  color: #1a1a1a;
+  line-height: 1;
+  max-width: 100%;
+  white-space: normal;
+  word-break: break-word;
+}
+.brand.small{
+  font-size: 50px;
+  letter-spacing: .18em;
+}
+.brand.tiny{
+  font-size: 42px;
+  letter-spacing: .14em;
+}
+.brand-rule{
+  flex: 1;
+  height: 1px;
+  background: ${t.rule};
+  margin-top: 10px;
+}
+
+.details{
+  margin-top: 32px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 1.55in;
+}
+
+.detail-label{
+  font-family: "Montserrat", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  font-size: 14px;
+  letter-spacing: .12em;
+  color: #2d2d2d;
+  margin-bottom: 10px;
+}
+.detail-value{
+  font-family: "Courier Prime", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+  font-size: 18px;
+  letter-spacing: .06em;
+  color: #111;
+  line-height: 1.55;
+  margin-bottom: 18px;
+}
+
+.items-wrap{
+  margin-top: 30px;
+}
+
+table.items{
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  border: 1px solid ${t.tableBorder};
+}
+
+table.items thead th{
+  background: ${t.hdrBg};
+  font-family: "Montserrat", system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: #3a3a3a;
+  padding: 18px 12px;
+  border-right: 1px solid ${t.tableBorder};
+}
+table.items thead th:last-child{ border-right: 0; }
+
+table.items tbody td{
+  border-right: 1px solid ${t.tableBorder};
+  vertical-align: top;
+  padding: 20px 14px;
+  min-height: 1.18in;
+}
+table.items tbody tr:nth-child(1) td{ padding-top: 22px; }
+table.items tbody td:last-child{ border-right: 0; }
+table.items tbody tr + tr td{ border-top: 0; }
+
+.c-no{ width: 7%; }
+.c-desc{ width: 45%; }
+.c-qty{ width: 10%; }
+.c-price{ width: 15%; }
+.c-sub{ width: 23%; }
+
+.mono{
+  font-family: "Courier Prime", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+  letter-spacing: .06em;
+}
+.desc{
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.25;
+  padding-right: 8px;
+}
+.cell-center{
+  text-align: center;
+  font-size: 18px;
+}
+.money{
+  font-size: 18px;
+  text-align: right;
+  white-space: nowrap;
+}
+.money .dollar{ padding-right: 10px; }
+
+tr.spacer td{
+  height: var(--spacer-height, 3.85in);
+  padding: 0;
+  page-break-inside: avoid;
+  break-inside: avoid;
+}
+
+.totals-block{
+  margin-top: 0;
+  border-left: 1px solid ${t.tableBorder};
+  border-right: 1px solid ${t.tableBorder};
+  border-bottom: 1px solid ${t.tableBorder};
+  background: ${t.totalBg};
+  font-family: "Courier Prime", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+  letter-spacing: .06em;
+  color: #171717;
+}
+.totals-row{
+  display: flex;
+  justify-content: space-between;
+  padding: 14px 48px;
+  border-top: 1px solid ${t.tableBorder};
+  font-size: 18px;
+}
+.totals-row:first-child{ border-top: 0; }
+.totals-row .label{
+  text-transform: uppercase;
+  letter-spacing: .14em;
+  font-size: 14px;
+}
+.totals-row .value{
+  white-space: nowrap;
+  font-weight: 600;
+}
+.totals-row .dollar{ padding-right: 10px; }
+.totals-row.grand{
+  font-size: 22px;
+  font-weight: 700;
+}
+.totals-row.grand .label{
+  font-size: 20px;
+  letter-spacing: .12em;
+  text-transform: none;
+}
+`;
+
+  return { html, css, pdfOptions: { format: 'Letter' } };
+};
+
+const renderGlamitInvoiceV1 = ({ data = {}, theme = {}, layout = {} }) => {
+  const {
+    brandName = 'GLAMIT',
+    invoiceNumber = '',
+    invoiceDate = '',
+    dueDate = '',
+    issuedTo = {},
+    shippingInfo = {},
+    items = [],
+    taxRate = 0.05,
+    shipping = 0,
+  } = data || {};
+
+  const totals = computeTotals({ items, taxRate, shipping });
+  const resolvedDueDate = dueDate || invoiceDate;
+  const dataInvoiceTotal = Number(data?.invoiceTotal);
+  if (Number.isFinite(dataInvoiceTotal)) {
+    const adjustedSubtotal = dataInvoiceTotal - totals.tax - totals.ship;
+    if (adjustedSubtotal >= 0) {
+      totals.subtotal = adjustedSubtotal;
+      totals.grandTotal = dataInvoiceTotal;
+    }
+  }
+
+  const t = {
+    ink: '#111',
+    muted: '#666',
+    rule: '#d9d9d9',
+    ...theme,
+  };
+
+  const l = {
+    pageWidth: '8.5in',
+    pageHeight: '11in',
+    pad: '0.65in',
+    ...layout,
+  };
+
+  const issuedLines = [
+    issuedTo.name ? `<div class="name">${escapeHtml(issuedTo.name)}</div>` : '',
+    issuedTo.line1 ? `<div>${escapeHtml(issuedTo.line1)}</div>` : '',
+    issuedTo.line2 ? `<div>${escapeHtml(issuedTo.line2)}</div>` : '',
+    issuedTo.line3 ? `<div>${escapeHtml(issuedTo.line3)}</div>` : '',
+  ]
+    .filter(Boolean)
+    .join('');
+
+  const rowsHtml = items
+    .map((item) => {
+      const description = escapeHtml(item.description || '').replace(/\n/g, '<br />');
+      const lineTotal = Number(item.qty || 0) * Number(item.unitPrice || 0);
+      return `
+        <tr>
+          <td class="desc"><span class="qty-inline">${escapeHtml(item.qty)}</span><span class="desc-text">${description}</span></td>
+          <td class="price num"><span class="dollar">$</span>${escapeHtml(
+            moneyNumber(item.unitPrice, { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+          )}</td>
+          <td class="sub num"><span class="dollar">$</span>${escapeHtml(moneyNumber(lineTotal))}</td>
+        </tr>`;
+    })
+    .join('');
+
+  const html = `
+    <div class="page" role="document" aria-label="Invoice ${escapeHtml(invoiceNumber)}">
+      <div class="top">
+        <div>
+          <h1 class="brand">${escapeHtml(brandName)}</h1>
+        </div>
+
+        <div class="meta">
+          <div><span class="label">Invoice:</span><span class="value">${escapeHtml(
+            invoiceNumber
+          )}</span></div>
+          <div><span class="label">Invoice Date:</span><span class="value">${escapeHtml(
+            invoiceDate
+          )}</span></div>
+          <div><span class="label">Due Date:</span><span class="value">${escapeHtml(
+            resolvedDueDate
+          )}</span></div>
+        </div>
+      </div>
+
+      <div class="rule"></div>
+
+      <div class="mid">
+        <div>
+          <div class="section-title">Bill To:</div>
+          <div class="billto">${issuedLines}</div>
+        </div>
+        <div class="shipping">
+          <div class="section-title">Shipping Terms:</div>
+          <div class="shipping-value">${escapeHtml(shippingInfo.terms)}</div>
+          <div class="section-title shipping-title">${escapeHtml(
+            shippingInfo.dateLabel || 'Shipping Date'
+          )}:</div>
+          <div class="shipping-value">${escapeHtml(
+            shippingInfo.dateValue || shippingInfo.dateShipped
+          )}</div>
+        </div>
+      </div>
+
+      <table aria-label="Invoice line items">
+        <thead>
+          <tr>
+            <th class="desc">DESCRIPTION</th>
+            <th class="price num">PRICE</th>
+            <th class="sub num">SUBTOTAL</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}
+        </tbody>
+      </table>
+
+      <div class="totals" aria-label="Invoice totals">
+        <div class="totals-row"><div class="k">Subtotal:</div><div class="v"><span class="dollar">$</span>${escapeHtml(
+          moneyNumber(totals.subtotal)
+        )}</div></div>
+        <div class="totals-row"><div class="k">Shipping:</div><div class="v"><span class="dollar">$</span>${escapeHtml(
+          moneyNumber(totals.ship)
+        )}</div></div>
+        <div class="totals-row"><div class="k">Sales Tax (${formatTaxPercent(
+          taxRate
+        )}%):</div><div class="v"><span class="dollar">$</span>${escapeHtml(
+          moneyNumber(totals.tax)
+        )}</div></div>
+        <div class="totals-row grand"><div class="k">Grand Total:</div><div class="v"><span class="dollar">$</span>${escapeHtml(
+          moneyNumber(totals.grandTotal)
+        )}</div></div>
+      </div>
+    </div>
+  `;
+
+  const css = `
+@page { size: Letter; margin: 0; }
+html, body { margin: 0; padding: 0; }
+body { background: #fff; color: ${t.ink}; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+
+.page{
+  width: ${l.pageWidth};
+  min-height: ${l.pageHeight};
+  background: #fff;
+  padding: ${l.pad};
+  position: relative;
+}
+
+.top{
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: 16px;
+  align-items: start;
+  margin-bottom: 6px;
+}
+
+.brand{
+  font-size: 54px;
+  font-weight: 700;
+  letter-spacing: .4px;
+  margin: 0;
+  line-height: 1;
+  font-family: "Segoe Script", "Brush Script MT", "Comic Sans MS", cursive;
+}
+
+.meta{
+  justify-self: end;
+  text-align: right;
+  font-size: 13px;
+  line-height: 1.25;
+}
+
+.meta .label{
+  color: ${t.ink};
+  font-size: 13px;
+  font-weight: 700;
+  margin-right: 6px;
+}
+.meta .value{
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 13px;
+}
+
+.mid{
+  display: grid;
+  grid-template-columns: 1fr 0.9fr;
+  gap: 20px;
+  margin-top: 10px;
+  margin-bottom: 12px;
+  align-items: start;
+}
+
+.section-title{
+  font-size: 12px;
+  letter-spacing: .6px;
+  text-transform: uppercase;
+  font-weight: 700;
+  margin: 10px 0 6px;
+}
+
+.billto{
+  font-size: 14px;
+  line-height: 1.35;
+}
+.billto .name{
+  font-weight: 700;
+}
+
+.shipping{
+  font-size: 13px;
+  line-height: 1.35;
+  text-align: right;
+}
+.shipping .section-title{
+  margin: 0 0 4px;
+}
+.shipping-title{
+  margin-top: 12px;
+}
+.shipping-value{
+  font-size: 13px;
+}
+
+.rule{
+  height: 1px;
+  background: ${t.rule};
+  margin: 14px 0;
+}
+
+table{
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+thead th{
+  text-align: left;
+  color: ${t.muted};
+  font-weight: 700;
+  font-size: 12px;
+  padding: 10px 8px;
+  border-bottom: 1px solid ${t.rule};
+  letter-spacing: .4px;
+}
+tbody td{
+  padding: 12px 8px;
+  border-bottom: 1px solid #efefef;
+  vertical-align: top;
+}
+tbody tr:last-child td{
+  border-bottom: 1px solid ${t.rule};
+}
+.num{ text-align: right; font-variant-numeric: tabular-nums; }
+.desc{ width: 56%; }
+.price{ width: 22%; }
+.sub{ width: 22%; }
+.dollar{ padding-right: 6px; }
+.qty-inline{
+  display: inline-block;
+  min-width: 44px;
+  font-variant-numeric: tabular-nums;
+}
+.desc-text{
+  padding-left: 6px;
+}
+
+.totals{
+  margin-top: 18px;
+  margin-left: auto;
+  width: 100%;
+  max-width: 260px;
+  font-size: 13px;
+}
+.totals-row{
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+.totals-row:last-child{ border-bottom: none; }
+.totals-row .k{
+  color: ${t.muted};
+  font-size: 12px;
+  letter-spacing: .3px;
+  text-transform: uppercase;
+  font-weight: 700;
+  text-align: right;
+}
+.totals-row .v{
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.totals-row.grand{
+  margin-top: 6px;
+  padding-top: 10px;
+  border-top: 1px solid ${t.rule};
+}
+.totals-row.grand .k{
+  color: ${t.ink};
+  font-size: 13px;
+}
+.totals-row.grand .v{
+  font-weight: 800;
+  font-size: 15px;
 }
 `;
 
@@ -452,9 +1146,41 @@ body { color: ${t.ink}; font-family: "Times New Roman", Times, serif; }
 };
 
 const TEMPLATE_REGISTRY = {
+  'invoice.endeavorr.v1': renderEndeavorrInvoiceV1,
+  'invoice.glamit.v1': renderGlamitInvoiceV1,
   'invoice.promotador.v1': renderPromotadorInvoiceV1,
   'refdoc.ap-aging.v1': renderApAgingSummaryV1,
 };
+
+const resolveTemplateIds = () => {
+  const candidates = [
+    path.resolve(__dirname, '../shared/pdfTemplateIds.json'),
+    path.resolve(__dirname, './shared/pdfTemplateIds.json'),
+  ];
+  const match = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!match) {
+    return null;
+  }
+  return JSON.parse(fs.readFileSync(match, 'utf8'));
+};
+
+const registryIds = Object.keys(TEMPLATE_REGISTRY);
+const templateIds = resolveTemplateIds();
+if (templateIds) {
+  const missing = templateIds.filter((id) => !TEMPLATE_REGISTRY[id]);
+  const extras = registryIds.filter((id) => !templateIds.includes(id));
+  if (missing.length || extras.length) {
+    throw new Error(
+      `Template registry mismatch. Missing: ${missing.join(', ') || 'none'}; Extra: ${
+        extras.join(', ') || 'none'
+      }.`
+    );
+  }
+} else {
+  console.warn(
+    '[pdfTemplates] pdfTemplateIds.json not found; using registry defaults.'
+  );
+}
 
 const getTemplateRenderer = (templateId) => {
   const renderer = TEMPLATE_REGISTRY[templateId];

@@ -53,14 +53,69 @@ describe('surlPromotadorCutoffV1 recipe validator', () => {
       expect(daysAfter).toBeLessThanOrEqual(60);
     });
 
-    const invoiceDocs = referenceDocs.filter(
-      (doc) => doc.generationSpec?.templateId === 'invoice.promotador.v1'
-    );
+    const invoiceDocs = referenceDocs.filter((doc) => {
+      const templateId = typeof doc.generationSpec?.templateId === 'string'
+        ? doc.generationSpec.templateId.toLowerCase()
+        : '';
+      return templateId.startsWith('invoice.');
+    });
     const agingDoc = referenceDocs.find(
       (doc) => doc.generationSpec?.templateId === 'refdoc.ap-aging.v1'
     );
     expect(invoiceDocs.length).toBeGreaterThan(0);
     expect(agingDoc).toBeDefined();
+
+    const templateByVendor = new Map();
+    invoiceDocs.forEach((doc) => {
+      const vendorKey = String(doc.generationSpec?.data?.brandName || '').toLowerCase();
+      if (!vendorKey) return;
+      const templateId = doc.generationSpec?.templateId || '';
+      if (!templateByVendor.has(vendorKey)) {
+        templateByVendor.set(vendorKey, templateId);
+        return;
+      }
+      expect(templateByVendor.get(vendorKey)).toBe(templateId);
+    });
+
+    const descriptionToVendor = new Map();
+    const priceByVendorAndDesc = new Map();
+    invoiceDocs.forEach((doc) => {
+      const vendorKey = String(doc.generationSpec?.data?.brandName || '').toLowerCase();
+      const items = Array.isArray(doc.generationSpec?.data?.items)
+        ? doc.generationSpec.data.items
+        : [];
+      const taxRate = Number(doc.generationSpec?.data?.taxRate ?? 0);
+      const shipping = Number(doc.generationSpec?.data?.shipping ?? 0);
+      expect(items.length).toBeGreaterThanOrEqual(2);
+      expect(items.length).toBeLessThanOrEqual(5);
+      const descriptionSet = new Set(items.map((item) => item.description));
+      expect(descriptionSet.size).toBe(items.length);
+      expect(taxRate).toBeGreaterThan(0);
+      expect(shipping).toBeGreaterThan(0);
+      const subtotal = items.reduce(
+        (sum, item) => sum + Number(item.qty || 0) * Number(item.unitPrice || 0),
+        0
+      );
+      const computedTotal = subtotal + subtotal * taxRate + shipping;
+      const invoiceTotal = Number(doc.generationSpec?.invoiceTotal ?? 0);
+      expect(Math.abs(computedTotal - invoiceTotal)).toBeLessThanOrEqual(0.01);
+      items.forEach((item) => {
+        if (!item?.description || !vendorKey) return;
+        const existingVendor = descriptionToVendor.get(item.description);
+        if (!existingVendor) {
+          descriptionToVendor.set(item.description, vendorKey);
+        } else {
+          expect(existingVendor).toBe(vendorKey);
+        }
+        const priceKey = `${vendorKey}|${item.description}`;
+        const existingPrice = priceByVendorAndDesc.get(priceKey);
+        if (existingPrice === undefined) {
+          priceByVendorAndDesc.set(priceKey, item.unitPrice);
+        } else {
+          expect(existingPrice).toBe(item.unitPrice);
+        }
+      });
+    });
 
     const invoicesByPayment = new Map();
     invoiceDocs.forEach((doc) => {

@@ -34,6 +34,9 @@ export function createCaseFormUploadHandlers({
   draftCaseId,
   setDraftCaseId,
   caseName,
+  yearEndValue,
+  yearEndInput,
+  caseLevel,
   auditArea,
   layoutType,
   layoutConfigRaw,
@@ -115,6 +118,9 @@ export function createCaseFormUploadHandlers({
       createdBy: userId,
       _deleted: false,
       auditArea,
+      caseLevel: caseLevel || 'basic',
+      yearEnd: (yearEndValue || '').trim() || null,
+      yearEndLabel: (yearEndInput || '').trim() || null,
       caseGroupId: resolvedCaseGroupId,
     };
 

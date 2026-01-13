@@ -1,9 +1,9 @@
 import React from 'react';
-import { Input } from '../../AppCore';
+import { Input, Select, Textarea } from '../../AppCore';
 import StepIntro from './StepIntro';
 import RosterMultiSelect from './RosterMultiSelect';
 
-export default function AudienceScheduleStep({ audience }) {
+export default function AudienceScheduleStep({ audience, basics }) {
   const {
     publicVisible,
     setPublicVisible,
@@ -17,6 +17,23 @@ export default function AudienceScheduleStep({ audience }) {
     dueAtStr,
     setDueAtStr,
   } = audience;
+  const {
+    caseName,
+    setCaseName,
+    layoutType,
+    setLayoutType,
+    workpaperLayoutOptions,
+    layoutConfigRaw,
+    setLayoutConfigRaw,
+    caseGroupSelection,
+    setCaseGroupSelection,
+    caseGroupSelectOptions,
+    customCaseGroupId,
+    setCustomCaseGroupId,
+    status,
+    setStatus,
+    statusOptions,
+  } = basics || {};
 
   return (
     <div className="space-y-6">
@@ -105,6 +122,97 @@ export default function AudienceScheduleStep({ audience }) {
           </div>
         </div>
       </div>
+
+      {basics ? (
+        <details className="rounded-lg border border-gray-200 p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-gray-700">
+            Case settings (advanced)
+          </summary>
+          <div className="mt-4 space-y-4">
+            <div>
+              <label htmlFor="caseName" className="block text-sm font-medium text-gray-700">
+                Case Name
+              </label>
+              <Input
+                id="caseName"
+                value={caseName || ''}
+                onChange={(e) => setCaseName?.(e.target.value)}
+                placeholder="e.g., Q1 Unrecorded Liabilities Review"
+                className="mt-2"
+              />
+              <p className="mt-1 text-xs text-gray-500">Override the auto-generated name if needed.</p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <div>
+                <label htmlFor="caseStatus" className="block text-sm font-medium text-gray-700">
+                  Case Status
+                </label>
+                <Select
+                  id="caseStatus"
+                  value={status || 'assigned'}
+                  onChange={(e) => setStatus?.(e.target.value)}
+                  options={statusOptions || []}
+                  className="mt-2"
+                />
+              </div>
+              <div>
+                <label htmlFor="layoutType" className="block text-sm font-medium text-gray-700">
+                  Workpaper Layout
+                </label>
+                <Select
+                  id="layoutType"
+                  value={layoutType || ''}
+                  onChange={(e) => setLayoutType?.(e.target.value)}
+                  options={workpaperLayoutOptions || []}
+                  className="mt-2"
+                />
+              </div>
+              <div>
+                <label htmlFor="caseGroupSelection" className="block text-sm font-medium text-gray-700">
+                  Case Group
+                </label>
+                <Select
+                  id="caseGroupSelection"
+                  value={caseGroupSelection || '__none'}
+                  onChange={(e) => setCaseGroupSelection?.(e.target.value)}
+                  options={caseGroupSelectOptions || []}
+                  className="mt-2"
+                />
+              </div>
+            </div>
+
+            {caseGroupSelection === '__custom' ? (
+              <div>
+                <label htmlFor="customCaseGroupId" className="block text-sm font-medium text-gray-700">
+                  Custom Group Identifier
+                </label>
+                <Input
+                  id="customCaseGroupId"
+                  value={customCaseGroupId || ''}
+                  onChange={(e) => setCustomCaseGroupId?.(e.target.value)}
+                  placeholder="e.g., ap-advanced-spring"
+                  className="mt-2"
+                />
+              </div>
+            ) : null}
+
+            <div>
+              <label htmlFor="layoutConfig" className="block text-sm font-medium text-gray-700">
+                Layout Config (JSON, optional)
+              </label>
+              <Textarea
+                id="layoutConfig"
+                value={layoutConfigRaw || ''}
+                onChange={(e) => setLayoutConfigRaw?.(e.target.value)}
+                rows={layoutConfigRaw && layoutConfigRaw.length > 120 ? 6 : 3}
+                placeholder='e.g., { "leftPanel": "pdf", "rightPanel": "grid" }'
+                className="mt-2"
+              />
+            </div>
+          </div>
+        </details>
+      ) : null}
     </div>
   );
 }

@@ -15,6 +15,15 @@ function computeTotals({ items = [], taxRate = 0, shipping = 0 }) {
   return { subtotal, tax, ship, grandTotal: subtotal + tax + ship };
 }
 
+const formatTaxPercent = (rate) => {
+  const percent = Number(rate || 0) * 100;
+  const rounded = Math.round(percent * 100) / 100;
+  if (Math.abs(rounded - Math.round(rounded)) < 0.005) {
+    return String(Math.round(rounded));
+  }
+  return rounded.toFixed(2);
+};
+
 function PromotadorInvoice({ data }) {
   const {
     brandName = 'PROMOTADOR',
@@ -64,7 +73,10 @@ function PromotadorInvoice({ data }) {
         <div className="shipping">
           <div className="labelStrong">Shipping Info:</div>
           <div className="blockText">
-            <span className="mutedLabel">Date Shipped:</span> {safe(shippingInfo.dateShipped)}
+            <span className="mutedLabel">
+              {safe(shippingInfo.dateLabel || 'Date Shipped')}:
+            </span>{' '}
+            {safe(shippingInfo.dateValue || shippingInfo.dateShipped)}
             <br />
             <span className="mutedLabel">Shipping Terms:</span> {safe(shippingInfo.terms)}
           </div>
@@ -110,7 +122,7 @@ function PromotadorInvoice({ data }) {
             <tr className="totalsRow">
               <td className="cDesc totalsSpacer" />
               <td className="cQty totalsSpacer" />
-              <td className="cPrice totalsLabel">TAX ({Math.round(taxRate * 100)}%)</td>
+              <td className="cPrice totalsLabel">TAX ({formatTaxPercent(taxRate)}%)</td>
               <td className="cTotal totalsValue">{money(totals.tax, currency)}</td>
             </tr>
             <tr className="totalsRow">
@@ -151,10 +163,10 @@ export const promotadorInvoiceV1 = {
 
     const l = {
       pageMargin: '0.65in',
-      colDesc: '52%',
+      colDesc: '50%',
       colQty: '12%',
       colPrice: '18%',
-      colTotal: '18%',
+      colTotal: '20%',
       ...layout,
     };
 
@@ -298,6 +310,10 @@ body { color: ${t.ink}; font-family: system-ui, -apple-system, Segoe UI, Roboto,
   font-size: 24px;
   border-bottom: 2px solid ${t.ink};
 }
+.items tfoot td.cPrice,
+.items tfoot td.cTotal {
+  padding-right: 10px;
+}
 
 .items tfoot tr:first-child td { border-top: 2px solid ${t.ink}; }
 
@@ -307,7 +323,7 @@ body { color: ${t.ink}; font-family: system-ui, -apple-system, Segoe UI, Roboto,
 .totalsRow.grand .totalsLabel,
 .totalsRow.grand .totalsValue {
   font-weight: 900;
-  font-size: 28px;
+  font-size: 26px;
 }
 `;
   },

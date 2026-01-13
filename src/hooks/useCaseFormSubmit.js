@@ -5,6 +5,7 @@ import { getCurrentUserOrgId } from '../services/userService';
 import getUUID from '../utils/getUUID';
 import { mergeDisbursementDocuments } from '../utils/caseFormTransforms';
 import { AUDIT_AREAS } from '../models/caseConstants';
+import { CASH_ARTIFACT_TYPES } from '../constants/caseFormOptions';
 import { ANSWER_KEY_FIELDS, ANSWER_KEY_TOLERANCE, ANSWER_KEY_PLACEHOLDER } from '../utils/caseFormHelpers';
 import { queueCaseGenerationJob, saveCaseGenerationPlan } from '../services/caseGenerationService';
 
@@ -45,6 +46,9 @@ export function createCaseFormSubmitHandler({
   meta: { isEditing, editingCaseId, draftCaseId },
   state: {
     caseName,
+    yearEndInput,
+    yearEndValue,
+    caseLevel,
     auditArea,
     layoutType,
     layoutConfigRaw,
@@ -114,6 +118,25 @@ export function createCaseFormSubmitHandler({
     if (!caseName.trim()) {
       logValidationFail('case-name-required');
       showModal('Case name is required.', 'Validation Error');
+      return;
+    }
+
+    const resolvedYearEnd = (yearEndValue || '').trim();
+    if (!resolvedYearEnd) {
+      logValidationFail('year-end-required');
+      showModal('Year-end date is required.', 'Validation Error');
+      return;
+    }
+
+    if (!caseLevel || typeof caseLevel !== 'string') {
+      logValidationFail('case-level-required');
+      showModal('Case level is required.', 'Validation Error');
+      return;
+    }
+    const normalizedLevel = caseLevel.trim();
+    if (!['basic', 'intermediate', 'advanced'].includes(normalizedLevel)) {
+      logValidationFail('case-level-invalid');
+      showModal('Case level must be Basic, Intermediate, or Advanced.', 'Validation Error');
       return;
     }
 
@@ -441,9 +464,11 @@ export function createCaseFormSubmitHandler({
       return;
     }
 
-    const visibleToUserIdsArray = publicVisible ? [] : Array.from(new Set(selectedUserIds));
+    const isNewCaseCreation = !isEditing && !draftCaseId;
+    const resolvedPublicVisible = isNewCaseCreation ? true : publicVisible;
+    const visibleToUserIdsArray = resolvedPublicVisible ? [] : Array.from(new Set(selectedUserIds));
 
-    if (!publicVisible && visibleToUserIdsArray.length === 0) {
+    if (!resolvedPublicVisible && visibleToUserIdsArray.length === 0) {
       logValidationFail('private-case-no-users');
       showModal('Private cases must list at least one User ID.', 'Validation Error');
       return;
@@ -463,7 +488,7 @@ export function createCaseFormSubmitHandler({
         ? null
         : caseGroupSelection;
 
-    const { timestamp: opensAtTs, error: opensError } = parseDateTimeInputValue(opensAtStr, 'Opens At');
+    const { timestamp: opensAtTsRaw, error: opensError } = parseDateTimeInputValue(opensAtStr, 'Opens At');
     if (opensError) {
       logValidationFail('opens-at-invalid', { error: opensError });
       showModal(opensError, 'Validation Error');
@@ -477,6 +502,8 @@ export function createCaseFormSubmitHandler({
       return;
     }
 
+    const opensAtTs = opensAtTsRaw || (isNewCaseCreation ? Timestamp.now() : null);
+
     if (opensAtTs && dueAtTs && dueAtTs.toMillis() < opensAtTs.toMillis()) {
       logValidationFail('due-before-open', { opensAt: opensAtTs?.toMillis?.(), dueAt: dueAtTs?.toMillis?.() });
       showModal('Due At must be after Opens At.', 'Validation Error');
@@ -487,9 +514,11 @@ export function createCaseFormSubmitHandler({
 
     setLoading(true);
     let currentCaseId = editingCaseId || draftCaseId;
-    let isNewCaseCreation = !isEditing && !draftCaseId;
 
-    const activeReferenceDocs = [...referenceDocuments, ...cashArtifacts].filter((doc) => {
+    const activeReferenceDocs = [
+      ...referenceDocuments,
+      ...(auditArea === AUDIT_AREAS.CASH ? cashArtifacts : []),
+    ].filter((doc) => {
       if (!doc) return false;
       if (doc.clientSideFile) return true;
       if (doc.fileName) return true;
@@ -498,6 +527,52 @@ export function createCaseFormSubmitHandler({
       if (doc.generationSpec && typeof doc.generationSpec === 'object') return true;
       return false;
     });
+
+    const requiresCashArtifacts = auditArea === AUDIT_AREAS.CASH;
+    const cashArtifactIssues = [];
+    if (requiresCashArtifacts) {
+      const cashByType = new Map();
+      (Array.isArray(cashArtifacts) ? cashArtifacts : []).forEach((doc) => {
+        if (!doc) return;
+        const rawType = typeof doc.type === 'string' ? doc.type.trim() : '';
+        const normalizedType =
+          rawType && rawType.startsWith('cash_') ? rawType : rawType ? `cash_${rawType}` : '';
+        if (normalizedType) {
+          cashByType.set(normalizedType, doc);
+        }
+      });
+      CASH_ARTIFACT_TYPES.forEach(({ value, label }) => {
+        const doc = cashByType.get(value);
+        if (!doc) {
+          cashArtifactIssues.push(`Missing ${label}.`);
+          return;
+        }
+        const name = (doc.fileName || '').trim();
+        const hasSource = Boolean(doc.clientSideFile || doc.downloadURL || doc.storagePath);
+        if (!name) {
+          cashArtifactIssues.push(`${label} must include a display name.`);
+        }
+        if (!hasSource) {
+          cashArtifactIssues.push(
+            `${label} must include an uploaded file, download URL, or storage path.`
+          );
+        }
+      });
+    }
+
+    if (requiresCashArtifacts && cashArtifactIssues.length > 0) {
+      logValidationFail('cash-artifacts-incomplete', { issues: cashArtifactIssues });
+      showModal(cashArtifactIssues.join('\n'), 'Validation Error');
+      setLoading(false);
+      return;
+    }
+
+    if (activeReferenceDocs.length === 0) {
+      logValidationFail('reference-docs-empty');
+      showModal('Add at least one reference document before submitting.', 'Validation Error');
+      setLoading(false);
+      return;
+    }
 
     const referenceValidationFailed = activeReferenceDocs.some((doc) => {
       const name = (doc.fileName || '').trim();
@@ -587,7 +662,7 @@ export function createCaseFormSubmitHandler({
           flattenedMappings.some((m) => m.clientSideFile) ||
           activeReferenceDocs.some((d) => d.clientSideFile) ||
           disbursements.some((d) => d.highlightedDocument?.clientSideFile),
-        publicVisible,
+        publicVisible: resolvedPublicVisible,
         visibleToUserIdsCount: visibleToUserIdsArray.length,
         caseGroupId: resolvedCaseGroupId || null,
         userId,
@@ -606,7 +681,7 @@ export function createCaseFormSubmitHandler({
           invoiceMappings: [],
           referenceDocuments: [],
           visibleToUserIds: visibleToUserIdsArray,
-          publicVisible,
+          publicVisible: resolvedPublicVisible,
           status,
           opensAt: opensAtTs,
           dueAt: dueAtTs,
@@ -807,13 +882,16 @@ export function createCaseFormSubmitHandler({
         invoiceMappings: finalInvoiceMappings,
         referenceDocuments: finalReferenceDocuments,
         visibleToUserIds: visibleToUserIdsArray,
-        publicVisible,
+        publicVisible: resolvedPublicVisible,
         status,
         opensAt: opensAtTs,
         dueAt: dueAtTs,
         createdBy: isNewCaseCreation || !originalCaseData?.createdBy ? userId : originalCaseData.createdBy,
         _deleted: originalCaseData?._deleted ?? false,
         auditArea,
+        caseLevel: normalizedLevel,
+        yearEnd: resolvedYearEnd,
+        yearEndLabel: (yearEndInput || '').trim() || null,
         caseGroupId: resolvedCaseGroupId,
         cashContext:
           auditArea === AUDIT_AREAS.CASH

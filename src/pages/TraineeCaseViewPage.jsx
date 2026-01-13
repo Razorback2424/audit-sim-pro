@@ -316,6 +316,11 @@ export default function TraineeCaseViewPage({ params }) {
           return false;
         }
       }
+      if (allocation?.isException === true && !isSplit) {
+        if (singleClassification !== 'improperlyIncluded' && singleClassification !== 'improperlyExcluded') {
+          return false;
+        }
+      }
       if (allocation?.isException === true) {
         const noteText =
           typeof allocation.workpaperNote === 'string'
@@ -341,6 +346,9 @@ export default function TraineeCaseViewPage({ params }) {
         sum += value;
       }
       if (!isSplit && allocation?.isException === false) {
+        if (Math.abs(singleValue - amountNumber) > 0.01) return false;
+      }
+      if (!isSplit && allocation?.isException === true) {
         if (Math.abs(singleValue - amountNumber) > 0.01) return false;
       }
       return Math.abs(sum - amountNumber) <= 0.01;

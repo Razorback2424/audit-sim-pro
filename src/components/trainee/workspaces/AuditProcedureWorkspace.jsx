@@ -123,11 +123,19 @@ export default function AuditProcedureWorkspace({
   const passClassifications = classificationFields.filter(
     ({ key }) => key === 'properlyIncluded' || key === 'properlyExcluded'
   );
+  const exceptionClassifications = classificationFields.filter(
+    ({ key }) => key === 'improperlyIncluded' || key === 'improperlyExcluded'
+  );
 
   const resolvePassSelection = useCallback(() => {
     const current = typeof allocation?.singleClassification === 'string' ? allocation.singleClassification : '';
     return passClassifications.some(({ key }) => key === current) ? current : '';
   }, [allocation?.singleClassification, passClassifications]);
+
+  const resolveExceptionSelection = useCallback(() => {
+    const current = typeof allocation?.singleClassification === 'string' ? allocation.singleClassification : '';
+    return exceptionClassifications.some(({ key }) => key === current) ? current : '';
+  }, [allocation?.singleClassification, exceptionClassifications]);
 
   const handleDecisionChange = (nextDecision) => {
     if (!canMakeDecision) {
@@ -269,6 +277,37 @@ export default function AuditProcedureWorkspace({
               options={[
                 { value: '', label: 'Select classification...', disabled: true },
                 ...passClassifications.map(({ key, label }) => ({ value: key, label })),
+              ]}
+            />
+          </label>
+          <p className="text-xs text-slate-500">Use split when a payment spans multiple classifications.</p>
+        </div>
+      ) : null}
+
+      {currentDecision === DECISION.EXCEPTION && !isSplit ? (
+        <div className="space-y-2">
+          <label className="block text-sm font-semibold text-gray-800">
+            Exception classification <span className="text-rose-700">*</span>
+            <Select
+              className="mt-1"
+              value={resolveExceptionSelection()}
+              onChange={(event) => {
+                if (!canMakeDecision) {
+                  onDecisionBlocked();
+                  return;
+                }
+                const nextValue = event.target.value;
+                if (!nextValue) {
+                  onClassificationChange(itemKey, '');
+                  clearAllClassificationAmounts();
+                  return;
+                }
+                applySingleAllocation(nextValue);
+              }}
+              disabled={isLocked}
+              options={[
+                { value: '', label: 'Select classification...', disabled: true },
+                ...exceptionClassifications.map(({ key, label }) => ({ value: key, label })),
               ]}
             />
           </label>
