@@ -1,15 +1,8 @@
 import React from 'react';
-import { FilePlus, Users, AlertTriangle, ClipboardList } from 'lucide-react';
+import { Users, AlertTriangle, ClipboardList } from 'lucide-react';
 import { Button } from '../../AppCore';
 
 const ACTIONS = [
-  {
-    key: 'create-case',
-    label: 'Create a case',
-    description: 'Start a new simulation with tailored documents.',
-    icon: FilePlus,
-    path: '/admin/create-case',
-  },
   {
     key: 'manage-users',
     label: 'Manage roster',
@@ -29,7 +22,7 @@ const ACTIONS = [
     label: 'Check submissions',
     description: 'Monitor trainee work across cases.',
     icon: ClipboardList,
-    path: '/admin/case-submissions',
+    path: '/admin#cases',
   },
 ];
 

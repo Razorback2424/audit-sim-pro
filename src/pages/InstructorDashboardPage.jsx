@@ -56,7 +56,7 @@ export default function InstructorDashboardPage() {
           <h1 className="text-2xl font-bold text-gray-900">Instructor Dashboard</h1>
           <p className="text-sm text-gray-600">Manage cases and progress for your organization.</p>
         </div>
-        <Button onClick={() => navigate('/instructor/create-case')}>Create New Case</Button>
+        <Button onClick={() => navigate('/admin')}>View Dashboard</Button>
       </div>
 
       <div className="bg-white p-6 rounded shadow">

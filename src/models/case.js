@@ -79,6 +79,7 @@ import {
  * @typedef {Object} CaseInstruction
  * @property {string} title
  * @property {string} moduleCode
+ * @property {number} [version]
  * @property {{ headline: string, body: string, risk: string }} hook
  * @property {{ type: 'VIDEO'|'IMAGE', source_id?: string, url?: string }} visualAsset
  * @property {{ rule_text: string, reminder?: string }} heuristic
@@ -117,6 +118,7 @@ import {
  * @property {string} [pathDescription]
  * @property {'foundations' | 'core' | 'advanced'} [tier]
  * @property {string} [moduleId]
+ * @property {number} [recipeVersion]
  * @property {string} [moduleTitle]
  * @property {string} [primarySkill]
  * @property {string[]} [secondarySkills]

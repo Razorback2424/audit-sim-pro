@@ -2,7 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, UserCircle2 } from 'lucide-react';
 import { Button, useRoute, useModal, useAuth, appId } from '../AppCore';
 import { listStudentCases } from '../services/caseService';
+import { listRecipes } from '../services/recipeService';
 import { subscribeProgressForCases, saveProgress } from '../services/progressService';
+import { fetchRecipeProgress } from '../services/recipeProgressService';
+import { generateAttemptFromRecipe } from '../services/attemptService';
 import { nullSafeDate, getNow } from '../utils/dates';
 import { toProgressModel } from '../models/progress';
 
@@ -13,7 +16,7 @@ const PAGE_SIZE = 20;
 
 const TIER_ORDER = Object.freeze(['foundations', 'core', 'advanced']);
 const TIER_LABELS = Object.freeze({
-  foundations: 'Foundations',
+  foundations: 'Basics',
   core: 'Core',
   advanced: 'Advanced',
 });
@@ -60,6 +63,22 @@ const getModuleSkills = (caseData) => {
     });
   }
   return skills.slice(0, 3);
+};
+
+const isRecipeConfigured = (recipe) => {
+  const instruction = recipe?.instruction || {};
+  const gateOptions = Array.isArray(instruction?.gateCheck?.options)
+    ? instruction.gateCheck.options
+    : [];
+  const hasGateQuestion = typeof instruction?.gateCheck?.question === 'string' && instruction.gateCheck.question.trim();
+  const hasCorrectOption = gateOptions.some((opt) => opt && (opt.correct || opt.isCorrect));
+  const hasVideo =
+    typeof instruction?.visualAsset?.source_id === 'string'
+      ? instruction.visualAsset.source_id.trim()
+      : typeof instruction?.visualAsset?.url === 'string'
+      ? instruction.visualAsset.url.trim()
+      : '';
+  return Boolean(hasGateQuestion && gateOptions.length > 0 && hasCorrectOption && hasVideo);
 };
 
 const getProgressUpdatedAtMs = (caseData) => {
@@ -129,6 +148,10 @@ export default function TraineeDashboardPage() {
   const [initialLoad, setInitialLoad] = useState(true);
   const [error, setError] = useState('');
   const [selectedPathId, setSelectedPathId] = useState(null);
+  const [recipes, setRecipes] = useState([]);
+  const [recipesLoading, setRecipesLoading] = useState(false);
+  const [recipeProgress, setRecipeProgress] = useState(new Map());
+  const [startingModuleId, setStartingModuleId] = useState('');
 
   const fetchCases = useCallback(async () => {
     if (!userId) return;
@@ -215,6 +238,59 @@ export default function TraineeDashboardPage() {
     }
     fetchCases();
   }, [userId, fetchCases]);
+
+  useEffect(() => {
+    if (!userId) return;
+    let isActive = true;
+    const loadRecipes = async () => {
+      try {
+        setRecipesLoading(true);
+        const items = await listRecipes({ pageSize: 25 });
+        if (!isActive) return;
+        const active = items.filter((recipe) => recipe.isActive && isRecipeConfigured(recipe));
+        setRecipes(active);
+      } catch (err) {
+        console.error('Error loading recipes:', err);
+      } finally {
+        if (isActive) setRecipesLoading(false);
+      }
+    };
+    loadRecipes();
+    return () => {
+      isActive = false;
+    };
+  }, [userId]);
+
+  useEffect(() => {
+    if (!userId || recipes.length === 0) {
+      setRecipeProgress(new Map());
+      return;
+    }
+    let isActive = true;
+    const loadRecipeProgress = async () => {
+      try {
+        const entries = await Promise.all(
+          recipes.map((recipe) =>
+            fetchRecipeProgress({ appId, uid: userId, recipeId: recipe.moduleId || recipe.id })
+          )
+        );
+        if (!isActive) return;
+        const map = new Map();
+        entries.forEach((entry) => {
+          if (entry?.recipeId) {
+            map.set(entry.recipeId, entry);
+          }
+        });
+        setRecipeProgress(map);
+      } catch (err) {
+        console.error('Error loading recipe progress:', err);
+      }
+    };
+    loadRecipeProgress();
+    return () => {
+      isActive = false;
+    };
+  }, [recipes, userId]);
 
   const caseIds = useMemo(() => cases.map((c) => c.id), [cases]);
 
@@ -331,6 +407,7 @@ export default function TraineeDashboardPage() {
       return getProgressUpdatedAtMs(current) > getProgressUpdatedAtMs(latest) ? current : latest;
     }, null);
   }, [casesWithProgress]);
+
 
   const pathOptions = useMemo(() => {
     const sourceModules =
@@ -566,6 +643,24 @@ export default function TraineeDashboardPage() {
   const estimatedTime = heroCase ? formatMinutes(heroCase?.estimatedMinutes) : '';
   const focusGateMessage = getNextTierGateMessage();
 
+  const availableModules = recipes;
+
+  const handleStartModule = async (moduleId) => {
+    if (!moduleId || !userId) return;
+    if (startingModuleId) return;
+    try {
+      setStartingModuleId(moduleId);
+      const caseId = await generateAttemptFromRecipe({ moduleId, uid: userId });
+      navigate(`/cases/${caseId}`);
+    } catch (err) {
+      console.error('Failed to start module:', err);
+      const modal = showModalRef.current;
+      if (modal) modal(err?.message || 'Unable to start module. Please try again.', 'Error');
+    } finally {
+      setStartingModuleId('');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="border-b border-gray-200 bg-white">
@@ -641,11 +736,35 @@ export default function TraineeDashboardPage() {
               </div>
             </div>
           </div>
+        ) : availableModules.length > 0 ? (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-8">
+            <div className="space-y-3">
+              <div className="text-xs uppercase tracking-[0.2em] text-gray-500">Available module</div>
+              <h1 className="text-3xl font-semibold text-gray-900">
+                {availableModules[0]?.moduleTitle || availableModules[0]?.title || 'Module'}
+              </h1>
+              <div className="text-sm text-gray-600">
+                Start your first attempt to enter the cockpit.
+              </div>
+            </div>
+            <div className="mt-6 flex flex-col sm:flex-row sm:items-center sm:gap-6 gap-3">
+              <Button
+                onClick={() => handleStartModule(availableModules[0]?.moduleId || availableModules[0]?.id)}
+                className="sm:w-auto w-full"
+                isLoading={startingModuleId === (availableModules[0]?.moduleId || availableModules[0]?.id)}
+                disabled={startingModuleId !== '' && startingModuleId !== (availableModules[0]?.moduleId || availableModules[0]?.id)}
+              >
+                Start Module
+              </Button>
+            </div>
+          </div>
         ) : (
           <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-8 text-center space-y-3">
             <div className="text-xs uppercase tracking-[0.2em] text-gray-500">All clear</div>
             <h1 className="text-2xl font-semibold text-gray-900">No activities assigned yet.</h1>
-            <p className="text-sm text-gray-600">Check back soon or contact your instructor for access.</p>
+            <p className="text-sm text-gray-600">
+              {recipesLoading ? 'Loading modules…' : 'Check back soon or contact your instructor for access.'}
+            </p>
           </div>
         )}
 
@@ -685,6 +804,44 @@ export default function TraineeDashboardPage() {
             </div>
           </div>
         ) : null}
+
+        {availableModules.length > 0 ? (
+          <div className="bg-white rounded-lg border border-gray-100 p-5 space-y-3">
+            <div className="text-sm font-semibold text-gray-800">Modules</div>
+            <div className="space-y-3">
+              {availableModules.map((recipe) => {
+                const moduleId = recipe.moduleId || recipe.id;
+                const progress = recipeProgress.get(moduleId);
+                const gatePassed = progress && progress.passedVersion >= (recipe.recipeVersion || 1);
+                return (
+                  <div
+                    key={moduleId}
+                    className="flex flex-col gap-3 rounded-lg border border-gray-200 p-4 sm:flex-row sm:items-center sm:justify-between"
+                  >
+                    <div>
+                      <div className="text-sm font-semibold text-gray-900">
+                        {recipe.moduleTitle || recipe.title || 'Module'}
+                      </div>
+                      <div className="text-xs text-gray-500 mt-1">
+                        {getPathLabel(recipe.pathId || DEFAULT_PATH_ID, '')} · {formatTier(recipe.tier)}
+                      </div>
+                    </div>
+                    <Button
+                      variant="secondary"
+                      onClick={() => handleStartModule(moduleId)}
+                      isLoading={startingModuleId === moduleId}
+                      disabled={startingModuleId !== '' && startingModuleId !== moduleId}
+                      className="sm:w-auto w-full"
+                    >
+                      {gatePassed ? 'Generate new attempt' : 'Start Module'}
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+
       </main>
     </div>
   );

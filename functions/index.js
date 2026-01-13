@@ -609,7 +609,7 @@ exports.queueCaseDocGeneration = functions.https.onCall(async (data, context) =>
     logLabel: 'queueCaseDocGeneration',
   });
 
-  if (resolvedRole !== 'admin' && resolvedRole !== 'instructor') {
+  if (resolvedRole !== 'admin' && resolvedRole !== 'instructor' && resolvedRole !== 'trainee') {
     throw new functions.https.HttpsError('permission-denied', 'Insufficient permissions.');
   }
 
@@ -621,6 +621,15 @@ exports.queueCaseDocGeneration = functions.https.onCall(async (data, context) =>
     throw new functions.https.HttpsError('not-found', 'Case not found for provided appId.');
   }
   const { appId: resolvedAppId, caseData, caseMissing } = resolved;
+
+  if (resolvedRole === 'trainee') {
+    const visibleToUserIds = Array.isArray(caseData?.visibleToUserIds)
+      ? caseData.visibleToUserIds
+      : [];
+    if (!visibleToUserIds.includes(context.auth.uid)) {
+      throw new functions.https.HttpsError('permission-denied', 'Case is not assigned to trainee.');
+    }
+  }
 
   if (resolvedRole === 'instructor') {
     if (!requesterOrgId) {

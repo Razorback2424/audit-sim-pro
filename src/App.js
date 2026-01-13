@@ -16,7 +16,7 @@ import AdminSubmissionDetailPage from './pages/AdminSubmissionDetailPage';
 import AdminCaseOverviewPage from './pages/AdminCaseOverviewPage';
 import AdminCaseDataAuditPage from './pages/AdminCaseDataAuditPage';
 import AdminCaseProgressPage from './pages/AdminCaseProgressPage';
-import CaseFormPage from './pages/CaseFormPage';
+import RecipeFormPage from './pages/RecipeFormPage';
 import LandingPage from './pages/LandingPage';
 import TraineeDashboardPage from './pages/TraineeDashboardPage';
 import TraineeCaseViewPage from './pages/TraineeCaseViewPage';
@@ -30,11 +30,11 @@ const WithParams = (Component) =>
     return <Component params={params} />;
   };
 
-const CaseFormRoute = WithParams(CaseFormPage);
 const AdminCaseOverviewRoute = WithParams(AdminCaseOverviewPage);
 const AdminCaseSubmissionsRoute = WithParams(AdminCaseSubmissionsPage);
 const AdminCaseProgressRoute = WithParams(AdminCaseProgressPage);
 const AdminSubmissionDetailRoute = WithParams(AdminSubmissionDetailPage);
+const RecipeFormRoute = WithParams(RecipeFormPage);
 const TraineeCaseRoute = WithParams(TraineeCaseViewPage);
 
 const HomeRedirect = () => {
@@ -67,8 +67,7 @@ export default function App() {
           <Route element={<RoleRoute allowed={[ROLES.ADMIN]} />}>
             <Route path="/admin" element={<AdminDashboardPage />} />
             <Route path="/admin/dashboard" element={<AdminDashboardPage />} />
-            <Route path="/admin/create-case" element={<CaseFormRoute />} />
-            <Route path="/admin/edit-case/:caseId" element={<CaseFormRoute />} />
+            <Route path="/admin/edit-recipe/:recipeId" element={<RecipeFormRoute />} />
             <Route path="/admin/case-overview/:caseId" element={<AdminCaseOverviewRoute />} />
             <Route path="/admin/case-data-audit" element={<AdminCaseDataAuditPage />} />
             <Route path="/admin/user-management" element={<AdminUserManagementPage />} />

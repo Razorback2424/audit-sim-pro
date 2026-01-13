@@ -72,7 +72,6 @@ export default function AdminCaseOverviewPage({ params }) {
         <div className="flex justify-between">
           <Button onClick={() => navigate('/admin')} variant="secondary" className="text-sm">&larr; Back</Button>
           <div className="space-x-2">
-            <Button onClick={() => navigate(`/admin/edit-case/${caseId}`)} variant="secondary" className="text-sm">Edit Case</Button>
             <Button onClick={() => navigate(`/admin/case-submissions/${caseId}`)} variant="secondary" className="text-sm">View Submissions</Button>
           </div>
         </div>

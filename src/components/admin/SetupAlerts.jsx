@@ -19,7 +19,7 @@ const SetupAlerts = ({ alerts = [], loading, onNavigate }) => {
           caseId,
           caseName: alert.caseName || alert.context || 'Untitled case',
           count: 0,
-          targetPath: `/admin/edit-case/${caseId}`,
+          targetPath: `/admin/case-overview/${caseId}`,
         };
         existing.count += 1;
         groups.set(caseId, existing);

@@ -67,6 +67,7 @@ export const initialReconciliationMap = () => ({
 export const initialInstruction = () => ({
   title: '',
   moduleCode: '',
+  version: 1,
   hook: { headline: '', risk: '', body: '' },
   visualAsset: { type: 'VIDEO', source_id: '', alt: '' },
   heuristic: { rule_text: '', reminder: '' },

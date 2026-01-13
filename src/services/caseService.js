@@ -736,6 +736,7 @@ const sanitizeCaseWriteData = (rawData = {}, { isCreate = false } = {}) => {
   sanitized.pathDescription = toTrimmedString(sanitized.pathDescription);
   sanitized.tier = normalizeTier(sanitized.tier);
   sanitized.moduleId = toOptionalString(sanitized.moduleId);
+  sanitized.recipeVersion = normalizeNumberOrNull(sanitized.recipeVersion);
   sanitized.moduleTitle = toTrimmedString(sanitized.moduleTitle) || toTrimmedString(sanitized.title);
   sanitized.primarySkill = toTrimmedString(sanitized.primarySkill);
   sanitized.secondarySkills = normalizeStringArray(sanitized.secondarySkills);
@@ -979,7 +980,7 @@ export const subscribeToCases = (onData, onError) => {
 };
 
 export const subscribeToActiveCases = (onData, onError) => {
-  const q = query(collection(db, FirestorePaths.CASES_COLLECTION()), where('_deleted', '!=', true));
+  const q = query(collection(db, FirestorePaths.CASES_COLLECTION()), where('_deleted', '==', false));
   return onSnapshot(q, (snap) => {
     const data = snap.docs.map((d) => toNormalizedCaseModel(d.id, d.data()));
     onData(data);
@@ -1029,6 +1030,76 @@ export const createCase = async (data) => {
   };
   try {
     console.info('[caseService] createCase: begin', debugContext);
+    console.debug('[caseService] createCase: payload snapshot', {
+      visibleToUserIds: caseData?.visibleToUserIds,
+      _deleted: caseData?._deleted,
+      caseLevel: caseData?.caseLevel,
+      auditArea: caseData?.auditArea,
+      moduleId: caseData?.moduleId,
+      pathId: caseData?.pathId,
+      tier: caseData?.tier,
+      hasInstruction: Boolean(caseData?.instruction),
+      referenceDocumentsCount: Array.isArray(caseData?.referenceDocuments)
+        ? caseData.referenceDocuments.length
+        : 0,
+      invoiceMappingsCount: Array.isArray(caseData?.invoiceMappings)
+        ? caseData.invoiceMappings.length
+        : 0,
+    });
+    const payloadSnapshot = {
+      visibleToUserIds: caseData?.visibleToUserIds,
+      _deleted: caseData?._deleted,
+      caseLevel: caseData?.caseLevel,
+      auditArea: caseData?.auditArea,
+      moduleId: caseData?.moduleId,
+      pathId: caseData?.pathId,
+      tier: caseData?.tier,
+      hasInstruction: Boolean(caseData?.instruction),
+      referenceDocumentsCount: Array.isArray(caseData?.referenceDocuments)
+        ? caseData.referenceDocuments.length
+        : 0,
+      invoiceMappingsCount: Array.isArray(caseData?.invoiceMappings)
+        ? caseData.invoiceMappings.length
+        : 0,
+    };
+    console.debug('[caseService] createCase: payload snapshot json', JSON.stringify(payloadSnapshot));
+    const visibleToUserIds = Array.isArray(caseData?.visibleToUserIds) ? caseData.visibleToUserIds : [];
+    const currentUid = auth?.currentUser?.uid || null;
+    console.debug('[caseService] createCase: rule check', {
+      authPresent: Boolean(auth?.currentUser),
+      uid: currentUid,
+      publicVisible: caseData?.publicVisible,
+      deleted: caseData?._deleted,
+      status: caseData?.status,
+      statusValid: VALID_CASE_STATUSES.includes(caseData?.status),
+      visibleToUserIdsCount: visibleToUserIds.length,
+      visibleToUserIdsIncludesUid: currentUid ? visibleToUserIds.includes(currentUid) : false,
+      auditItemsCount: Array.isArray(caseData?.auditItems) ? caseData.auditItems.length : 0,
+      auditItemTypeSample: caseData?.auditItems?.[0]?.type,
+      auditItemIdSample: caseData?.auditItems?.[0]?.id,
+      updatedAtType: typeof caseData?.updatedAt,
+      createdAtType: typeof caseData?.createdAt,
+      updatedAtIsTimestamp: caseData?.updatedAt instanceof Timestamp,
+      createdAtIsTimestamp: caseData?.createdAt instanceof Timestamp,
+    });
+    const ruleCheckSnapshot = {
+      authPresent: Boolean(auth?.currentUser),
+      uid: currentUid,
+      publicVisible: caseData?.publicVisible,
+      deleted: caseData?._deleted,
+      status: caseData?.status,
+      statusValid: VALID_CASE_STATUSES.includes(caseData?.status),
+      visibleToUserIdsCount: visibleToUserIds.length,
+      visibleToUserIdsIncludesUid: currentUid ? visibleToUserIds.includes(currentUid) : false,
+      auditItemsCount: Array.isArray(caseData?.auditItems) ? caseData.auditItems.length : 0,
+      auditItemTypeSample: caseData?.auditItems?.[0]?.type,
+      auditItemIdSample: caseData?.auditItems?.[0]?.id,
+      updatedAtType: typeof caseData?.updatedAt,
+      createdAtType: typeof caseData?.createdAt,
+      updatedAtIsTimestamp: caseData?.updatedAt instanceof Timestamp,
+      createdAtIsTimestamp: caseData?.createdAt instanceof Timestamp,
+    };
+    console.debug('[caseService] createCase: rule check json', JSON.stringify(ruleCheckSnapshot));
     const docRef = await addDoc(collectionRef, caseData);
     await setDoc(doc(db, FirestorePaths.CASE_KEYS_DOCUMENT(docRef.id)), caseKeysDoc);
     console.info('[caseService] createCase: success', { caseId: docRef.id });
@@ -1196,7 +1267,7 @@ export const buildStudentCasesQuery = ({
   const casesCollection = collection(db, FirestorePaths.CASES_COLLECTION());
   const now = getNow();
   let filterConstraint = and(
-    where('_deleted', '!=', true),
+    where('_deleted', '==', false),
     or(where('publicVisible', '==', true), where('visibleToUserIds', 'array-contains', uid))
   );
 

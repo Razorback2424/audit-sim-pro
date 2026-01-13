@@ -49,6 +49,8 @@ export function createCaseFormSubmitHandler({
     yearEndInput,
     yearEndValue,
     caseLevel,
+    moduleId,
+    recipeVersion,
     auditArea,
     layoutType,
     layoutConfigRaw,
@@ -872,12 +874,22 @@ export function createCaseFormSubmitHandler({
         })
       );
 
+      const normalizedModuleId =
+        typeof moduleId === 'string' && moduleId.trim() ? moduleId.trim() : null;
+      const rawRecipeVersion = Number(recipeVersion);
+      const normalizedRecipeVersion =
+        Number.isFinite(rawRecipeVersion) && rawRecipeVersion > 0 ? Math.floor(rawRecipeVersion) : 1;
+      const instructionPayload =
+        instruction && typeof instruction === 'object'
+          ? { ...instruction, version: normalizedRecipeVersion }
+          : { version: normalizedRecipeVersion };
+
       const caseDataPayload = {
         caseName,
         title: caseName,
         orgId: resolvedOrgId,
         workpaper: { layoutType, layoutConfig: parsedLayoutConfig },
-        instruction,
+        instruction: instructionPayload,
         disbursements: disbursementPayload,
         invoiceMappings: finalInvoiceMappings,
         referenceDocuments: finalReferenceDocuments,
@@ -890,6 +902,8 @@ export function createCaseFormSubmitHandler({
         _deleted: originalCaseData?._deleted ?? false,
         auditArea,
         caseLevel: normalizedLevel,
+        moduleId: normalizedModuleId,
+        recipeVersion: normalizedRecipeVersion,
         yearEnd: resolvedYearEnd,
         yearEndLabel: (yearEndInput || '').trim() || null,
         caseGroupId: resolvedCaseGroupId,

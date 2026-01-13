@@ -27,8 +27,14 @@ const buildDisbursement = ({ paymentId, payee, amount, paymentDate, answerKeyCla
 
 export const surlPromotadorCutoffV1 = {
   id: 'case.surl.promotador.v1',
+  version: 1,
   label: 'SURL Cutoff (Generated)',
   description: 'Unrecorded liability trap with post-close disbursements and service-date cutoff.',
+  moduleTitle: 'SURL',
+  pathId: 'accounts_payable',
+  tier: 'foundations',
+  auditArea: AUDIT_AREAS.PAYABLES,
+  primarySkill: 'Cutoff',
   build: ({ overrides } = {}) => {
     const seed = getUUID();
     const resolvedYearEnd =

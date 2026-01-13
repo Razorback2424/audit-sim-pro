@@ -5,6 +5,7 @@ import { storage, Button, useRoute, useAuth, useModal, appId } from '../AppCore'
 import { listStudentCases, subscribeToCase } from '../services/caseService';
 import { saveSubmission } from '../services/submissionService';
 import { fetchProgressForCases, saveProgress, subscribeProgressForCases } from '../services/progressService';
+import { fetchRecipeProgress, saveRecipeProgress } from '../services/recipeProgressService';
 import { Send, Loader2, ExternalLink, Download, BookOpen } from 'lucide-react';
 import ResultsAnalysis from '../components/trainee/ResultsAnalysis';
 import AuditItemCardFactory from '../components/trainee/AuditItemCardFactory';
@@ -174,6 +175,25 @@ const collectSupportingDocuments = (disbursement) => {
 
 const currencyFormatter = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' });
 
+const getRecipeId = (caseData) =>
+  caseData?.moduleId || caseData?.recipeId || caseData?.id || '';
+
+const normalizeRecipeVersion = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 1;
+  return Math.floor(parsed);
+};
+
+const getRecipeVersion = (caseData) => {
+  if (!caseData) return 1;
+  return normalizeRecipeVersion(
+    caseData?.instruction?.version ??
+      caseData?.recipeVersion ??
+      caseData?.moduleVersion ??
+      1
+  );
+};
+
 export default function TraineeCaseViewPage({ params }) {
   const { caseId } = params;
   const { navigate, query, setQuery } = useRoute();
@@ -188,6 +208,7 @@ export default function TraineeCaseViewPage({ params }) {
   const [caseData, setCaseData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeStep, setActiveStep] = useState(FLOW_STEPS.INSTRUCTION);
+  const [recipeProgress, setRecipeProgress] = useState(null);
   const [selectedDisbursements, setSelectedDisbursements] = useState({});
   const [classificationAmounts, setClassificationAmounts] = useState({});
   const [isLocked, setIsLocked] = useState(false);
@@ -204,10 +225,23 @@ export default function TraineeCaseViewPage({ params }) {
   const [furthestStepIndex, setFurthestStepIndex] = useState(0);
   const [levelGate, setLevelGate] = useState({ locked: false, message: '' });
 
+  const recipeId = useMemo(() => getRecipeId(caseData), [caseData]);
+  const recipeVersion = useMemo(() => getRecipeVersion(caseData), [caseData]);
+  const gateScope = useMemo(() => {
+    const scope = caseData?.workflow?.gateScope;
+    return scope === 'per_attempt' ? 'per_attempt' : 'once';
+  }, [caseData]);
+  const gatePassed = useMemo(
+    () => Boolean(recipeProgress && recipeProgress.passedVersion >= recipeVersion),
+    [recipeProgress, recipeVersion]
+  );
+  const gateRequired = gateScope === 'per_attempt' ? true : !gatePassed;
+
   const lastResolvedEvidenceRef = useRef({ evidenceId: null, storagePath: null, url: null, inlineNotSupported: false });
   const progressSaveTimeoutRef = useRef(null);
   const lastLocalChangeRef = useRef(0);
   const activeStepRef = useRef(FLOW_STEPS.INSTRUCTION);
+  const gatePassedRef = useRef(false);
   const selectionRef = useRef(selectedDisbursements);
   const classificationRef = useRef(classificationAmounts);
   const selectedIdsRef = useRef([]);
@@ -232,9 +266,10 @@ export default function TraineeCaseViewPage({ params }) {
       if (retakeResettingRef.current) return;
 
       retakeResettingRef.current = true;
+      const initialStep = gatePassedRef.current ? FLOW_STEPS.SELECTION : FLOW_STEPS.INSTRUCTION;
       setIsRetakeResetting(true);
       setIsLocked(false);
-      setActiveStep(FLOW_STEPS.INSTRUCTION);
+      setActiveStep(initialStep);
       setFurthestStepIndex(0);
       setSelectedDisbursements({});
       setClassificationAmounts({});
@@ -258,7 +293,7 @@ export default function TraineeCaseViewPage({ params }) {
           patch: {
             percentComplete: 0,
             state: 'not_started',
-            step: FLOW_STEPS.INSTRUCTION,
+            step: initialStep,
             draft: {
               selectedPaymentIds: [],
               classificationDraft: {},
@@ -391,6 +426,10 @@ export default function TraineeCaseViewPage({ params }) {
   }, [isLocked]);
 
   useEffect(() => {
+    gatePassedRef.current = gatePassed;
+  }, [gatePassed]);
+
+  useEffect(() => {
     if (!caseId || !userId) {
       setLoading(false);
       if (!caseId) navigate('/trainee');
@@ -447,6 +486,27 @@ export default function TraineeCaseViewPage({ params }) {
   }, [caseId, navigate, userId, showModal]);
 
   useEffect(() => {
+    if (!caseData || !userId || !recipeId) return;
+    let isActive = true;
+
+    fetchRecipeProgress({ appId, uid: userId, recipeId })
+      .then((progress) => {
+        if (!isActive) return;
+        setRecipeProgress(progress);
+      })
+      .catch((error) => {
+        console.error('Error fetching recipe progress:', error);
+        if (isActive) {
+          setRecipeProgress(null);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [caseData, userId, recipeId]);
+
+  useEffect(() => {
     if (!query?.retake) {
       retakeHandledRef.current = false;
     }
@@ -489,8 +549,18 @@ export default function TraineeCaseViewPage({ params }) {
         }
 
         const nextStep = STEP_SEQUENCE.includes(entry.step) ? entry.step : FLOW_STEPS.INSTRUCTION;
-        if ((!recentlyChanged || nextStep === FLOW_STEPS.RESULTS) && activeStepRef.current !== nextStep) {
-          setActiveStep(nextStep);
+        let resolvedStep = nextStep;
+        if (gatePassed && nextStep === FLOW_STEPS.INSTRUCTION) {
+          resolvedStep =
+            activeStepRef.current === FLOW_STEPS.INSTRUCTION && furthestStepIndex === 0
+              ? FLOW_STEPS.SELECTION
+              : activeStepRef.current;
+        }
+        if (
+          (!recentlyChanged || resolvedStep === FLOW_STEPS.RESULTS) &&
+          activeStepRef.current !== resolvedStep
+        ) {
+          setActiveStep(resolvedStep);
         }
 
         const nextSelection = {};
@@ -523,7 +593,7 @@ export default function TraineeCaseViewPage({ params }) {
     );
 
     return () => unsubscribe();
-  }, [caseId, userId, normalizePaymentId]);
+  }, [caseId, userId, normalizePaymentId, gatePassed, furthestStepIndex]);
 
   useEffect(() => {
     if (!caseData || !userId) return;
@@ -630,6 +700,16 @@ export default function TraineeCaseViewPage({ params }) {
     });
 
     return normalized;
+  }, [caseData]);
+
+  const hasPendingGeneration = useMemo(() => {
+    const docs = Array.isArray(caseData?.referenceDocuments) ? caseData.referenceDocuments : [];
+    return docs.some((doc) => {
+      if (!doc || typeof doc !== 'object') return false;
+      const hasSpec = doc.generationSpec || doc.generationSpecId;
+      if (!hasSpec) return false;
+      return !doc.storagePath && !doc.downloadURL;
+    });
   }, [caseData]);
 
   useEffect(() => {
@@ -1030,6 +1110,18 @@ export default function TraineeCaseViewPage({ params }) {
     if (!caseData || !userId || isLocked || activeStep === FLOW_STEPS.RESULTS || isRetakeResetting) return;
     enqueueProgressSave();
   }, [caseData, userId, isLocked, activeStep, enqueueProgressSave, isRetakeResetting]);
+
+  const handleEnterSimulation = useCallback(() => {
+    if (isLocked) return;
+    if (!gatePassed && recipeId && userId) {
+      setRecipeProgress({ recipeId, passedVersion: recipeVersion, passedAt: null });
+      saveRecipeProgress({ appId, uid: userId, recipeId, passedVersion: recipeVersion }).catch((error) => {
+        console.error('Failed to save recipe progress:', error);
+      });
+    }
+    enqueueProgressSave(FLOW_STEPS.SELECTION);
+    setActiveStep(FLOW_STEPS.SELECTION);
+  }, [gatePassed, recipeId, recipeVersion, userId, isLocked, enqueueProgressSave]);
 
   useEffect(
     () => () => {
@@ -1634,19 +1726,20 @@ export default function TraineeCaseViewPage({ params }) {
         <div>
           <h2 className="text-2xl font-semibold text-slate-900">Step 1 — Instruction</h2>
           <p className="text-sm text-slate-600">
-            Review the materials and successfully answer the knowledge check questions to access the simulation.
+            {gateScope === 'per_attempt'
+              ? 'Review the materials and successfully answer the knowledge check questions to access the simulation.'
+              : gatePassed
+              ? 'Review the materials. The gate check is optional because you already cleared it.'
+              : 'Review the materials and successfully answer the knowledge check questions to access the simulation.'}
           </p>
         </div>
-        <InstructionView
-          instructionData={caseData.instruction}
-          ctaLabel="Enter the Simulation"
-          className="w-full max-w-[1400px]"
-          onStartSimulation={() => {
-            if (isLocked) return;
-            enqueueProgressSave(FLOW_STEPS.SELECTION);
-            setActiveStep(FLOW_STEPS.SELECTION);
-          }}
-        />
+          <InstructionView
+            instructionData={caseData.instruction}
+            ctaLabel="Enter the Simulation"
+            className="w-full max-w-[1400px]"
+            gateRequired={gateRequired}
+            onStartSimulation={handleEnterSimulation}
+          />
       </div>
     );
   };
@@ -1660,14 +1753,22 @@ export default function TraineeCaseViewPage({ params }) {
         </p>
       </div>
 
-      {disbursementList.length === 0 ? (
+      {hasPendingGeneration ? (
+        <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-6 py-8 text-center">
+          <Loader2 size={28} className="animate-spin text-blue-600" />
+          <div className="text-sm text-blue-900 font-semibold">Generating case documents…</div>
+          <div className="text-xs text-blue-700">
+            We&apos;re assembling invoices and reference files. This usually takes a minute.
+          </div>
+        </div>
+      ) : disbursementList.length === 0 ? (
         <p className="text-slate-500">No disbursements are available for this case.</p>
       ) : (
         <div className="space-y-3">
           {disbursementList.map((d, index) => {
             const paymentId = d.paymentId;
             const checkboxId = paymentId ? `cb-${paymentId}` : `cb-missing-${index + 1}`;
-            const disabled = isLocked || !paymentId;
+            const disabled = isLocked || hasPendingGeneration || !paymentId;
             return (
               <div
                 key={d.__rowKey}
@@ -1713,7 +1814,7 @@ export default function TraineeCaseViewPage({ params }) {
         <Button variant="secondary" onClick={() => navigate('/trainee')}> 
           Back to Cases
         </Button>
-        <Button onClick={goToTestingStep} disabled={selectedIds.length === 0 || isLocked}>
+        <Button onClick={goToTestingStep} disabled={selectedIds.length === 0 || isLocked || hasPendingGeneration}>
           Continue to Classification
         </Button>
       </div>
