@@ -2,6 +2,8 @@
 const functions = require('firebase-functions');
 const { onDocumentWritten } = require('firebase-functions/v2/firestore');
 const admin = require('firebase-admin');
+const { getTemplateRenderer } = require('./pdfTemplates');
+const { assertNoFieldValueInArrays } = require('./utils/firestoreGuards');
 
 // Initialize Firebase Admin SDK
 // This is typically done automatically when deploying to Cloud Functions.
@@ -39,6 +41,150 @@ const toSafeDate = (value) => {
   }
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const ensureSafeFileName = (fileName = '') => {
+  const trimmed = String(fileName || '').trim() || 'document.pdf';
+  const withoutPaths = trimmed.replace(/[/\\]/g, '-');
+  return withoutPaths.replace(/[^\w.\-()\s]/g, '').replace(/\s+/g, ' ').trim();
+};
+
+const normalizeStoragePath = (rawPath, bucketName) => {
+  if (typeof rawPath !== 'string') return null;
+  const trimmed = rawPath.trim();
+  if (!trimmed) return null;
+  if (trimmed.startsWith('gs://')) {
+    const match = trimmed.match(/^gs:\/\/([^/]+)\/(.+)$/);
+    if (!match) return null;
+    if (bucketName && match[1] !== bucketName) return null;
+    return match[2];
+  }
+  if (trimmed.startsWith('https://firebasestorage.googleapis.com/')) {
+    const match = trimmed.match(/^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/([^/]+)\/o\/([^?]+)/);
+    if (!match) return null;
+    if (bucketName && match[1] !== bucketName) return null;
+    return decodeURIComponent(match[2]);
+  }
+  if (trimmed.startsWith('https://storage.googleapis.com/')) {
+    const match = trimmed.match(/^https:\/\/storage\.googleapis\.com\/([^/]+)\/(.+)$/);
+    if (!match) return null;
+    if (bucketName && match[1] !== bucketName) return null;
+    return match[2];
+  }
+  return trimmed.replace(/^\/+/, '');
+};
+
+const collectCaseStoragePaths = (caseData, bucketName) => {
+  const paths = new Set();
+  const addPath = (value) => {
+    const normalized = normalizeStoragePath(value, bucketName);
+    if (normalized) paths.add(normalized);
+  };
+  const addDocument = (doc) => {
+    if (!doc || typeof doc !== 'object') return;
+    addPath(doc.storagePath);
+    if (!doc.storagePath && doc.downloadURL) {
+      addPath(doc.downloadURL);
+    }
+  };
+  const addDocuments = (docs) => {
+    if (!Array.isArray(docs)) return;
+    docs.forEach((doc) => addDocument(doc));
+  };
+  const addItemDocuments = (item) => {
+    if (!item || typeof item !== 'object') return;
+    addPath(item.storagePath);
+    if (!item.storagePath && item.downloadURL) {
+      addPath(item.downloadURL);
+    }
+    addDocument(item.highlightedDocument);
+    addDocuments(item.supportingDocuments);
+  };
+  const addItems = (items) => {
+    if (!Array.isArray(items)) return;
+    items.forEach((item) => addItemDocuments(item));
+  };
+
+  addDocuments(caseData?.referenceDocuments);
+  addDocuments(caseData?.invoiceMappings);
+  addItems(caseData?.auditItems);
+  addItems(caseData?.disbursements);
+
+  return Array.from(paths);
+};
+
+const collectInvoiceStoragePaths = (caseData, bucketName) => {
+  const paths = new Set();
+  const addPath = (value) => {
+    const normalized = normalizeStoragePath(value, bucketName);
+    if (normalized) paths.add(normalized);
+  };
+  const addDocument = (doc) => {
+    if (!doc || typeof doc !== 'object') return;
+    addPath(doc.storagePath);
+    if (!doc.storagePath && doc.downloadURL) {
+      addPath(doc.downloadURL);
+    }
+  };
+  const addDocuments = (docs) => {
+    if (!Array.isArray(docs)) return;
+    docs.forEach((doc) => addDocument(doc));
+  };
+  const addItemDocuments = (item) => {
+    if (!item || typeof item !== 'object') return;
+    addPath(item.storagePath);
+    if (!item.storagePath && item.downloadURL) {
+      addPath(item.downloadURL);
+    }
+  };
+  const addItems = (items) => {
+    if (!Array.isArray(items)) return;
+    items.forEach((item) => addItemDocuments(item));
+  };
+
+  addDocuments(caseData?.invoiceMappings);
+  addItems(caseData?.auditItems);
+  addItems(caseData?.disbursements);
+
+  return Array.from(paths);
+};
+
+const renderPdfFromHtml = async (html, pdfOptions = {}) => {
+  let chromium;
+  let executablePath;
+  let chromiumArgs = [];
+  let chromiumHeadless = true;
+  try {
+    const { chromium: chromiumCore } = require('playwright-core');
+    const chromiumBinary = require('@sparticuz/chromium');
+    chromium = chromiumCore;
+    executablePath = await chromiumBinary.executablePath();
+    chromiumArgs = chromiumBinary.args || [];
+    if (chromiumBinary.headless !== undefined) {
+      if (typeof chromiumBinary.headless === 'string') {
+        chromiumHeadless = chromiumBinary.headless.toLowerCase() === 'true';
+      } else {
+        chromiumHeadless = Boolean(chromiumBinary.headless);
+      }
+    }
+  } catch (err) {
+    throw new Error('Playwright Chromium is not available in the functions runtime.');
+  }
+  const browser = await chromium.launch({
+    executablePath,
+    args: chromiumArgs,
+    headless: chromiumHeadless,
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setContent(html, { waitUntil: 'networkidle' });
+    await page.emulateMedia({ media: 'print' });
+    await page.evaluate(() => (document.fonts ? document.fonts.ready : Promise.resolve()));
+    const defaultPdfOptions = { printBackground: true, preferCSSPageSize: true };
+    return await page.pdf({ ...defaultPdfOptions, ...pdfOptions });
+  } finally {
+    await browser.close();
+  }
 };
 
 const normalizeSelection = (list) => {
@@ -155,16 +301,90 @@ exports.onRoleChangeSetCustomClaim = functions.firestore
     }
   });
 
+exports.onCaseDeletedCleanupStorage = functions.firestore
+  .document('artifacts/{appId}/public/data/cases/{caseId}')
+  .onWrite(async (change, context) => {
+    const after = change.after.exists ? change.after.data() : null;
+    const before = change.before.exists ? change.before.data() : null;
+    const wasDeleted = before?._deleted === true;
+    const isDeleted = after?._deleted === true;
+
+    if (!isDeleted || wasDeleted) {
+      return null;
+    }
+
+    const caseData = after || before || {};
+    const bucket = admin.storage().bucket();
+    const bucketName = bucket.name;
+    const storagePaths = collectCaseStoragePaths(caseData, bucketName);
+
+    if (storagePaths.length === 0) {
+      console.log('[caseCleanup] No storage paths found', {
+        caseId: context.params.caseId,
+        appId: context.params.appId,
+      });
+      return null;
+    }
+
+    await Promise.all(
+      storagePaths.map(async (path) => {
+        try {
+          await bucket.file(path).delete({ ignoreNotFound: true });
+        } catch (err) {
+          console.warn('[caseCleanup] Failed to delete file', {
+            path,
+            error: err?.message || err,
+          });
+        }
+      })
+    );
+
+    console.log('[caseCleanup] Deleted case storage', {
+      caseId: context.params.caseId,
+      appId: context.params.appId,
+      count: storagePaths.length,
+    });
+
+    return null;
+  });
+
+const resolveRequesterIdentity = async ({ context, appId, firestore, logLabel }) => {
+  const requesterRole = context.auth.token?.role;
+  let requesterOrgId = context.auth.token?.orgId ?? null;
+  let resolvedRole = requesterRole;
+
+  if (resolvedRole !== 'admin' && resolvedRole !== 'instructor') {
+    try {
+      const roleSnap = await firestore.doc(`roles/${context.auth.uid}`).get();
+      const docRole = roleSnap.exists ? roleSnap.data()?.role : null;
+      if (typeof docRole === 'string') {
+        resolvedRole = docRole.toLowerCase();
+      }
+    } catch (err) {
+      console.warn(`[${logLabel}] Failed to resolve role doc`, err);
+    }
+  }
+
+  if (!requesterOrgId && appId) {
+    try {
+      const profileRef = firestore.doc(
+        `artifacts/${appId}/users/${context.auth.uid}/userProfileData/profile`
+      );
+      const profileSnap = await profileRef.get();
+      if (profileSnap.exists) {
+        requesterOrgId = profileSnap.data()?.orgId ?? requesterOrgId;
+      }
+    } catch (err) {
+      console.warn(`[${logLabel}] Failed to resolve orgId from profile`, err);
+    }
+  }
+
+  return { resolvedRole, requesterOrgId };
+};
+
 exports.listRosterOptions = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
-  }
-
-  const requesterRole = context.auth.token?.role;
-  const requesterOrgId = context.auth.token?.orgId ?? null;
-
-  if (requesterRole !== 'admin' && requesterRole !== 'instructor') {
-    throw new functions.https.HttpsError('permission-denied', 'Insufficient permissions.');
   }
 
   const appId = data?.appId;
@@ -173,9 +393,20 @@ exports.listRosterOptions = functions.https.onCall(async (data, context) => {
   }
 
   const firestore = admin.firestore();
+
+  const { resolvedRole, requesterOrgId } = await resolveRequesterIdentity({
+    context,
+    appId,
+    firestore,
+    logLabel: 'listRosterOptions',
+  });
+
+  if (resolvedRole !== 'admin' && resolvedRole !== 'instructor') {
+    throw new functions.https.HttpsError('permission-denied', 'Insufficient permissions.');
+  }
   let rosterQuery = firestore.collection(`artifacts/${appId}/users`);
 
-  if (requesterRole === 'instructor') {
+  if (resolvedRole === 'instructor') {
     if (!requesterOrgId) {
       throw new functions.https.HttpsError('failed-precondition', 'Instructor has no Org ID.');
     }
@@ -226,6 +457,540 @@ exports.listRosterOptions = functions.https.onCall(async (data, context) => {
 
   return { roster };
 });
+
+exports.auditOrphanedInvoices = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
+  }
+
+  const appId = data?.appId;
+  if (!appId || typeof appId !== 'string') {
+    throw new functions.https.HttpsError('invalid-argument', 'appId is required.');
+  }
+
+  const sampleSizeRaw = Number(data?.sampleSize);
+  const sampleSize = Number.isFinite(sampleSizeRaw)
+    ? Math.min(Math.max(sampleSizeRaw, 0), 50)
+    : 10;
+  const deleteFiles = Boolean(data?.deleteFiles);
+
+  const firestore = admin.firestore();
+  const { resolvedRole } = await resolveRequesterIdentity({
+    context,
+    appId,
+    firestore,
+    logLabel: 'auditOrphanedInvoices',
+  });
+
+  if (resolvedRole !== 'admin') {
+    throw new functions.https.HttpsError('permission-denied', 'Insufficient permissions.');
+  }
+
+  const casesSnap = await firestore.collection(`artifacts/${appId}/public/data/cases`).get();
+  const activeCaseIds = new Set();
+  const referencedInvoicePaths = new Set();
+
+  casesSnap.forEach((docSnap) => {
+    const data = docSnap.data() || {};
+    if (data._deleted === true) {
+      return;
+    }
+    activeCaseIds.add(docSnap.id);
+    const invoicePaths = collectInvoiceStoragePaths(data, null);
+    invoicePaths.forEach((path) => referencedInvoicePaths.add(path));
+  });
+
+  const bucket = admin.storage().bucket();
+  const prefix = `artifacts/${appId}/case_documents/`;
+  const allFiles = [];
+  let pageToken;
+
+  do {
+    const [files, , response] = await bucket.getFiles({
+      prefix,
+      autoPaginate: false,
+      pageToken,
+      maxResults: 1000,
+    });
+    allFiles.push(...files);
+    pageToken = response?.nextPageToken;
+  } while (pageToken);
+
+  const orphaned = [];
+
+  allFiles.forEach((file) => {
+    const filePath = file?.name || '';
+    if (!filePath.startsWith(prefix)) return;
+    const remainder = filePath.slice(prefix.length);
+    const caseId = remainder.split('/')[0] || null;
+    const hasActiveCase = caseId ? activeCaseIds.has(caseId) : false;
+    const isReferenced = referencedInvoicePaths.has(filePath);
+    if (!hasActiveCase || !isReferenced) {
+      orphaned.push(filePath);
+    }
+  });
+
+  let deletedCount = 0;
+  if (deleteFiles && orphaned.length > 0) {
+    await Promise.all(
+      orphaned.map(async (path) => {
+        try {
+          await bucket.file(path).delete({ ignoreNotFound: true });
+          deletedCount += 1;
+        } catch (err) {
+          console.warn('[auditOrphanedInvoices] Failed to delete file', {
+            path,
+            error: err?.message || err,
+          });
+        }
+      })
+    );
+  }
+
+  return {
+    totalFiles: allFiles.length,
+    orphanedCount: orphaned.length,
+    orphanedSample: orphaned.slice(0, sampleSize),
+    deletedCount,
+  };
+});
+
+const resolveCaseAppId = async (firestore, appId, caseId) => {
+  const candidates = [];
+  if (appId) candidates.push(appId);
+  if (process.env.GCLOUD_PROJECT && process.env.GCLOUD_PROJECT !== appId) {
+    candidates.push(process.env.GCLOUD_PROJECT);
+  }
+  const seen = new Set();
+  const attempts = 3;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    for (const candidate of candidates) {
+      if (!candidate || seen.has(candidate)) continue;
+      seen.add(candidate);
+      const snap = await firestore.doc(`artifacts/${candidate}/public/data/cases/${caseId}`).get();
+      if (snap.exists) {
+        return { appId: candidate, caseData: snap.data() || {}, caseMissing: false };
+      }
+    }
+    // Retry briefly to handle eventual consistency right after case creation.
+    if (attempt < attempts - 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      seen.clear();
+    }
+  }
+  return appId ? { appId, caseData: null, caseMissing: true } : null;
+};
+
+exports.queueCaseDocGeneration = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
+  }
+
+  const appId = data?.appId;
+  const caseId = data?.caseId;
+  const plan = data?.plan ?? null;
+
+  if (!appId || typeof appId !== 'string') {
+    throw new functions.https.HttpsError('invalid-argument', 'appId is required.');
+  }
+  if (!caseId || typeof caseId !== 'string') {
+    throw new functions.https.HttpsError('invalid-argument', 'caseId is required.');
+  }
+  if (plan !== null && typeof plan !== 'object') {
+    throw new functions.https.HttpsError('invalid-argument', 'plan must be an object when provided.');
+  }
+
+  const firestore = admin.firestore();
+  const { resolvedRole, requesterOrgId } = await resolveRequesterIdentity({
+    context,
+    appId,
+    firestore,
+    logLabel: 'queueCaseDocGeneration',
+  });
+
+  if (resolvedRole !== 'admin' && resolvedRole !== 'instructor') {
+    throw new functions.https.HttpsError('permission-denied', 'Insufficient permissions.');
+  }
+
+  if (resolvedRole === 'instructor' && !requesterOrgId) {
+    throw new functions.https.HttpsError('failed-precondition', 'Instructor has no Org ID.');
+  }
+  const resolved = await resolveCaseAppId(firestore, appId, caseId);
+  if (!resolved) {
+    throw new functions.https.HttpsError('not-found', 'Case not found for provided appId.');
+  }
+  const { appId: resolvedAppId, caseData, caseMissing } = resolved;
+
+  if (resolvedRole === 'instructor') {
+    if (!requesterOrgId) {
+      throw new functions.https.HttpsError('failed-precondition', 'Instructor has no Org ID.');
+    }
+    if (caseMissing || !caseData?.orgId || caseData.orgId !== requesterOrgId) {
+      throw new functions.https.HttpsError('permission-denied', 'Case is outside instructor org.');
+    }
+  }
+
+  let resolvedPlan = plan;
+  let planSource = 'client';
+  if (
+    !resolvedPlan ||
+    typeof resolvedPlan !== 'object' ||
+    !Array.isArray(resolvedPlan.referenceDocumentSpecs) ||
+    resolvedPlan.referenceDocumentSpecs.length === 0
+  ) {
+    const planSnap = await firestore
+      .doc(`artifacts/${resolvedAppId}/private/data/case_generation_plans/${caseId}`)
+      .get();
+    resolvedPlan = planSnap.exists ? planSnap.data()?.plan : null;
+    planSource = 'plan-doc';
+  }
+
+  if (
+    !resolvedPlan ||
+    typeof resolvedPlan !== 'object' ||
+    !Array.isArray(resolvedPlan.referenceDocumentSpecs) ||
+    resolvedPlan.referenceDocumentSpecs.length === 0
+  ) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'Generation plan is missing or incomplete for this case.'
+    );
+  }
+
+  if (planSource === 'client') {
+    await firestore.doc(`artifacts/${resolvedAppId}/private/data/case_generation_plans/${caseId}`).set(
+      {
+        plan: resolvedPlan,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+  }
+
+  const jobRef = firestore
+    .collection(`artifacts/${resolvedAppId}/private/data/case_generation_jobs`)
+    .doc();
+
+  const payload = {
+    jobId: jobRef.id,
+    caseId,
+    appId: resolvedAppId,
+    plan: resolvedPlan,
+    planSource,
+    caseMissing: Boolean(caseMissing),
+    status: 'queued',
+    requestedBy: context.auth.uid,
+    orgId: requesterOrgId || null,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  await jobRef.set(payload, { merge: true });
+
+  try {
+    await firestore.doc(`artifacts/${resolvedAppId}/private/data/case_generation_plans/${caseId}`).set(
+      {
+        lastJob: {
+          jobId: jobRef.id,
+          status: 'queued',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+      },
+      { merge: true }
+    );
+  } catch (err) {
+    console.warn('[queueCaseDocGeneration] Failed to write lastJob status', err);
+  }
+
+  return { jobId: jobRef.id, status: payload.status };
+});
+
+exports.processCaseDocGenerationJob = onDocumentWritten(
+  {
+    document: 'artifacts/{appId}/private/data/case_generation_jobs/{jobId}',
+    memory: '1GiB',
+    timeoutSeconds: 120,
+  },
+  async (event) => {
+    if (!event?.data?.after?.exists) {
+      return null;
+    }
+    const jobRef = event.data.after.ref;
+    const job = event.data.after.data();
+    if (!job || job.status !== 'queued') {
+      return null;
+    }
+
+    const firestore = admin.firestore();
+    const { appId, caseId, plan } = job;
+    if (!appId || !caseId || !plan) {
+      await jobRef.set(
+        {
+          status: 'error',
+          error: 'Missing appId, caseId, or plan.',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      return null;
+    }
+
+    await firestore.runTransaction(async (tx) => {
+      const snap = await tx.get(jobRef);
+      if (!snap.exists) {
+        return;
+      }
+      const current = snap.data();
+      if (current?.status !== 'queued') {
+        return;
+      }
+      tx.update(jobRef, {
+        status: 'processing',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    });
+
+    let chromiumAvailable = true;
+    try {
+      const { chromium: chromiumCore } = require('playwright-core');
+      const chromiumBinary = require('@sparticuz/chromium');
+      const executablePath = await chromiumBinary.executablePath();
+      if (!chromiumCore || !executablePath) {
+        chromiumAvailable = false;
+      }
+    } catch (err) {
+      chromiumAvailable = false;
+    }
+
+    const planRef = firestore.doc(`artifacts/${appId}/private/data/case_generation_plans/${caseId}`);
+
+    if (!chromiumAvailable) {
+      await jobRef.set(
+        {
+          status: 'error',
+          error: 'Playwright Chromium is not available in the functions runtime.',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      await planRef.set(
+        {
+          lastJob: {
+            jobId: job?.jobId || event.params.jobId,
+            status: 'error',
+            error: 'Playwright Chromium is not available in the functions runtime.',
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+        },
+        { merge: true }
+      );
+      return null;
+    }
+
+    const specs = Array.isArray(plan.referenceDocumentSpecs) ? plan.referenceDocumentSpecs : [];
+    const results = [];
+    const errors = [];
+
+    for (const spec of specs) {
+      try {
+        const generationSpec = spec?.generationSpec || {};
+        const templateId = generationSpec.templateId;
+        if (!templateId) {
+          throw new Error('Missing templateId.');
+        }
+        const renderer = getTemplateRenderer(templateId);
+        const { html, css, pdfOptions } = renderer({
+          data: generationSpec.data || {},
+          theme: generationSpec.theme || {},
+          layout: generationSpec.layout || {},
+        });
+
+        const fullHtml = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>${css}</style>
+</head>
+<body>${html}</body>
+</html>`;
+
+        const buffer = await renderPdfFromHtml(fullHtml, pdfOptions || {});
+        const fileBaseName = ensureSafeFileName(spec.fileName || `${templateId}.pdf`);
+        const safeName = fileBaseName.toLowerCase().endsWith('.pdf')
+          ? fileBaseName
+          : `${fileBaseName}.pdf`;
+        const storagePath = `artifacts/${appId}/case_reference/${caseId}/${safeName}`;
+        const bucket = admin.storage().bucket();
+        const file = bucket.file(storagePath);
+
+        await file.save(buffer, {
+          contentType: 'application/pdf',
+          resumable: false,
+          metadata: {
+            contentType: 'application/pdf',
+            customMetadata: {
+              caseId: String(caseId),
+              templateId: String(templateId),
+            },
+          },
+        });
+
+        results.push({
+          fileName: spec.fileName || safeName,
+          storagePath,
+          contentType: 'application/pdf',
+          generationSpec,
+          generationSpecId: spec.id || null,
+          linkToPaymentId: spec.linkToPaymentId || generationSpec.linkToPaymentId || null,
+        });
+      } catch (err) {
+        errors.push({
+          fileName: spec?.fileName || null,
+          templateId: spec?.generationSpec?.templateId || null,
+          error: err?.message || 'Generation failed',
+        });
+      }
+    }
+
+    const caseRef = firestore.doc(`artifacts/${appId}/public/data/cases/${caseId}`);
+    const caseSnap = await caseRef.get();
+    if (caseSnap.exists) {
+      const caseData = caseSnap.data() || {};
+      const existing = Array.isArray(caseData.referenceDocuments) ? caseData.referenceDocuments : [];
+      const updated = existing.map((doc) => ({ ...doc }));
+
+      results.forEach((result) => {
+        const matchIndex = updated.findIndex((doc) => {
+          if (!doc || !doc.fileName) return false;
+          if (result.generationSpecId && doc.generationSpecId) {
+            return doc.generationSpecId === result.generationSpecId;
+          }
+          if (doc.fileName !== result.fileName) return false;
+          if (!doc.generationSpec || !result.generationSpec) return true;
+          return doc.generationSpec.templateId === result.generationSpec.templateId;
+        });
+
+        if (matchIndex >= 0) {
+          updated[matchIndex] = {
+            ...updated[matchIndex],
+            storagePath: result.storagePath,
+            contentType: result.contentType,
+            generationSpec: result.generationSpec,
+            generationSpecId: result.generationSpecId || updated[matchIndex].generationSpecId || null,
+            generatedAt: admin.firestore.Timestamp.now(),
+          };
+        } else {
+          updated.push({
+            fileName: result.fileName,
+            storagePath: result.storagePath,
+            contentType: result.contentType,
+            generationSpec: result.generationSpec,
+            generationSpecId: result.generationSpecId || null,
+            generatedAt: admin.firestore.Timestamp.now(),
+          });
+        }
+      });
+
+      const invoiceMappings = Array.isArray(caseData.invoiceMappings) ? caseData.invoiceMappings : [];
+      const updatedMappings = invoiceMappings.map((mapping) => ({ ...mapping }));
+
+      results.forEach((result) => {
+        if (!result.linkToPaymentId) return;
+        const existingIndex = updatedMappings.findIndex(
+          (mapping) =>
+            mapping &&
+            mapping.paymentId === result.linkToPaymentId &&
+            mapping.fileName === result.fileName
+        );
+        const payload = {
+          paymentId: result.linkToPaymentId,
+          fileName: result.fileName,
+          storagePath: result.storagePath,
+          contentType: result.contentType,
+        };
+        if (existingIndex >= 0) {
+          updatedMappings[existingIndex] = {
+            ...updatedMappings[existingIndex],
+            ...payload,
+          };
+        } else {
+          updatedMappings.push(payload);
+        }
+      });
+
+      try {
+        assertNoFieldValueInArrays(
+          { referenceDocuments: updated, invoiceMappings: updatedMappings },
+          'caseUpdate'
+        );
+        await caseRef.set(
+          { referenceDocuments: updated, invoiceMappings: updatedMappings },
+          { merge: true }
+        );
+      } catch (err) {
+        await jobRef.set(
+          {
+            status: 'error',
+            error: err?.message || 'Failed to update case reference documents.',
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            completedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+        await planRef.set(
+          {
+            lastJob: {
+              jobId: job?.jobId || event.params.jobId,
+              status: 'error',
+              errorCount: errors.length + 1,
+              errors: [
+                ...(errors || []).slice(0, 2),
+                {
+                  fileName: null,
+                  templateId: null,
+                  error: err?.message || 'Failed to update case reference documents.',
+                },
+              ],
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
+          },
+          { merge: true }
+        );
+        return null;
+      }
+    }
+
+    const status = errors.length === 0 ? 'completed' : results.length > 0 ? 'partial' : 'error';
+    await jobRef.set(
+      {
+        status,
+        results,
+        errors,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    await planRef.set(
+      {
+        lastJob: {
+          jobId: job?.jobId || event.params.jobId,
+          status,
+          errorCount: errors.length,
+          errors: errors.slice(0, 3),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+      },
+      { merge: true }
+    );
+
+    return null;
+  }
+);
 
 exports.gradeSubmission = onDocumentWritten(
   'artifacts/{appId}/users/{userId}/caseSubmissions/{caseId}',

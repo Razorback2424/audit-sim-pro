@@ -34,6 +34,9 @@ export function createCaseFormUploadHandlers({
   draftCaseId,
   setDraftCaseId,
   caseName,
+  yearEndValue,
+  yearEndInput,
+  caseLevel,
   auditArea,
   layoutType,
   layoutConfigRaw,
@@ -115,6 +118,9 @@ export function createCaseFormUploadHandlers({
       createdBy: userId,
       _deleted: false,
       auditArea,
+      caseLevel: caseLevel || 'basic',
+      yearEnd: (yearEndValue || '').trim() || null,
+      yearEndLabel: (yearEndInput || '').trim() || null,
       caseGroupId: resolvedCaseGroupId,
     };
 
@@ -614,15 +620,21 @@ export function createCaseFormUploadHandlers({
       }
       const storagePath = (docItem.storagePath || '').trim();
       const downloadURL = (docItem.downloadURL || '').trim();
+      const generationSpec =
+        docItem.generationSpec && typeof docItem.generationSpec === 'object'
+          ? docItem.generationSpec
+          : null;
       const payload = {
         _tempId: docItem._tempId,
         fileName: fallbackName,
         type: docItem.type,
         confirmedBalance: docItem.confirmedBalance,
       };
+      if (docItem.generationSpecId) payload.generationSpecId = docItem.generationSpecId;
       if (storagePath) payload.storagePath = storagePath;
       if (downloadURL) payload.downloadURL = downloadURL;
       if (docItem.contentType) payload.contentType = docItem.contentType;
+      if (generationSpec) payload.generationSpec = generationSpec;
       return payload;
     }
 
@@ -1152,4 +1164,3 @@ export function createCaseFormUploadHandlers({
     handleCashArtifactFileSelect,
   };
 }
-

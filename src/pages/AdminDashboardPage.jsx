@@ -3,10 +3,10 @@ import {
   FilePlus,
   Edit3,
   ListFilter,
+  List,
   Trash2,
   Search,
   LayoutGrid,
-  Table as TableIcon,
   ChevronLeft,
   ChevronRight,
   AlertCircle,
@@ -24,6 +24,7 @@ import {
   CASE_SORT_CHOICES,
   DEFAULT_CASE_SORT,
 } from '../services/caseService';
+import { auditOrphanedInvoices } from '../services/storageAuditService';
 import { subscribeToRecentSubmissionActivity } from '../services/submissionService';
 import { fetchUsersWithProfiles } from '../services/userService';
 import AdvancedToolsMenu from '../components/admin/AdvancedToolsMenu';
@@ -31,7 +32,7 @@ import DashboardMetrics from '../components/admin/DashboardMetrics';
 import SetupAlerts from '../components/admin/SetupAlerts';
 import RecentActivity from '../components/admin/RecentActivity';
 import QuickActions from '../components/admin/QuickActions';
-import { AUDIT_AREA_VALUES, AUDIT_AREA_LABELS } from '../models/caseConstants';
+import { AUDIT_AREA_VALUES } from '../models/caseConstants';
 
 const STATUS_OPTIONS = [
   { value: 'assigned', label: 'Assigned' },
@@ -41,14 +42,9 @@ const STATUS_OPTIONS = [
   { value: 'draft', label: 'Draft' },
 ];
 
-const VISIBILITY_OPTIONS = [
-  { value: 'public', label: 'Visible to all trainees' },
-  { value: 'private', label: 'Rostered only' },
-];
-
 const VIEW_OPTIONS = [
   { id: 'grid', label: 'Card view', Icon: LayoutGrid },
-  { id: 'table', label: 'Table view', Icon: TableIcon },
+  { id: 'list', label: 'List view', Icon: List },
 ];
 
 const PAGE_SIZE_OPTIONS = [6, 12, 24, 48];
@@ -107,6 +103,7 @@ export default function AdminDashboardPage() {
   const { role, loadingRole } = useUser();
   const [refreshToken, setRefreshToken] = useState(0);
   const [repairingCases, setRepairingCases] = useState(false);
+  const [auditingOrphanedInvoices, setAuditingOrphanedInvoices] = useState(false);
   const [dashboardSummary, setDashboardSummary] = useState({
     activeCases: 0,
     totalDisbursements: 0,
@@ -135,10 +132,11 @@ export default function AdminDashboardPage() {
   });
   const [searchInput, setSearchInput] = useState(() => (query?.search ?? '').trim());
   const [debouncedSearch, setDebouncedSearch] = useState(() => (query?.search ?? '').trim());
+  const [selectedCaseIds, setSelectedCaseIds] = useState([]);
   const [viewMode, setViewMode] = useState(() => {
     try {
       const stored = window.localStorage.getItem('auditsim.adminDashboard.viewMode');
-      return stored === 'table' ? 'table' : 'grid';
+      return stored === 'list' ? 'list' : 'grid';
     } catch (err) {
       console.warn('[AdminDashboard] Failed to read stored view mode:', err);
       return 'grid';
@@ -222,6 +220,10 @@ export default function AdminDashboardPage() {
       console.warn('[AdminDashboard] Failed to persist view mode:', err);
     }
   }, [viewMode]);
+
+  useEffect(() => {
+    setSelectedCaseIds([]);
+  }, [casesState.items, casesState.page]);
 
   useEffect(() => {
     try {
@@ -510,6 +512,83 @@ export default function AdminDashboardPage() {
     }
   };
 
+  const handleAuditOrphanedInvoices = async () => {
+    if (auditingOrphanedInvoices) return;
+    setAuditingOrphanedInvoices(true);
+    try {
+      const result = await auditOrphanedInvoices({ deleteFiles: false, sampleSize: 8 });
+      const totalFiles = result?.totalFiles ?? 0;
+      const orphanedCount = result?.orphanedCount ?? 0;
+      const orphanedSample = Array.isArray(result?.orphanedSample) ? result.orphanedSample : [];
+
+      if (orphanedCount === 0) {
+        showModal(
+          `No orphaned invoices found. ${totalFiles} invoice file${totalFiles === 1 ? '' : 's'} scanned.`,
+          'Storage Check Complete'
+        );
+        return;
+      }
+
+      showModal(
+        <>
+          <p className="text-gray-700">
+            Found {orphanedCount} orphaned invoice file{orphanedCount === 1 ? '' : 's'} out of {totalFiles}{' '}
+            scanned. These are invoices not tied to an active or draft case.
+          </p>
+          {orphanedSample.length > 0 && (
+            <ul className="mt-3 max-h-40 overflow-auto text-xs text-gray-600 space-y-1">
+              {orphanedSample.map((path) => (
+                <li key={path} className="truncate">
+                  {path}
+                </li>
+              ))}
+              {orphanedCount > orphanedSample.length && (
+                <li>…and {orphanedCount - orphanedSample.length} more.</li>
+              )}
+            </ul>
+          )}
+          <p className="mt-3 text-sm text-gray-600">Delete these orphaned invoices now?</p>
+        </>,
+        'Orphaned Invoices Found',
+        (hideModal) => (
+          <>
+            <Button onClick={hideModal} variant="secondary">
+              Cancel
+            </Button>
+            <Button
+              onClick={async () => {
+                hideModal();
+                setAuditingOrphanedInvoices(true);
+                try {
+                  const cleanup = await auditOrphanedInvoices({ deleteFiles: true, sampleSize: 0 });
+                  const deletedCount = cleanup?.deletedCount ?? 0;
+                  showModal(
+                    `${deletedCount} orphaned invoice file${deletedCount === 1 ? '' : 's'} deleted.`,
+                    'Cleanup Complete'
+                  );
+                } catch (error) {
+                  console.error('Error deleting orphaned invoices:', error);
+                  showModal(error?.message || 'Unable to delete orphaned invoices.', 'Error');
+                } finally {
+                  setAuditingOrphanedInvoices(false);
+                }
+              }}
+              variant="danger"
+              className="ml-2"
+            >
+              Delete orphaned invoices
+            </Button>
+          </>
+        )
+      );
+    } catch (error) {
+      console.error('Error auditing orphaned invoices:', error);
+      showModal(error?.message || 'Unable to audit orphaned invoices.', 'Error');
+    } finally {
+      setAuditingOrphanedInvoices(false);
+    }
+  };
+
   const deleteCase = async (caseId) => {
     showModal(
       <>
@@ -541,6 +620,63 @@ export default function AdminDashboardPage() {
     );
   };
 
+  const selectedCount = selectedCaseIds.length;
+  const currentPageIds = casesState.items.map((item) => item.id);
+  const allSelected = currentPageIds.length > 0 && currentPageIds.every((id) => selectedCaseIds.includes(id));
+  const someSelected = selectedCount > 0 && !allSelected;
+
+  const toggleSelectCase = (caseId) => {
+    setSelectedCaseIds((prev) => {
+      if (prev.includes(caseId)) {
+        return prev.filter((id) => id !== caseId);
+      }
+      return [...prev, caseId];
+    });
+  };
+
+  const toggleSelectAll = () => {
+    setSelectedCaseIds((prev) => {
+      if (allSelected) {
+        return prev.filter((id) => !currentPageIds.includes(id));
+      }
+      const merged = new Set([...prev, ...currentPageIds]);
+      return Array.from(merged);
+    });
+  };
+
+  const handleBulkDelete = () => {
+    if (selectedCaseIds.length === 0) return;
+    showModal(
+      <p className="text-gray-700">
+        Delete {selectedCaseIds.length} selected case{selectedCaseIds.length === 1 ? '' : 's'}? This will mark them as deleted.
+      </p>,
+      'Confirm Bulk Delete',
+      (hideModal) => (
+        <>
+          <Button onClick={hideModal} variant="secondary">Cancel</Button>
+          <Button
+            onClick={async () => {
+              hideModal();
+              try {
+                await Promise.all(selectedCaseIds.map((caseId) => markCaseDeleted(caseId)));
+                showModal('Selected cases marked for deletion.', 'Success');
+                setSelectedCaseIds([]);
+                setRefreshToken((value) => value + 1);
+              } catch (error) {
+                console.error('Error deleting cases:', error);
+                showModal('Error deleting cases: ' + error.message, 'Error');
+              }
+            }}
+            variant="danger"
+            className="ml-2"
+          >
+            Delete selected
+          </Button>
+        </>
+      )
+    );
+  };
+
   const totalCases = casesState.total;
   const effectivePage = casesState.page;
   const effectivePageSize = casesState.pageSize || pageSize;
@@ -563,44 +699,6 @@ export default function AdminDashboardPage() {
     setQuery(
       {
         status: next.length ? next.join(',') : undefined,
-        page: '1',
-      },
-      { replace: false }
-    );
-  };
-
-  const toggleVisibilityFilter = (value) => {
-    const current = new Set(visibilityFilters);
-    if (current.has(value)) {
-      current.delete(value);
-    } else {
-      current.add(value);
-    }
-    const next = Array.from(current);
-    setQuery(
-      {
-        visibility: next.length ? next.join(',') : undefined,
-        page: '1',
-      },
-      { replace: false }
-    );
-  };
-
-  const handleAuditAreaChange = (event) => {
-    const { value } = event.target;
-    setQuery(
-      {
-        auditArea: value ? value : undefined,
-        page: '1',
-      },
-      { replace: false }
-    );
-  };
-
-  const clearAuditAreaFilter = () => {
-    setQuery(
-      {
-        auditArea: undefined,
         page: '1',
       },
       { replace: false }
@@ -813,70 +911,77 @@ export default function AdminDashboardPage() {
     </div>
   );
 
-  const renderCaseTable = () => (
-    <div className="bg-white rounded-lg shadow overflow-hidden">
-      <table className="min-w-full divide-y divide-gray-200 text-sm">
-        <thead className="bg-gray-50 text-gray-600 uppercase tracking-wide text-xs">
-          <tr>
-            <th className="px-4 py-3 text-left">Case</th>
-            <th className="px-4 py-3 text-left">Status</th>
-            <th className="px-4 py-3 text-left">Audience</th>
-            <th className="px-4 py-3 text-left">Updated</th>
-            <th className="px-4 py-3 text-right">Actions</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-gray-100">
-          {casesState.items.map((caseData) => {
-            const statusLabel = getStatusLabel(caseData.status);
-            const audienceLabel = getAudienceLabel(caseData);
-            const updatedLabel = formatDateLabel(caseData.updatedAt || caseData.createdAt);
-            const caseAlerts = alertsByCaseId.get(caseData.id) || [];
-            const hasAlerts = caseAlerts.length > 0;
-            return (
-              <tr
-                key={caseData.id}
-                className={`transition-colors ${hasAlerts ? 'bg-amber-50 hover:bg-amber-100' : 'hover:bg-gray-50'}`}
-              >
-                <td className="px-4 py-3">
-                  <div className="flex items-center gap-2 font-semibold text-gray-900">
-                    <span>{caseData.caseName || 'Untitled case'}</span>
-                    {hasAlerts && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
-                        <AlertTriangle size={12} />
-                        {caseAlerts.length}
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-xs text-gray-500 break-all">ID: {caseData.id}</div>
-                </td>
-                <td className="px-4 py-3">
-                  <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${getStatusBadgeClass(caseData.status)}`}>
-                    {statusLabel}
+  const renderCaseList = () => (
+    <div className="bg-white rounded-lg shadow divide-y divide-gray-100">
+      <div className="grid grid-cols-[2.5rem_4fr_2fr_3fr_2fr_2.5fr] items-center gap-3 px-4 py-3 text-xs uppercase tracking-wide text-gray-500">
+        <input
+          type="checkbox"
+          checked={allSelected}
+          ref={(el) => {
+            if (el) el.indeterminate = someSelected;
+          }}
+          onChange={toggleSelectAll}
+          aria-label="Select all cases on this page"
+        />
+        <span>Case</span>
+        <span>Status</span>
+        <span>Audience</span>
+        <span>Updated</span>
+        <span className="text-right">Actions</span>
+      </div>
+      {casesState.items.map((caseData) => {
+        const statusLabel = getStatusLabel(caseData.status);
+        const audienceLabel = getAudienceLabel(caseData);
+        const updatedLabel = formatDateLabel(caseData.updatedAt || caseData.createdAt);
+        const caseAlerts = alertsByCaseId.get(caseData.id) || [];
+        const hasAlerts = caseAlerts.length > 0;
+        const isSelected = selectedCaseIds.includes(caseData.id);
+        return (
+          <div
+            key={caseData.id}
+            className={`grid grid-cols-[2.5rem_4fr_2fr_3fr_2fr_2.5fr] items-center gap-3 px-4 py-3 ${
+              hasAlerts ? 'bg-amber-50' : 'bg-white'
+            }`}
+          >
+            <input
+              type="checkbox"
+              checked={isSelected}
+              onChange={() => toggleSelectCase(caseData.id)}
+              aria-label={`Select ${caseData.caseName || 'case'}`}
+            />
+            <div>
+              <div className="flex items-center gap-2 font-semibold text-gray-900">
+                <span>{caseData.caseName || 'Untitled case'}</span>
+                {hasAlerts && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700">
+                    <AlertTriangle size={12} />
+                    {caseAlerts.length}
                   </span>
-                </td>
-                <td className="px-4 py-3 text-gray-700">{audienceLabel}</td>
-                <td className="px-4 py-3 text-gray-700">{updatedLabel}</td>
-                <td className="px-4 py-3">
-                  <div className="flex justify-end flex-wrap gap-2">
-                    <Button onClick={() => navigate(`/admin/case-overview/${caseData.id}`)} variant="secondary" className="px-3 py-1 text-xs">
-                      View
-                    </Button>
-                    <Button onClick={() => navigate(`/admin/case-submissions/${caseData.id}`)} variant="secondary" className="px-3 py-1 text-xs">
-                      Submissions
-                    </Button>
-                    <Button onClick={() => navigate(`/admin/edit-case/${caseData.id}`)} variant="secondary" className="px-3 py-1 text-xs">
-                      Edit
-                    </Button>
-                    <Button onClick={() => deleteCase(caseData.id)} variant="danger" className="px-3 py-1 text-xs">
-                      Delete
-                    </Button>
-                  </div>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+                )}
+              </div>
+              <div className="text-xs text-gray-500 break-all">ID: {caseData.id}</div>
+            </div>
+            <div>
+              <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${getStatusBadgeClass(caseData.status)}`}>
+                {statusLabel}
+              </span>
+            </div>
+            <div className="text-sm text-gray-700">{audienceLabel}</div>
+            <div className="text-sm text-gray-700">{updatedLabel}</div>
+            <div className="flex items-center justify-end gap-2 flex-nowrap">
+              <Button onClick={() => navigate(`/admin/case-overview/${caseData.id}`)} variant="secondary" className="px-3 py-1 text-xs">
+                View
+              </Button>
+              <Button onClick={() => navigate(`/admin/edit-case/${caseData.id}`)} variant="secondary" className="px-3 py-1 text-xs">
+                Edit
+              </Button>
+              <Button onClick={() => deleteCase(caseData.id)} variant="danger" className="px-3 py-1 text-xs">
+                Delete
+              </Button>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 
@@ -901,6 +1006,8 @@ export default function AdminDashboardPage() {
               onNavigateDataAudit={() => navigate('/admin/case-data-audit')}
               onRepairCases={handleRepairCases}
               isRepairingCases={repairingCases}
+              onAuditOrphanedInvoices={handleAuditOrphanedInvoices}
+              isAuditingOrphanedInvoices={auditingOrphanedInvoices}
             />
           </div>
         </div>
@@ -951,24 +1058,6 @@ export default function AdminDashboardPage() {
                       ))}
                     </Select>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <label htmlFor="case-audit-area" className="text-sm font-medium text-gray-600">
-                      Audit area
-                    </label>
-                    <Select
-                      id="case-audit-area"
-                      value={auditAreaFilter}
-                      onChange={handleAuditAreaChange}
-                      className="w-48"
-                    >
-                      <option value="">All areas</option>
-                      {AUDIT_AREA_VALUES.map((value) => (
-                        <option key={value} value={value}>
-                          {AUDIT_AREA_LABELS[value] || value}
-                        </option>
-                      ))}
-                    </Select>
-                  </div>
                   <div className="inline-flex items-center overflow-hidden rounded-lg border border-gray-200">
                     {VIEW_OPTIONS.map(({ id, label, Icon }) => {
                       const isActive = viewMode === id;
@@ -989,9 +1078,26 @@ export default function AdminDashboardPage() {
                       );
                     })}
                   </div>
+                  <div className="flex items-center gap-2">
+                    {selectedCount > 0 ? (
+                      <>
+                        <span className="text-sm text-gray-600">{selectedCount} selected</span>
+                        <Button onClick={handleBulkDelete} variant="danger" className="px-3 py-2 text-sm">
+                          Delete selected
+                        </Button>
+                        <Button onClick={() => setSelectedCaseIds([])} variant="secondary" className="px-3 py-2 text-sm">
+                          Clear
+                        </Button>
+                      </>
+                    ) : (
+                      <span className="text-xs text-gray-500">
+                        {viewMode === 'list' ? 'Select cases to bulk delete.' : 'Switch to list view to select multiple.'}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
-              <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-3">
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-sm font-medium text-gray-600">
                     <ListFilter size={16} /> Status
@@ -1016,41 +1122,7 @@ export default function AdminDashboardPage() {
                     })}
                   </div>
                 </div>
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2 text-sm font-medium text-gray-600">
-                    <ListFilter size={16} /> Audience visibility
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {VISIBILITY_OPTIONS.map((option) => {
-                      const isActive = visibilityFilters.includes(option.value);
-                      return (
-                        <button
-                          type="button"
-                          key={option.value}
-                          onClick={() => toggleVisibilityFilter(option.value)}
-                          className={`px-3 py-1.5 rounded-full text-sm font-medium transition ${
-                            isActive
-                              ? 'bg-blue-600 text-white shadow-sm'
-                              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                          }`}
-                        >
-                          {option.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                  </div>
-                </div>
-              {auditAreaFilter && (
-                <div className="flex items-center justify-between rounded-md border border-blue-100 bg-blue-50 px-3 py-2 text-sm text-blue-700">
-                  <span>
-                    Audit area filter: {AUDIT_AREA_LABELS[auditAreaFilter] || auditAreaFilter}
-                  </span>
-                  <Button onClick={clearAuditAreaFilter} variant="secondary" className="text-xs">
-                    Clear
-                  </Button>
-                </div>
-              )}
+              </div>
               {filtersActive > 0 && (
                 <div className="flex justify-end">
                   <Button onClick={clearFilters} variant="secondary" className="text-sm">
@@ -1116,8 +1188,8 @@ export default function AdminDashboardPage() {
                 ? renderErrorState()
                 : casesState.items.length === 0
                 ? renderEmptyState()
-                : viewMode === 'table'
-                ? renderCaseTable()
+                : viewMode === 'list'
+                ? renderCaseList()
                 : renderCaseCards()}
             </div>
           </div>

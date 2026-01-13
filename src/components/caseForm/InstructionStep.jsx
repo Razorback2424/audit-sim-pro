@@ -1,19 +1,38 @@
 import React from 'react';
-import { Input, Select, Textarea, Button } from '../../AppCore';
+import { Input, Textarea, Button } from '../../AppCore';
 import { PlusCircle, Trash2 } from 'lucide-react';
 import StepIntro from './StepIntro';
 
 export default function InstructionStep({ instructionData }) {
   const { instruction, setInstruction } = instructionData;
 
-  const update = (field, value) => {
-    setInstruction((prev) => ({ ...prev, [field]: value }));
-  };
-
   const updateNested = (parent, field, value) => {
     setInstruction((prev) => ({
       ...prev,
       [parent]: { ...(prev[parent] || {}), [field]: value },
+    }));
+  };
+
+  const parseVideoSource = (value) => {
+    const trimmed = String(value || '').trim();
+    if (!trimmed) return { sourceId: '', url: '' };
+    const urlMatch = trimmed.match(
+      /(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]{6,})/i
+    );
+    if (urlMatch) {
+      return { sourceId: urlMatch[1], url: '' };
+    }
+    if (/^[A-Za-z0-9_-]{6,}$/.test(trimmed)) {
+      return { sourceId: trimmed, url: '' };
+    }
+    return { sourceId: '', url: trimmed };
+  };
+
+  const handleVideoChange = (value) => {
+    const { sourceId, url } = parseVideoSource(value);
+    setInstruction((prev) => ({
+      ...prev,
+      visualAsset: { ...(prev.visualAsset || {}), type: 'VIDEO', source_id: sourceId, url },
     }));
   };
 
@@ -61,120 +80,26 @@ export default function InstructionStep({ instructionData }) {
   return (
     <div className="space-y-8">
       <StepIntro
-        title="Configure the Briefing Room"
+        title="Instruction setup"
         items={[
-          'Set the context: Why does this audit task matter?',
-          'Define the Golden Rule (Heuristic) the trainee must learn.',
-          'Set the Gate Question that blocks entry until mastered.',
+          'Paste the training video link (or YouTube ID).',
+          'Define the gate check question and answers.',
         ]}
       />
 
       <section className="rounded-lg border border-gray-200 bg-white p-4">
-        <h3 className="mb-3 text-base font-semibold text-gray-800">Module Identity</h3>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Instruction Title</label>
-            <Input
-              value={instruction?.title || ''}
-              onChange={(e) => update('title', e.target.value)}
-              placeholder="e.g. Search for Unrecorded Liabilities"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Module Code</label>
-            <Input
-              value={instruction?.moduleCode || ''}
-              onChange={(e) => update('moduleCode', e.target.value)}
-              placeholder="e.g. SURL-101"
-            />
-          </div>
-        </div>
+        <h3 className="mb-3 text-base font-semibold text-gray-800">Instruction Video</h3>
+        <label className="block text-sm font-medium text-gray-700">YouTube link or ID</label>
+        <Input
+          value={instruction?.visualAsset?.source_id || instruction?.visualAsset?.url || ''}
+          onChange={(e) => handleVideoChange(e.target.value)}
+          placeholder="Paste a YouTube link or ID"
+          className="mt-2"
+        />
       </section>
 
       <section className="rounded-lg border border-gray-200 bg-white p-4">
-        <h3 className="mb-3 text-base font-semibold text-gray-800">The Hook (Context)</h3>
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Headline</label>
-            <Input
-              value={instruction?.hook?.headline || ''}
-              onChange={(e) => updateNested('hook', 'headline', e.target.value)}
-              placeholder="e.g. The Silent Profit Killer"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Risk Statement</label>
-            <Input
-              value={instruction?.hook?.risk || ''}
-              onChange={(e) => updateNested('hook', 'risk', e.target.value)}
-              placeholder="e.g. Risk of Material Misstatement (Completeness)"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Body Text</label>
-            <Textarea
-              value={instruction?.hook?.body || ''}
-              onChange={(e) => updateNested('hook', 'body', e.target.value)}
-              rows={3}
-              placeholder="Explain the 'Why'..."
-            />
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-gray-200 bg-white p-4">
-        <h3 className="mb-3 text-base font-semibold text-gray-800">Visual Asset</h3>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Asset Type</label>
-            <Select
-              value={instruction?.visualAsset?.type || 'VIDEO'}
-              onChange={(e) => updateNested('visualAsset', 'type', e.target.value)}
-              options={[
-                { value: 'VIDEO', label: 'YouTube Video' },
-                { value: 'IMAGE', label: 'Image URL' },
-              ]}
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Source ID / URL</label>
-            <Input
-              value={instruction?.visualAsset?.source_id || instruction?.visualAsset?.url || ''}
-              onChange={(e) => updateNested('visualAsset', 'source_id', e.target.value)}
-              placeholder={
-                (instruction?.visualAsset?.type || 'VIDEO') === 'VIDEO'
-                  ? 'YouTube ID (e.g. dQw4w9WgXcQ)'
-                  : 'https://...'
-              }
-            />
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-gray-200 bg-white p-4">
-        <h3 className="mb-3 text-base font-semibold text-gray-800">The Golden Rule</h3>
-        <div className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Rule Text</label>
-            <Textarea
-              value={instruction?.heuristic?.rule_text || ''}
-              onChange={(e) => updateNested('heuristic', 'rule_text', e.target.value)}
-              placeholder="e.g. Service Date is King. Ignore the Invoice Date."
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Reminder / Tip</label>
-            <Input
-              value={instruction?.heuristic?.reminder || ''}
-              onChange={(e) => updateNested('heuristic', 'reminder', e.target.value)}
-              placeholder="Short tip shown during the sim"
-            />
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-gray-200 bg-white p-4">
-        <h3 className="mb-3 text-base font-semibold text-gray-800">Gate Check (Protocol Quiz)</h3>
+        <h3 className="mb-3 text-base font-semibold text-gray-800">Gate Check</h3>
         <div className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700">Question</label>

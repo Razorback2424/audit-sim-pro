@@ -1,27 +1,27 @@
 import React from 'react';
-import { Input, Select, Textarea } from '../../AppCore';
+import { Input, Select } from '../../AppCore';
 import StepIntro from './StepIntro';
 
 export default function CaseBasicsStep({ basics }) {
   const {
-    caseName,
-    setCaseName,
     auditArea,
     setAuditArea,
-    layoutType,
-    setLayoutType,
-    workpaperLayoutOptions,
-    layoutConfigRaw,
-    setLayoutConfigRaw,
     auditAreaSelectOptions,
-    caseGroupSelection,
-    setCaseGroupSelection,
-    caseGroupSelectOptions,
-    customCaseGroupId,
-    setCustomCaseGroupId,
-    status,
-    setStatus,
-    statusOptions,
+    yearEndInput,
+    setYearEndInput,
+    yearEndValue,
+    yearEndError,
+    caseLevel,
+    setCaseLevel,
+    caseLevelOptions,
+    overrideDefaults,
+    setOverrideDefaults,
+    overrideDisbursementCount,
+    setOverrideDisbursementCount,
+    overrideVendorCount,
+    setOverrideVendorCount,
+    overrideInvoicesPerVendor,
+    setOverrideInvoicesPerVendor,
   } = basics;
 
   return (
@@ -29,32 +29,17 @@ export default function CaseBasicsStep({ basics }) {
       <StepIntro
         title="In this step"
         items={[
-          'Give the case a clear name trainees will recognize.',
-          'Choose the audit area and active status.',
-          'Optionally group the case for cohorts or curriculum.'
+          'Select the case type to drive the generator.',
+          'Set the year-end date and format used in the evidence.',
+          'Choose the level to control future trap difficulty.'
         ]}
-        helper="You can revisit these details later. Keeping the status accurate helps trainees understand whether the case is ready."
+        helper="These choices shape the generation engine and the data the trainee will see."
       />
-
-      <div>
-        <label htmlFor="caseName" className="block text-sm font-medium text-gray-700">
-          Case Name
-        </label>
-        <Input
-          id="caseName"
-          value={caseName}
-          onChange={(e) => setCaseName(e.target.value)}
-          placeholder="e.g., Q1 Unrecorded Liabilities Review"
-          required
-          className="mt-2"
-        />
-        <p className="mt-1 text-xs text-gray-500">Trainees see this title on their dashboard.</p>
-      </div>
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
         <div>
           <label htmlFor="auditArea" className="block text-sm font-medium text-gray-700">
-            Audit Area
+            Case Type
           </label>
           <Select
             id="auditArea"
@@ -63,80 +48,96 @@ export default function CaseBasicsStep({ basics }) {
             options={auditAreaSelectOptions}
             className="mt-2"
           />
-          <p className="mt-1 text-xs text-gray-500">Used for filtering and reporting.</p>
+          <p className="mt-1 text-xs text-gray-500">This decides which scenario engine is used.</p>
         </div>
         <div>
-          <label htmlFor="layoutType" className="block text-sm font-medium text-gray-700">
-            Workpaper Layout
-          </label>
-          <Select
-            id="layoutType"
-            value={layoutType}
-            onChange={(e) => setLayoutType(e.target.value)}
-            options={workpaperLayoutOptions}
-            className="mt-2"
-          />
-          <p className="mt-1 text-xs text-gray-500">Choose the cockpit pattern (two-pane, cash recon, fixed assets).</p>
-        </div>
-        <div>
-          <label htmlFor="layoutConfig" className="block text-sm font-medium text-gray-700">
-            Layout Config (JSON, optional)
-          </label>
-          <Textarea
-            id="layoutConfig"
-            value={layoutConfigRaw}
-            onChange={(e) => setLayoutConfigRaw(e.target.value)}
-            rows={layoutConfigRaw && layoutConfigRaw.length > 120 ? 6 : 3}
-            placeholder='e.g., { "leftPanel": "pdf", "rightPanel": "grid" }'
-            className="mt-2"
-          />
-          <p className="mt-1 text-xs text-gray-500">
-            Use to define panel behavior (e.g., evidence on left, work grid on right). Leave blank for defaults.
-          </p>
-        </div>
-        <div>
-          <label htmlFor="caseStatus" className="block text-sm font-medium text-gray-700">
-            Case Status
-          </label>
-          <Select
-            id="caseStatus"
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            options={statusOptions}
-            className="mt-2"
-          />
-        </div>
-      </div>
-
-      <div>
-        <label htmlFor="caseGroupSelection" className="block text-sm font-medium text-gray-700">
-          Case Group (optional)
-        </label>
-        <Select
-          id="caseGroupSelection"
-          value={caseGroupSelection}
-          onChange={(e) => setCaseGroupSelection(e.target.value)}
-          options={caseGroupSelectOptions}
-          className="mt-2"
-        />
-        <p className="mt-1 text-xs text-gray-500">Organize scenarios by cohort or curriculum. Leave as “No group” if not needed.</p>
-      </div>
-
-      {caseGroupSelection === '__custom' ? (
-        <div>
-          <label htmlFor="customCaseGroupId" className="block text-sm font-medium text-gray-700">
-            Custom Group Identifier
+          <label htmlFor="yearEnd" className="block text-sm font-medium text-gray-700">
+            Year-End Date
           </label>
           <Input
-            id="customCaseGroupId"
-            value={customCaseGroupId}
-            onChange={(e) => setCustomCaseGroupId(e.target.value)}
-            placeholder="e.g., ap-advanced-spring"
+            id="yearEnd"
+            value={yearEndInput}
+            onChange={(e) => setYearEndInput(e.target.value)}
+            placeholder="MM/DD/20X3 or MM/DD/2025"
             className="mt-2"
           />
-          <p className="mt-1 text-xs text-gray-500">Use a lowercase slug that matches your reporting conventions.</p>
+          {yearEndError ? (
+            <p className="mt-1 text-xs text-red-600">{yearEndError}</p>
+          ) : (
+            <p className="mt-1 text-xs text-gray-500">
+              Stored as {yearEndValue || '—'}. Examples: 12/31/20X3, 12/31/2025, 6/30/20X1.
+            </p>
+          )}
         </div>
-      ) : null}
+        <div>
+          <label htmlFor="caseLevel" className="block text-sm font-medium text-gray-700">
+            Course Level
+          </label>
+          <Select
+            id="caseLevel"
+            value={caseLevel}
+            onChange={(e) => setCaseLevel(e.target.value)}
+            options={caseLevelOptions}
+            className="mt-2"
+          />
+          <p className="mt-1 text-xs text-gray-500">Higher levels increase trap sophistication.</p>
+        </div>
+      </div>
+
+      <section className="rounded-lg border border-gray-200 bg-white p-4">
+        <label className="flex items-center gap-3 text-sm font-medium text-gray-800">
+          <input
+            type="checkbox"
+            checked={overrideDefaults}
+            onChange={(e) => setOverrideDefaults(e.target.checked)}
+            className="h-4 w-4 rounded border-gray-300 text-blue-600"
+          />
+          Override defaults
+        </label>
+        <p className="mt-2 text-xs text-gray-500">
+          Use custom generation sizes instead of the standard recipe defaults.
+        </p>
+        {overrideDefaults ? (
+          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Number of disbursements</label>
+              <Input
+                type="number"
+                min="1"
+                step="1"
+                value={overrideDisbursementCount}
+                onChange={(e) => setOverrideDisbursementCount(e.target.value)}
+                placeholder="e.g. 12"
+                className="mt-2"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Number of vendors</label>
+              <Input
+                type="number"
+                min="1"
+                step="1"
+                value={overrideVendorCount}
+                onChange={(e) => setOverrideVendorCount(e.target.value)}
+                placeholder="e.g. 6"
+                className="mt-2"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Invoices per vendor</label>
+              <Input
+                type="number"
+                min="1"
+                step="1"
+                value={overrideInvoicesPerVendor}
+                onChange={(e) => setOverrideInvoicesPerVendor(e.target.value)}
+                placeholder="e.g. 2"
+                className="mt-2"
+              />
+            </div>
+          </div>
+        ) : null}
+      </section>
     </div>
   );
 }

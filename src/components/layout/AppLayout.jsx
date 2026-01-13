@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { LayoutGrid, LogOut } from 'lucide-react';
-import { Button, useAuth, useUser, useRoute, appId } from '../../AppCore';
+import { Button, useAuth, useRoute, useUser, appId, ROLES } from '../../AppCore';
 
 export default function AppLayout() {
   const { currentUser, logout } = useAuth();
+  const { role, loadingRole } = useUser();
   const { navigate } = useRoute();
   const location = useLocation();
   const [moduleTitle, setModuleTitle] = useState('');
@@ -53,7 +54,18 @@ export default function AppLayout() {
             <Button
               variant="secondary"
               className="text-xs sm:text-sm px-2 py-1 sm:px-3"
-              onClick={() => navigate('/trainee')}
+              onClick={() => {
+                if (loadingRole) return;
+                if (role === ROLES.ADMIN) {
+                  navigate('/admin');
+                  return;
+                }
+                if (role === ROLES.INSTRUCTOR) {
+                  navigate('/instructor');
+                  return;
+                }
+                navigate('/trainee');
+              }}
             >
               <LayoutGrid size={16} className="inline mr-1" /> Dashboard
             </Button>

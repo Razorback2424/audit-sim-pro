@@ -10,9 +10,17 @@ const ModalContext = createContext({
 export const ModalProvider = ({ children }) => {
   const [modalContent, setModalContent] = useState(null);
 
-  const showModal = useCallback((message, title = 'Notification', customActions = null) => {
-    setModalContent({ title, message, customActions });
-  }, []);
+  const showModal = useCallback(
+    (message, title = 'Notification', customActions = null, options = {}) => {
+      setModalContent({
+        title,
+        message,
+        customActions,
+        disableClose: Boolean(options.disableClose),
+      });
+    },
+    []
+  );
 
   const hideModal = useCallback(() => {
     setModalContent(null);
@@ -26,12 +34,14 @@ export const ModalProvider = ({ children }) => {
           <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-md transform transition-all">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-xl font-semibold text-gray-800">{modalContent.title}</h3>
-              <button
-                onClick={hideModal}
-                className="p-1 rounded-md hover:bg-gray-200 transition-colors"
-              >
-                <XCircle size={24} className="text-gray-600" />
-              </button>
+              {modalContent.disableClose ? null : (
+                <button
+                  onClick={hideModal}
+                  className="p-1 rounded-md hover:bg-gray-200 transition-colors"
+                >
+                  <XCircle size={24} className="text-gray-600" />
+                </button>
+              )}
             </div>
             <div>
               {React.isValidElement(modalContent.message) ? (

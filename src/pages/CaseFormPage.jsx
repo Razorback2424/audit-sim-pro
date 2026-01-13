@@ -1,21 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Button } from '../AppCore';
-import { AnswerKeyStep } from '../components/caseForm/AnswerKeyCard';
+import { Button, useModal } from '../AppCore';
 import { CaseFormStepNav, ReviewStep } from '../components/caseForm/CaseFormNavigation';
 import CaseBasicsStep from '../components/caseForm/CaseBasicsStep';
 import InstructionStep from '../components/caseForm/InstructionStep';
-import AudienceScheduleStep from '../components/caseForm/AudienceScheduleStep';
-import TransactionsStep from '../components/caseForm/TransactionsStep';
-import AttachmentsStep from '../components/caseForm/AttachmentsStep';
 import useCaseForm from '../hooks/useCaseForm';
-import { isAnswerKeyReady } from '../utils/caseFormHelpers';
-import {
-  addGlobalTag,
-  fetchGlobalTags,
-  TAG_FIELDS,
-  DEFAULT_SKILL_CATEGORIES,
-  DEFAULT_ERROR_REASONS,
-} from '../services/tagService';
+import { AUDIT_AREAS, AUDIT_AREA_LABELS } from '../models/caseConstants';
 export { mergeDisbursementDocuments } from '../utils/caseFormTransforms';
 
 export default function CaseFormPage({ params }) {
@@ -24,69 +13,198 @@ export default function CaseFormPage({ params }) {
     status: { loading },
     basics,
     instructionData,
-    audience,
     transactions,
     attachments,
-    answerKey,
-    files,
+    generation,
     actions: { handleSubmit, goBack },
   } = useCaseForm({ params });
+  const { showModal } = useModal();
 
   const [activeStep, setActiveStep] = useState(0);
-  const [availableSkillTags, setAvailableSkillTags] = useState(DEFAULT_SKILL_CATEGORIES);
-  const [availableErrorReasons, setAvailableErrorReasons] = useState(DEFAULT_ERROR_REASONS);
+  const [generationBusy, setGenerationBusy] = useState(false);
+  const [pendingAutoQueue, setPendingAutoQueue] = useState(false);
+  const recipeOptions = useMemo(() => generation?.recipes || [], [generation?.recipes]);
+  const [selectedRecipeId, setSelectedRecipeId] = useState(recipeOptions[0]?.id || '');
+  const generationPlan = generation?.generationPlan;
+  const hasGeneratedDraft = Boolean(generation?.hasGeneratedDraft || generationPlan);
+  const withTimeout = (promise, ms, label = 'operation') => {
+    const parsedMs = Number(ms);
+    const safeMs = Number.isFinite(parsedMs) && parsedMs > 0 ? parsedMs : 30000;
+
+    let timer;
+    const timeoutPromise = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        const err = new Error('timeout');
+        err.code = 'timeout';
+        err.label = label;
+        reject(err);
+      }, safeMs);
+    });
+
+    return Promise.race([promise, timeoutPromise]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
+  };
+
+  const [queueBusy, setQueueBusy] = useState(false);
+  const handleQueueGenerationJob = useCallback(async () => {
+    if (!generation?.queueGenerationJob || queueBusy) return;
+
+    // Allow React to paint the loading state before starting the network call.
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+
+    setQueueBusy(true);
+    const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    console.info('[CaseFormPage] Queue doc generation started');
+
+    try {
+      // Wrap in Promise.resolve().then(...) so any synchronous throws inside the function
+      // are caught by this try/catch instead of hard-freezing the event handler.
+      await withTimeout(
+        Promise.resolve().then(() => generation.queueGenerationJob()),
+        30000,
+        'queueGenerationJob'
+      );
+
+      const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      console.info('[CaseFormPage] Queue doc generation finished', {
+        ms: Math.round(endedAt - startedAt),
+      });
+    } catch (err) {
+      const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
+      console.error('[CaseFormPage] Manual queue generation failed', {
+        err,
+        ms: Math.round(endedAt - startedAt),
+      });
+
+      if (err?.code === 'timeout' || err?.message === 'timeout') {
+        showModal(
+          'Queueing document generation is taking too long (timed out). Check the console and try again.',
+          'Generation'
+        );
+      } else {
+        showModal('Unable to queue document generation. Check the console.', 'Generation');
+      }
+    } finally {
+      setQueueBusy(false);
+    }
+  }, [generation, queueBusy, showModal]);
 
   useEffect(() => {
-    let isMounted = true;
-    const loadTags = async () => {
-      try {
-        const tags = await fetchGlobalTags();
-        if (!isMounted) return;
-        setAvailableSkillTags(tags[TAG_FIELDS.SKILL_CATEGORIES] || []);
-        setAvailableErrorReasons(tags[TAG_FIELDS.ERROR_REASONS] || []);
-      } catch (err) {
-        // If permissions block the settings doc, fall back to defaults and keep UI usable.
-        if (err?.code !== 'permission-denied') {
-          console.error('[CaseFormPage] Failed to load global tags', err);
-        }
-      }
-    };
-    loadTags();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  const handleAddGlobalTag = useCallback(async ({ field, value }) => {
-    try {
-      const result = await addGlobalTag({ field, value });
-      if (!result) return null;
-      if (field === TAG_FIELDS.SKILL_CATEGORIES || field === 'skillCategories') {
-        setAvailableSkillTags(result.list || []);
-      } else if (field === TAG_FIELDS.ERROR_REASONS || field === 'errorReasons') {
-        setAvailableErrorReasons(result.list || []);
-      }
-      return result.tag || value;
-    } catch (err) {
-      console.error('[CaseFormPage] Failed to add global tag', err);
-      return null;
+    if (pendingAutoQueue && generationPlan && !queueBusy && !generationBusy) {
+      setPendingAutoQueue(false);
+      handleQueueGenerationJob();
     }
-  }, []);
+  }, [pendingAutoQueue, generationPlan, queueBusy, generationBusy, handleQueueGenerationJob]);
+
+  const normalizeOverrideCount = (value, min, max) => {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed)) return null;
+    const clamped = Math.min(Math.max(parsed, min), max);
+    return clamped;
+  };
+
+  const handleGenerateDraft = useCallback(async () => {
+    if (generationBusy) return;
+    console.info('[CaseFormPage] Generate draft clicked');
+    if (!selectedRecipeId) {
+      showModal('Select a recipe before generating a draft.', 'Generation');
+      return;
+    }
+    if (basics.yearEndError || !basics.yearEndValue) {
+      showModal('Enter a valid year-end date before generating a draft.', 'Generation');
+      return;
+    }
+    if (basics.auditArea !== AUDIT_AREAS.PAYABLES) {
+      showModal('No generator is available for this case type yet.', 'Generation');
+      return;
+    }
+    if (hasGeneratedDraft) {
+      setActiveStep(1);
+      return;
+    }
+    setGenerationBusy(true);
+    setPendingAutoQueue(true);
+    console.info('[CaseFormPage] Starting draft generation', {
+      recipeId: selectedRecipeId,
+      auditArea: basics.auditArea,
+      yearEnd: basics.yearEndValue,
+      caseLevel: basics.caseLevel,
+      overridesEnabled: basics.overrideDefaults,
+    });
+    const overrides = {
+      yearEnd: basics.yearEndValue,
+      caseLevel: basics.caseLevel,
+      caseType: basics.auditArea,
+    };
+    if (basics.overrideDefaults) {
+      const disbursementCount = normalizeOverrideCount(basics.overrideDisbursementCount, 1, 30);
+      const vendorCount = normalizeOverrideCount(basics.overrideVendorCount, 1, 30);
+      const invoicesPerVendor = normalizeOverrideCount(basics.overrideInvoicesPerVendor, 1, 6);
+      if (disbursementCount) overrides.disbursementCount = disbursementCount;
+      if (vendorCount) overrides.vendorCount = vendorCount;
+      if (invoicesPerVendor) overrides.invoicesPerVendor = invoicesPerVendor;
+    }
+    try {
+      const generated = await withTimeout(
+        generation?.generateCaseDraft(selectedRecipeId, overrides),
+        60000
+      );
+      console.info('[CaseFormPage] Draft generation result', { generated });
+      if (generated) {
+        setActiveStep(1);
+      } else {
+        setPendingAutoQueue(false);
+        showModal('Draft generation did not complete. Please try again.', 'Generation');
+      }
+    } catch (err) {
+      setPendingAutoQueue(false);
+      console.error('[CaseFormPage] Draft generation failed', err);
+      if (err?.code === 'timeout' || err?.message === 'timeout') {
+        showModal('Draft generation is taking too long. Please try again.', 'Generation');
+      } else {
+        showModal('Draft generation failed. Check the console for details.', 'Generation');
+      }
+    } finally {
+      setGenerationBusy(false);
+    }
+  }, [
+    basics.auditArea,
+    basics.caseLevel,
+    basics.overrideDefaults,
+    basics.overrideDisbursementCount,
+    basics.overrideInvoicesPerVendor,
+    basics.overrideVendorCount,
+    basics.yearEndError,
+    basics.yearEndValue,
+    generation,
+    generationBusy,
+    hasGeneratedDraft,
+    selectedRecipeId,
+    showModal,
+  ]);
+
+  useEffect(() => {
+    if (!selectedRecipeId && recipeOptions.length > 0) {
+      setSelectedRecipeId(recipeOptions[0].id);
+    }
+  }, [recipeOptions, selectedRecipeId]);
 
   const steps = useMemo(
     () => [
-      { id: 'basics', label: 'Basics', description: 'Name, status, audit area, and grouping' },
-      { id: 'instruction', label: 'Instruction', description: 'Briefing, Video, and Gate Check' },
-      { id: 'audience', label: 'Audience & Schedule', description: 'Visibility controls and timing' },
-      { id: 'transactions', label: 'Data Entry', description: 'Balances, transactions, and mappings' },
-      { id: 'attachments', label: 'Attachments', description: 'Invoice and reference files' },
-      { id: 'answerKey', label: 'Answer Key', description: 'Correct classifications and rationale' },
+      { id: 'basics', label: 'Basics', description: 'Case type, year-end, and level' },
+      { id: 'instruction', label: 'Instruction', description: 'Video and gate check' },
       { id: 'review', label: 'Review & Submit', description: 'Final summary before publishing' },
     ],
     []
   );
 
   const summaryData = useMemo(() => {
+    const isCashCase = basics.auditArea === AUDIT_AREAS.CASH;
+    const caseTypeLabel =
+      basics.auditArea === AUDIT_AREAS.PAYABLES
+        ? 'SURL'
+        : AUDIT_AREA_LABELS[basics.auditArea] || basics.auditArea;
     const disbursementCount = transactions.disbursements.filter((item) => {
       if (!item) return false;
       return Boolean(item.paymentId || item.payee || item.amount || item.paymentDate);
@@ -96,222 +214,327 @@ export default function CaseFormPage({ params }) {
         sum + (disbursement.mappings || []).filter((mapping) => mapping && mapping.paymentId).length,
       0
     );
-    const attachmentCount = attachments.referenceDocuments.filter((item) => {
+    const referenceDocs = Array.isArray(attachments.referenceDocuments)
+      ? attachments.referenceDocuments
+      : [];
+    const cashDocs = Array.isArray(attachments.cashArtifacts) ? attachments.cashArtifacts : [];
+    const attachmentCount = [...referenceDocs, ...(isCashCase ? cashDocs : [])].filter((item) => {
       if (!item) return false;
-      return Boolean(item.fileName || item.clientSideFile || item.downloadURL || item.storagePath);
+      return Boolean(
+        item.fileName ||
+          item.clientSideFile ||
+          item.downloadURL ||
+          item.storagePath ||
+          (item.generationSpec && typeof item.generationSpec === 'object')
+      );
     }).length;
+    const planSpecCount = Array.isArray(generationPlan?.referenceDocumentSpecs)
+      ? generationPlan.referenceDocumentSpecs.length
+      : 0;
+    const generatedDocCount = referenceDocs.filter(
+      (doc) => doc && doc.generationSpec && typeof doc.generationSpec === 'object'
+    ).length;
+    const generationReadyCount = referenceDocs.filter(
+      (doc) =>
+        doc &&
+        doc.generationSpec &&
+        !doc.clientSideFile &&
+        (doc.downloadURL || doc.storagePath)
+    ).length;
+    const generationTotalCount = Math.max(generatedDocCount, planSpecCount);
+    const generationPendingCount = Math.max(0, generationTotalCount - generationReadyCount);
 
     return {
       caseName: basics.caseName,
       status: basics.status,
-      publicVisible: audience.publicVisible,
-      selectedUserIds: audience.selectedUserIds,
-      opensAtStr: audience.opensAtStr,
-      dueAtStr: audience.dueAtStr,
+      auditArea: basics.auditArea,
+      caseTypeLabel,
+      yearEnd: basics.yearEndValue || basics.yearEndInput || '',
+      caseLevel: basics.caseLevel,
       disbursementCount,
       mappingCount,
       attachmentCount,
+      generationTotalCount,
+      generationPendingCount,
     };
   }, [
     basics.caseName,
     basics.status,
-    audience.publicVisible,
-    audience.selectedUserIds,
-    audience.opensAtStr,
-    audience.dueAtStr,
     transactions.disbursements,
     attachments.referenceDocuments,
+    attachments.cashArtifacts,
+    basics.auditArea,
+    basics.yearEndValue,
+    basics.yearEndInput,
+    basics.caseLevel,
+    generationPlan,
+  ]);
+
+  const generationReview = useMemo(() => {
+    const disbursements = Array.isArray(transactions.disbursements) ? transactions.disbursements : [];
+    const referenceDocs = Array.isArray(attachments.referenceDocuments)
+      ? attachments.referenceDocuments
+      : [];
+    const yearEnd = generation?.generationPlan?.yearEnd || basics.yearEndValue || '20X2-12-31';
+    const parsePseudoDate = (value) => {
+      if (!value) return null;
+      const text = String(value).trim();
+      const match = text.match(/^(20X\d|\d{4})-(\d{2})-(\d{2})$/);
+      if (!match) return null;
+      const [, yearToken, monthRaw, dayRaw] = match;
+      const year = yearToken.startsWith('20X') ? 2000 + Number(yearToken.slice(-1)) : Number(yearToken);
+      const month = Number(monthRaw);
+      const day = Number(dayRaw);
+      if (!year || month < 1 || month > 12 || day < 1 || day > 31) return null;
+      return new Date(Date.UTC(year, month - 1, day));
+    };
+    const parseHumanDate = (value) => {
+      if (!value) return null;
+      const text = String(value).trim();
+      const match = text.match(
+        /^(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:,)?\s+(20X\d|\d{4})$/i
+      );
+      if (!match) return null;
+      const monthLookup = {
+        january: 0,
+        february: 1,
+        march: 2,
+        april: 3,
+        may: 4,
+        june: 5,
+        july: 6,
+        august: 7,
+        september: 8,
+        october: 9,
+        november: 10,
+        december: 11,
+      };
+      const monthIndex = monthLookup[match[1].toLowerCase()];
+      const day = Number(match[2]);
+      const yearToken = match[3];
+      if (monthIndex === undefined || !day) return null;
+      const year = yearToken.startsWith('20X') ? 2000 + Number(yearToken.slice(-1)) : Number(yearToken);
+      if (!year) return null;
+      return new Date(Date.UTC(year, monthIndex, day));
+    };
+    const parseCutoffDate = (value) => parsePseudoDate(value) || parseHumanDate(value);
+    const yearEndDate = parseCutoffDate(yearEnd);
+    const computeInvoiceTotal = (data) => {
+      const items = Array.isArray(data?.items) ? data.items : [];
+      const subtotal = items.reduce(
+        (sum, item) => sum + Number(item.qty || 0) * Number(item.unitPrice || 0),
+        0
+      );
+      const tax = subtotal * Number(data?.taxRate || 0);
+      const shipping = Number(data?.shipping || 0);
+      return subtotal + tax + shipping;
+    };
+
+    const isInvoiceTemplate = (doc) => {
+      const templateId =
+        typeof doc?.generationSpec?.templateId === 'string'
+          ? doc.generationSpec.templateId.toLowerCase()
+          : '';
+      return templateId.startsWith('invoice.');
+    };
+
+    const invoices = referenceDocs
+      .filter((doc) => isInvoiceTemplate(doc))
+      .map((doc) => {
+        const serviceDate = doc.generationSpec?.serviceDate || '';
+        const shippingDate = doc.generationSpec?.shippingDate || '';
+        const paymentId = (doc.generationSpec?.linkToPaymentId || '').trim();
+        const shouldBeInAging = (() => {
+          if (!yearEndDate) return false;
+          const parsedService = parseCutoffDate(serviceDate);
+          const parsedShipping = parseCutoffDate(shippingDate);
+          if (!parsedService && !parsedShipping) return false;
+          if (parsedService && parsedService.getTime() > yearEndDate.getTime()) return false;
+          if (parsedShipping && parsedShipping.getTime() > yearEndDate.getTime()) return false;
+          return true;
+        })();
+        return {
+          id: doc.generationSpecId || doc._tempId || doc.fileName,
+          fileName: doc.fileName,
+          templateId: doc.generationSpec?.templateId || '',
+          paymentId,
+          serviceDate,
+          shippingDate,
+          amount: Number(
+            doc.generationSpec?.invoiceTotal ??
+              computeInvoiceTotal(doc.generationSpec?.data) ??
+              0
+          ),
+          isRecorded: doc.generationSpec?.isRecorded !== false,
+          shouldBeInAging,
+          downloadURL: doc.downloadURL,
+          storagePath: doc.storagePath,
+        };
+      });
+
+    const apAgingDoc = referenceDocs.find(
+      (doc) => doc?.generationSpec?.templateId === 'refdoc.ap-aging.v1'
+    );
+
+    const invoicesByPayment = new Map();
+    invoices.forEach((invoice) => {
+      if (!invoice.paymentId) return;
+      const list = invoicesByPayment.get(invoice.paymentId) || [];
+      list.push(invoice);
+      invoicesByPayment.set(invoice.paymentId, list);
+    });
+
+    const disbursementRows = disbursements.map((disbursement) => {
+      const paymentId = (disbursement.paymentId || '').trim();
+      const linked = paymentId ? invoicesByPayment.get(paymentId) || [] : [];
+      const invoiceTotal = linked.reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
+      const hasTrap = linked.some((invoice) => invoice.shouldBeInAging && !invoice.isRecorded);
+      return {
+        paymentId: disbursement.paymentId,
+        payee: disbursement.payee,
+        paymentDate: disbursement.paymentDate,
+        amount: Number(disbursement.amount || 0),
+        classification: disbursement.answerKeySingleClassification || '',
+        explanation: disbursement.answerKey?.explanation || '',
+        invoiceCount: linked.length,
+        invoiceTotal,
+        hasTrap,
+        invoiceLinks: linked
+          .filter((invoice) => invoice.downloadURL)
+          .map((invoice) => ({ fileName: invoice.fileName, url: invoice.downloadURL })),
+      };
+    });
+
+    const allInvoicesReady = invoices.length > 0 && invoices.every((doc) => doc.downloadURL || doc.storagePath);
+    const rawJobStatus = generation?.generationPlan?.lastJob || null;
+    const patchedJobStatus =
+      allInvoicesReady && (rawJobStatus?.status === 'queued' || rawJobStatus?.status === 'processing')
+        ? { ...rawJobStatus, status: 'completed' }
+        : rawJobStatus;
+
+    return {
+      disbursements: disbursementRows,
+      invoices,
+      apAgingDoc: apAgingDoc
+        ? {
+            fileName: apAgingDoc.fileName,
+            downloadURL: apAgingDoc.downloadURL,
+            storagePath: apAgingDoc.storagePath,
+          }
+        : null,
+      yearEnd,
+      jobStatus: patchedJobStatus,
+    };
+  }, [
+    attachments.referenceDocuments,
+    generation?.generationPlan?.lastJob,
+    generation?.generationPlan?.yearEnd,
+    basics.yearEndValue,
+    transactions.disbursements,
   ]);
 
   const reviewChecklist = useMemo(() => {
     const entries = [];
 
-    const trimmedCaseName = (basics.caseName || '').trim();
+    const yearEndReady = Boolean(basics.yearEndValue) && !basics.yearEndError;
     entries.push({
-      id: 'case-name',
-      label: 'Case name provided',
-      isReady: trimmedCaseName.length > 0,
-      detail:
-        trimmedCaseName.length > 0
-          ? `Using “${trimmedCaseName}”.`
-          : 'Enter a descriptive case name trainees will recognize.',
+      id: 'year-end',
+      label: 'Year-end date set',
+      isReady: yearEndReady,
+      detail: yearEndReady
+        ? `Using ${basics.yearEndValue}.`
+        : basics.yearEndError || 'Add a year-end date for generation.',
     });
 
-    const disbursementList = Array.isArray(transactions.disbursements)
-      ? transactions.disbursements
-      : [];
-    const disbursementKeyFields = [
-      { key: 'paymentId', label: 'Payment ID' },
-      { key: 'payee', label: 'Payee' },
-      { key: 'amount', label: 'Amount' },
-      { key: 'paymentDate', label: 'Payment Date' },
-    ];
-    const disbursementFieldIssues = [];
-    if (disbursementList.length === 0) {
-      disbursementFieldIssues.push(
-        'Add at least one disbursement with a payment ID, payee, amount, and payment date.'
-      );
-    }
-    disbursementList.forEach((disbursement, index) => {
-      if (!disbursement) return;
-      const missingFields = disbursementKeyFields
-        .filter(({ key }) => !disbursement[key])
-        .map(({ label }) => label);
-      if (missingFields.length > 0) {
-        disbursementFieldIssues.push(
-          `Disbursement #${index + 1} is missing ${missingFields.join(', ')}.`
-        );
-      }
-    });
-
+    const levelReady = Boolean(basics.caseLevel);
+    const levelLabel = basics.caseLevel
+      ? basics.caseLevel.charAt(0).toUpperCase() + basics.caseLevel.slice(1)
+      : '';
     entries.push({
-      id: 'disbursement-fields',
-      label: 'Disbursement details complete',
-      isReady: disbursementFieldIssues.length === 0,
-      detail:
-        disbursementFieldIssues.length === 0
-          ? `All ${disbursementList.length} disbursement${
-              disbursementList.length === 1 ? '' : 's'
-            } include the required fields.`
-          : disbursementFieldIssues.join(' '),
+      id: 'case-level',
+      label: 'Case level selected',
+      isReady: levelReady,
+      detail: levelReady ? `Level: ${levelLabel}.` : 'Select a course level.',
     });
 
-    const incompleteAnswerKeys = [];
-    disbursementList.forEach((disbursement, index) => {
-      if (!disbursement) return;
-      if (!isAnswerKeyReady(disbursement)) {
-        const identifier = disbursement.paymentId || disbursement.payee || 'unnamed disbursement';
-        incompleteAnswerKeys.push(
-          `Answer key incomplete for disbursement #${index + 1} (${identifier}).`
-        );
-      }
-    });
-
+    const caseTypeReady = Boolean(basics.auditArea);
+    const caseTypeLabel =
+      basics.auditArea === AUDIT_AREAS.PAYABLES
+        ? 'SURL'
+        : AUDIT_AREA_LABELS[basics.auditArea] || basics.auditArea;
     entries.push({
-      id: 'answer-key',
-      label: 'Answer keys ready',
-      isReady: disbursementList.length > 0 && incompleteAnswerKeys.length === 0,
-      detail:
-        disbursementList.length === 0
-          ? 'Add disbursements to build corresponding answer keys.'
-          : incompleteAnswerKeys.length === 0
-          ? 'Answer keys include classifications, explanations, and matching totals.'
-          : incompleteAnswerKeys.join(' '),
+      id: 'case-type',
+      label: 'Case type selected',
+      isReady: caseTypeReady,
+      detail: caseTypeReady
+        ? `Type: ${caseTypeLabel}.`
+        : 'Select a case type to drive generation.',
     });
 
-    const uniqueSelectedUserIds = Array.isArray(audience.selectedUserIds)
-      ? Array.from(new Set(audience.selectedUserIds))
-      : [];
-    const privateAudienceReady = audience.publicVisible || uniqueSelectedUserIds.length > 0;
+    const needsGeneration = basics.auditArea === AUDIT_AREAS.PAYABLES && recipeOptions.length > 0;
     entries.push({
-      id: 'audience',
-      label: 'Audience visibility configured',
-      isReady: privateAudienceReady,
-      detail: audience.publicVisible
-        ? 'Case is visible to all trainees.'
-        : uniqueSelectedUserIds.length > 0
-        ? `Private case with ${uniqueSelectedUserIds.length} authorized user${
-            uniqueSelectedUserIds.length === 1 ? '' : 's'
-          }.`
-        : 'Add at least one authorized user for a private case.',
+      id: 'generation',
+      label: 'Case draft generated',
+      isReady: !needsGeneration || hasGeneratedDraft,
+      detail: !needsGeneration
+        ? 'No generator is required for this case type.'
+        : hasGeneratedDraft
+        ? 'Generation plan stored for this case.'
+        : 'Generate the case draft to populate workpapers and reference documents.',
     });
 
     const referenceDocs = Array.isArray(attachments.referenceDocuments)
       ? attachments.referenceDocuments
       : [];
-    const cashDocs = [];
-    const referenceIssues = [];
-    [...referenceDocs, ...cashDocs].forEach((doc, index) => {
-      if (!doc) return;
-      const hasAnyContent = Boolean(
-        doc.clientSideFile || doc.fileName || doc.downloadURL || doc.storagePath
-      );
-      if (!hasAnyContent) return;
-      const trimmedName = (doc.fileName || '').trim();
-      const hasDisplayName = trimmedName.length > 0;
-      const hasSource = Boolean(doc.clientSideFile || doc.downloadURL || doc.storagePath);
-      if (!hasDisplayName) {
-        referenceIssues.push(`Reference document #${index + 1} is missing a display name.`);
-      }
-      if (!hasSource) {
-        const label = trimmedName || `Reference document #${index + 1}`;
-        referenceIssues.push(
-          `${label} needs an uploaded file, download URL, or storage path before submission.`
-        );
-      }
-    });
-
+    const generatedDocs = referenceDocs.filter(
+      (doc) => doc && doc.generationSpec && typeof doc.generationSpec === 'object'
+    );
     entries.push({
       id: 'reference-documents',
-      label: 'Reference materials complete',
-      isReady: referenceIssues.length === 0,
+      label: 'Reference documents ready',
+      isReady: generatedDocs.length > 0,
       detail:
-        referenceIssues.length === 0
-          ? referenceDocs.some(
-              (doc) =>
-                doc &&
-                (doc.clientSideFile || doc.fileName || doc.downloadURL || doc.storagePath)
-            )
-            ? 'All reference documents include names and accessible files or links.'
-            : 'No reference documents have been added yet.'
-          : referenceIssues.join(' '),
+        generatedDocs.length > 0
+          ? `${generatedDocs.length} generated reference document${generatedDocs.length === 1 ? '' : 's'} attached.`
+          : 'Generate the case draft to attach reference documents.',
     });
 
-    const parseForChecklist = (value, label) => {
-      if (!value) {
-        return { timestamp: null };
-      }
-      const parsed = new Date(value);
-      if (Number.isNaN(parsed.getTime())) {
-        return { error: `${label} must be a valid date/time.` };
-      }
-      return { timestamp: parsed };
-    };
-
-    const opensResult = parseForChecklist(audience.opensAtStr, 'Opens At');
-    const dueResult = parseForChecklist(audience.dueAtStr, 'Due At');
-
-    let scheduleReady = true;
-    let scheduleDetails = 'Schedule dates look good.';
-    if (opensResult.error) {
-      scheduleReady = false;
-      scheduleDetails = opensResult.error;
-    } else if (dueResult.error) {
-      scheduleReady = false;
-      scheduleDetails = dueResult.error;
-    } else if (
-      opensResult.timestamp &&
-      dueResult.timestamp &&
-      dueResult.timestamp.getTime() < opensResult.timestamp.getTime()
-    ) {
-      scheduleReady = false;
-      scheduleDetails = 'Due At must be after Opens At.';
-    } else if (opensResult.timestamp && dueResult.timestamp) {
-      const formatter = new Intl.DateTimeFormat(undefined, {
-        dateStyle: 'medium',
-        timeStyle: 'short',
-      });
-      scheduleDetails = `Runs from ${formatter.format(opensResult.timestamp)} to ${formatter.format(
-        dueResult.timestamp
-      )}.`;
-    }
-
+    const videoSource =
+      instructionData?.instruction?.visualAsset?.source_id ||
+      instructionData?.instruction?.visualAsset?.url ||
+      '';
     entries.push({
-      id: 'schedule',
-      label: 'Schedule validated',
-      isReady: scheduleReady,
-      detail: scheduleDetails,
+      id: 'instruction-video',
+      label: 'Instruction video linked',
+      isReady: Boolean(String(videoSource || '').trim()),
+      detail: videoSource ? 'Video link added.' : 'Paste the instruction video link or ID.',
+    });
+
+    const gateCheck = instructionData?.instruction?.gateCheck || {};
+    const gateQuestion = String(gateCheck.question || '').trim();
+    const gateOptions = Array.isArray(gateCheck.options) ? gateCheck.options : [];
+    const validOptions = gateOptions.filter((opt) => opt && String(opt.text || '').trim());
+    const hasCorrect = validOptions.some((opt) => opt.correct);
+    const gateReady = gateQuestion.length > 0 && validOptions.length >= 2 && hasCorrect;
+    entries.push({
+      id: 'gate-check',
+      label: 'Gate check question ready',
+      isReady: gateReady,
+      detail: gateReady
+        ? 'Gate check includes a question and a correct answer.'
+        : 'Add a question with at least two options and mark the correct one.',
     });
 
     return entries;
   }, [
     attachments.referenceDocuments,
-    audience.dueAtStr,
-    audience.opensAtStr,
-    audience.publicVisible,
-    audience.selectedUserIds,
-    basics.caseName,
-    transactions.disbursements,
+    basics.auditArea,
+    basics.yearEndValue,
+    basics.yearEndError,
+    basics.caseLevel,
+    hasGeneratedDraft,
+    instructionData,
+    recipeOptions.length,
   ]);
 
   const allChecklistItemsReady = useMemo(
@@ -348,38 +571,20 @@ export default function CaseFormPage({ params }) {
 
           <form
             onSubmit={(e) => {
-              console.info('[case-form] onSubmit fired', { activeStep, isEditing, allChecklistItemsReady });
               handleSubmit(e);
             }}
             className="space-y-10"
           >
             {activeStep === 0 ? <CaseBasicsStep basics={basics} /> : null}
             {activeStep === 1 ? <InstructionStep instructionData={instructionData} /> : null}
-            {activeStep === 2 ? <AudienceScheduleStep audience={audience} /> : null}
-            {activeStep === 3 ? (
-              <TransactionsStep
-                transactions={transactions}
-                files={files}
-                availableSkillTags={availableSkillTags}
-                availableErrorReasons={availableErrorReasons}
-                onAddGlobalTag={handleAddGlobalTag}
-              />
-            ) : null}
-            {activeStep === 4 ? <AttachmentsStep attachments={attachments} files={files} /> : null}
-            {activeStep === 5 ? (
-              <AnswerKeyStep
-                disbursements={answerKey.disbursements}
-                onUpdate={answerKey.updateAnswerKeyForDisbursement}
-                classificationFields={answerKey.classificationFields}
-                answerKeyLabels={answerKey.answerKeyLabels}
-                classificationOptions={answerKey.answerKeyClassificationOptions}
-              />
-            ) : null}
-            {activeStep === 6 ? (
+            {activeStep === 2 ? (
               <ReviewStep
                 summaryData={summaryData}
                 reviewChecklist={reviewChecklist}
                 allChecklistItemsReady={allChecklistItemsReady}
+                generationReview={generationReview}
+                onQueueGeneration={generationPlan ? handleQueueGenerationJob : null}
+                isQueueing={queueBusy}
               />
             ) : null}
 
@@ -412,6 +617,17 @@ export default function CaseFormPage({ params }) {
                     className="justify-center"
                   >
                     {isEditing ? 'Save Changes' : 'Create Case'}
+                  </Button>
+                ) : activeStep === 0 && !isEditing ? (
+                  <Button
+                    onClick={handleGenerateDraft}
+                    variant="primary"
+                    type="button"
+                    disabled={loading || generationBusy || recipeOptions.length === 0}
+                    isLoading={generationBusy}
+                    className="justify-center"
+                  >
+                    Generate Case Draft
                   </Button>
                 ) : (
                   <Button onClick={handleNext} variant="primary" type="button" disabled={loading} className="justify-center">

@@ -154,6 +154,7 @@ service cloud.firestore {
              request.resource.data.updatedAt is timestamp &&
              request.resource.data.createdAt is timestamp &&
              (!('createdBy' in request.resource.data) || request.resource.data.createdBy == null || request.resource.data.createdBy is string) &&
+             (!('caseLevel' in request.resource.data) || request.resource.data.caseLevel == null || request.resource.data.caseLevel in ['basic', 'intermediate', 'advanced']) &&
              (!('dueAt' in request.resource.data) || request.resource.data.dueAt == null || request.resource.data.dueAt is timestamp) &&
              (!('opensAt' in request.resource.data) || request.resource.data.opensAt == null || request.resource.data.opensAt is timestamp) &&
              (!('auditItems' in request.resource.data) || (
@@ -275,6 +276,16 @@ service cloud.firestore {
       allow create, update: if request.auth != null &&
                                canAccessCaseKeys(appId, caseId) &&
                                isValidCaseKeyDocument(request.resource.data);
+      allow delete: if request.auth != null && isAdmin();
+    }
+
+    // Private case generation plans stored under artifacts/{appId}/private/data/case_generation_plans/{caseId}
+    match /artifacts/{appId}/private/data/case_generation_plans/{caseId} {
+      allow read: if request.auth != null && canAccessCaseKeys(appId, caseId);
+      allow create, update: if request.auth != null &&
+                               canAccessCaseKeys(appId, caseId) &&
+                               request.resource.data.plan is map &&
+                               request.resource.data.updatedAt == request.time;
       allow delete: if request.auth != null && isAdmin();
     }
 

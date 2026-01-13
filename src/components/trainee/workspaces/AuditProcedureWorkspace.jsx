@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Input, Textarea } from '../../../AppCore';
+import { Input, Textarea, Select } from '../../../AppCore';
 import { currencyFormatter } from '../../../utils/formatters';
 
 const DECISION = {
@@ -120,6 +120,23 @@ export default function AuditProcedureWorkspace({
     [amountNumber, classificationFields, item, itemKey, onClassificationChange, onSplitAmountChange, onSplitToggle]
   );
 
+  const passClassifications = classificationFields.filter(
+    ({ key }) => key === 'properlyIncluded' || key === 'properlyExcluded'
+  );
+  const exceptionClassifications = classificationFields.filter(
+    ({ key }) => key === 'improperlyIncluded' || key === 'improperlyExcluded'
+  );
+
+  const resolvePassSelection = useCallback(() => {
+    const current = typeof allocation?.singleClassification === 'string' ? allocation.singleClassification : '';
+    return passClassifications.some(({ key }) => key === current) ? current : '';
+  }, [allocation?.singleClassification, passClassifications]);
+
+  const resolveExceptionSelection = useCallback(() => {
+    const current = typeof allocation?.singleClassification === 'string' ? allocation.singleClassification : '';
+    return exceptionClassifications.some(({ key }) => key === current) ? current : '';
+  }, [allocation?.singleClassification, exceptionClassifications]);
+
   const handleDecisionChange = (nextDecision) => {
     if (!canMakeDecision) {
       onDecisionBlocked();
@@ -133,7 +150,14 @@ export default function AuditProcedureWorkspace({
     if (!isException) {
       onRationaleChange(itemKey, 'assertion', '');
       onRationaleChange(itemKey, 'reason', '');
-      applySingleAllocation('properlyIncluded');
+      const existingSelection = resolvePassSelection();
+      if (existingSelection) {
+        applySingleAllocation(existingSelection);
+      } else {
+        onSplitToggle(itemKey, false, item);
+        onClassificationChange(itemKey, '');
+        clearAllClassificationAmounts();
+      }
     } else {
       clearAllClassificationAmounts();
       onClassificationChange(itemKey, '');
@@ -226,6 +250,68 @@ export default function AuditProcedureWorkspace({
               placeholder="Why is this an exception?"
             />
           </label>
+        </div>
+      ) : null}
+
+      {currentDecision === DECISION.PASS && !isSplit ? (
+        <div className="space-y-2">
+          <label className="block text-sm font-semibold text-gray-800">
+            No-exception classification <span className="text-rose-700">*</span>
+            <Select
+              className="mt-1"
+              value={resolvePassSelection()}
+              onChange={(event) => {
+                if (!canMakeDecision) {
+                  onDecisionBlocked();
+                  return;
+                }
+                const nextValue = event.target.value;
+                if (!nextValue) {
+                  onClassificationChange(itemKey, '');
+                  clearAllClassificationAmounts();
+                  return;
+                }
+                applySingleAllocation(nextValue);
+              }}
+              disabled={isLocked}
+              options={[
+                { value: '', label: 'Select classification...', disabled: true },
+                ...passClassifications.map(({ key, label }) => ({ value: key, label })),
+              ]}
+            />
+          </label>
+          <p className="text-xs text-slate-500">Use split when a payment spans multiple classifications.</p>
+        </div>
+      ) : null}
+
+      {currentDecision === DECISION.EXCEPTION && !isSplit ? (
+        <div className="space-y-2">
+          <label className="block text-sm font-semibold text-gray-800">
+            Exception classification <span className="text-rose-700">*</span>
+            <Select
+              className="mt-1"
+              value={resolveExceptionSelection()}
+              onChange={(event) => {
+                if (!canMakeDecision) {
+                  onDecisionBlocked();
+                  return;
+                }
+                const nextValue = event.target.value;
+                if (!nextValue) {
+                  onClassificationChange(itemKey, '');
+                  clearAllClassificationAmounts();
+                  return;
+                }
+                applySingleAllocation(nextValue);
+              }}
+              disabled={isLocked}
+              options={[
+                { value: '', label: 'Select classification...', disabled: true },
+                ...exceptionClassifications.map(({ key, label }) => ({ value: key, label })),
+              ]}
+            />
+          </label>
+          <p className="text-xs text-slate-500">Use split when a payment spans multiple classifications.</p>
         </div>
       ) : null}
 

@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useAuth, useRoute, useModal } from '../AppCore';
-import { fetchCase } from '../services/caseService';
-import { fetchUserRosterOptions } from '../services/userService';
+import { getDownloadURL, ref as storageRef } from 'firebase/storage';
+import { Button, useAuth, useRoute, useModal, appId, storage } from '../AppCore';
+import { fetchCase, createCase, markCaseDeleted, fetchCasesPage } from '../services/caseService';
+import { fetchUserRosterOptions, getCurrentUserOrgId } from '../services/userService';
 import getUUID from '../utils/getUUID';
 import {
   AUDIT_AREA_VALUES,
@@ -11,7 +12,7 @@ import {
   CASE_GROUP_LABELS,
   AUDIT_AREAS,
 } from '../models/caseConstants';
-import { STATUS_OPTIONS, WORKPAPER_LAYOUT_OPTIONS } from '../constants/caseFormOptions';
+import { CASH_ARTIFACT_TYPES, STATUS_OPTIONS, WORKPAPER_LAYOUT_OPTIONS } from '../constants/caseFormOptions';
 import { getClassificationFields } from '../constants/classificationFields';
 import {
   ANSWER_KEY_LABELS,
@@ -41,11 +42,24 @@ import { useUser } from '../AppCore';
 import { createCaseFormUploadHandlers } from './useCaseFormUploads';
 import { createCaseFormCsvImportHandler } from './useCaseFormCsvImport';
 import { createCaseFormSubmitHandler } from './useCaseFormSubmit';
+import {
+  fetchCaseGenerationPlan,
+  queueCaseGenerationJob,
+  saveCaseGenerationPlan,
+} from '../services/caseGenerationService';
+import { buildCaseDraftFromRecipe } from '../generation/buildCaseDraft';
+import { listCaseRecipes } from '../generation/recipeRegistry';
 
 const DRAFT_STORAGE_KEY = 'audit_sim_case_draft_v1';
 const DEFAULT_LAYOUT_TYPE = 'two_pane';
 const MAX_ARTIFACT_BYTES = 5 * 1024 * 1024;
 const UPLOAD_TIMEOUT_MS = 120000;
+const CASE_LEVEL_OPTIONS = [
+  { value: 'basic', label: 'Basic' },
+  { value: 'intermediate', label: 'Intermediate' },
+  { value: 'advanced', label: 'Advanced' },
+];
+const CASE_LEVEL_VALUES = CASE_LEVEL_OPTIONS.map((option) => option.value);
 
 const canUseLocalStorage = () => {
   try {
@@ -54,6 +68,139 @@ const canUseLocalStorage = () => {
     return false;
   }
 };
+
+const normalizeCashArtifactType = (value) => {
+  if (!value) return '';
+  const trimmed = String(value).trim();
+  if (!trimmed) return '';
+  return trimmed.startsWith('cash_') ? trimmed : `cash_${trimmed}`;
+};
+
+const formatCaseLevel = (value) => {
+  if (!value) return '';
+  return value.charAt(0).toUpperCase() + value.slice(1);
+};
+
+const normalizeYearEndInput = (raw) => {
+  const trimmed = String(raw || '').trim();
+  if (!trimmed) return { value: '', error: '' };
+
+  const slashMatch = trimmed.match(/^(\d{1,2})[/-](\d{1,2})[/-](20X\d|\d{4})$/i);
+  const dashMatch = trimmed.match(/^(20X\d|\d{4})-(\d{1,2})-(\d{1,2})$/i);
+  const match = slashMatch || dashMatch;
+  if (!match) {
+    return { value: '', error: 'Use MM/DD/20X#, MM/DD/YYYY, or YYYY-MM-DD.' };
+  }
+
+  const monthRaw = slashMatch ? match[1] : match[2];
+  const dayRaw = slashMatch ? match[2] : match[3];
+  const yearToken = slashMatch ? match[3] : match[1];
+  const month = Number(monthRaw);
+  const day = Number(dayRaw);
+  if (!month || month < 1 || month > 12 || !day || day < 1 || day > 31) {
+    return { value: '', error: 'Enter a valid month and day.' };
+  }
+
+  const yearIsPseudo = yearToken.toUpperCase().startsWith('20X');
+  const numericYear = yearIsPseudo ? 2000 + Number(yearToken.slice(-1)) : Number(yearToken);
+  if (!numericYear || numericYear < 2000) {
+    return { value: '', error: 'Enter a valid year.' };
+  }
+
+  const checkDate = new Date(Date.UTC(numericYear, month - 1, day));
+  if (
+    Number.isNaN(checkDate.getTime()) ||
+    checkDate.getUTCMonth() + 1 !== month ||
+    checkDate.getUTCDate() !== day
+  ) {
+    return { value: '', error: 'Enter a real calendar date.' };
+  }
+
+  const paddedMonth = String(month).padStart(2, '0');
+  const paddedDay = String(day).padStart(2, '0');
+  const normalizedYear = yearIsPseudo ? `20X${yearToken.slice(-1)}` : String(numericYear);
+  return { value: `${normalizedYear}-${paddedMonth}-${paddedDay}`, error: '' };
+};
+
+const normalizeCaseIdentifier = (value) => String(value || '').trim().toLowerCase();
+
+const getCaseTypeLabel = (auditArea) => {
+  if (auditArea === AUDIT_AREAS.PAYABLES) return 'SURL';
+  return AUDIT_AREA_LABELS[auditArea] || 'Audit Case';
+};
+
+const buildInstructionTitleBase = ({ auditArea, caseLevel }) => {
+  const areaLabel = getCaseTypeLabel(auditArea);
+  const levelLabel = formatCaseLevel(caseLevel);
+  return `${areaLabel} ${levelLabel}`.trim();
+};
+
+const buildUniqueInstructionTitle = ({ baseTitle, usedTitles }) => {
+  const normalizedUsed = new Set(usedTitles.map(normalizeCaseIdentifier));
+  if (!normalizedUsed.has(normalizeCaseIdentifier(baseTitle))) return baseTitle;
+  let suffix = 2;
+  while (suffix < 1000) {
+    const candidate = `${baseTitle} ${suffix}`;
+    if (!normalizedUsed.has(normalizeCaseIdentifier(candidate))) return candidate;
+    suffix += 1;
+  }
+  return `${baseTitle} ${Date.now()}`;
+};
+
+const buildModuleCodePrefix = (auditArea) =>
+  getCaseTypeLabel(auditArea)
+    .replace(/[^A-Za-z0-9]/g, '')
+    .toUpperCase() || 'CASE';
+
+const buildModuleCodeSeed = (caseLevel) => {
+  if (caseLevel === 'intermediate') return 201;
+  if (caseLevel === 'advanced') return 301;
+  return 101;
+};
+
+const buildUniqueModuleCode = ({ auditArea, caseLevel, usedCodes }) => {
+  const normalizedUsed = new Set(usedCodes.map((value) => String(value || '').trim().toUpperCase()));
+  const prefix = buildModuleCodePrefix(auditArea);
+  let codeNumber = buildModuleCodeSeed(caseLevel);
+  let candidate = `${prefix}-${codeNumber}`;
+  while (normalizedUsed.has(candidate)) {
+    codeNumber += 1;
+    candidate = `${prefix}-${codeNumber}`;
+  }
+  return candidate;
+};
+
+const withTimeout = (promise, ms) =>
+  Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      const timer = setTimeout(() => {
+        clearTimeout(timer);
+        reject(new Error('timeout'));
+      }, ms);
+    }),
+  ]);
+
+const buildAutoCaseName = ({ auditArea, yearEndLabel, caseLevel }) => {
+  const areaLabel = getCaseTypeLabel(auditArea);
+  const parts = [areaLabel];
+  if (yearEndLabel) parts.push(`Year-End ${yearEndLabel}`);
+  if (caseLevel) parts.push(formatCaseLevel(caseLevel));
+  return parts.join(' · ');
+};
+
+const buildCashArtifact = (type) => ({
+  _tempId: getUUID(),
+  type,
+  fileName: '',
+  storagePath: '',
+  downloadURL: '',
+  clientSideFile: null,
+  uploadProgress: undefined,
+  uploadError: null,
+  contentType: '',
+  confirmedBalance: '',
+});
 
 function useCaseForm({ params }) {
   const { caseId: editingCaseId } = params || {};
@@ -64,6 +211,14 @@ function useCaseForm({ params }) {
   const { showModal } = useModal();
 
   const [caseName, setCaseName] = useState('');
+  const [yearEndInput, setYearEndInput] = useState('');
+  const [yearEndValue, setYearEndValue] = useState('');
+  const [yearEndError, setYearEndError] = useState('');
+  const [caseLevel, setCaseLevel] = useState('basic');
+  const [overrideDefaults, setOverrideDefaults] = useState(false);
+  const [overrideDisbursementCount, setOverrideDisbursementCount] = useState('');
+  const [overrideVendorCount, setOverrideVendorCount] = useState('');
+  const [overrideInvoicesPerVendor, setOverrideInvoicesPerVendor] = useState('');
   const [publicVisible, setPublicVisible] = useState(true);
   const [auditArea, setAuditArea] = useState(DEFAULT_AUDIT_AREA);
   const [layoutType, setLayoutType] = useState(DEFAULT_LAYOUT_TYPE);
@@ -116,19 +271,27 @@ function useCaseForm({ params }) {
   const [instruction, setInstruction] = useState(initialInstruction());
   const [isHydratedForDrafts, setIsHydratedForDrafts] = useState(false);
   const [draftCaseId, setDraftCaseId] = useState(null);
+  const [generationPlan, setGenerationPlan] = useState(null);
+  const [generationPolling, setGenerationPolling] = useState(false);
+  const [hasGeneratedDraft, setHasGeneratedDraft] = useState(false);
+  const [existingInstructionTitles, setExistingInstructionTitles] = useState([]);
+  const [existingModuleCodes, setExistingModuleCodes] = useState([]);
 
   const disbursementCsvInputRef = useRef(null);
   const draftPermissionRef = useRef(null);
+  const pendingDraftRef = useRef(null);
   const highlightStartRef = useRef(false);
   const highlightStartTimerRef = useRef(null);
   const highlightInflightRef = useRef({});
   const mappingInflightRef = useRef({});
   const disbursementsRef = useRef(disbursements);
+  const generationPollingRef = useRef(false);
 
   const auditAreaSelectOptions = useMemo(
-    () => AUDIT_AREA_VALUES.map((value) => ({ value, label: AUDIT_AREA_LABELS[value] || value })),
+    () => AUDIT_AREA_VALUES.map((value) => ({ value, label: getCaseTypeLabel(value) })),
     []
   );
+  const caseRecipeOptions = useMemo(() => listCaseRecipes(), []);
 
   const caseGroupSelectOptions = useMemo(() => {
     const baseOptions = CASE_GROUP_VALUES.map((value) => ({
@@ -142,11 +305,370 @@ function useCaseForm({ params }) {
     ];
   }, []);
 
+  const autoCaseName = useMemo(() => {
+    const yearEndLabel = (yearEndInput || yearEndValue || '').trim();
+    return buildAutoCaseName({ auditArea, yearEndLabel, caseLevel });
+  }, [auditArea, caseLevel, yearEndInput, yearEndValue]);
+
+  useEffect(() => {
+    if (isEditing) return;
+    setCaseName((prev) => {
+      const trimmed = (prev || '').trim();
+      if (!trimmed || trimmed === autoCaseName) {
+        return autoCaseName;
+      }
+      return prev;
+    });
+  }, [autoCaseName, isEditing]);
+
+  useEffect(() => {
+    if (isEditing) return;
+    let isActive = true;
+    const loadExistingIdentifiers = async () => {
+      const orgIdFromToken = await getCurrentUserOrgId().catch((err) => {
+        console.warn('[CaseForm] Failed to fetch orgId for instruction auto-title', err);
+        return null;
+      });
+      const resolvedOrgId = orgIdFromToken ?? userProfile?.orgId ?? null;
+      if (!resolvedOrgId) return;
+      const result = await withTimeout(
+        fetchCasesPage({ page: 1, limit: 200, orgId: resolvedOrgId }),
+        5000
+      );
+      if (!isActive) return;
+      const titles = [];
+      const codes = [];
+      (result?.items || []).forEach((item) => {
+        if (!item) return;
+        if (item.title) titles.push(item.title);
+        if (item.caseName) titles.push(item.caseName);
+        if (item.instruction?.title) titles.push(item.instruction.title);
+        if (item.moduleCode) codes.push(item.moduleCode);
+        if (item.instruction?.moduleCode) codes.push(item.instruction.moduleCode);
+      });
+      setExistingInstructionTitles(titles);
+      setExistingModuleCodes(codes);
+    };
+    loadExistingIdentifiers().catch((err) => {
+      if (err?.message === 'timeout') {
+        console.warn('[CaseForm] Skipping instruction auto-title lookup (timed out).');
+        return;
+      }
+      console.warn('[CaseForm] Failed to load existing instruction identifiers', err);
+    });
+    return () => {
+      isActive = false;
+    };
+  }, [isEditing, userProfile?.orgId]);
+
+  useEffect(() => {
+    if (isEditing) return;
+    const baseTitle = buildInstructionTitleBase({ auditArea, caseLevel });
+    const title = buildUniqueInstructionTitle({
+      baseTitle,
+      usedTitles: existingInstructionTitles,
+    });
+    const moduleCode = buildUniqueModuleCode({
+      auditArea,
+      caseLevel,
+      usedCodes: existingModuleCodes,
+    });
+    setInstruction((prev) => {
+      if (prev?.title === title && prev?.moduleCode === moduleCode) return prev;
+      return { ...prev, title, moduleCode };
+    });
+  }, [
+    auditArea,
+    caseLevel,
+    existingInstructionTitles,
+    existingModuleCodes,
+    instruction?.title,
+    instruction?.moduleCode,
+    isEditing,
+  ]);
+
+  useEffect(() => {
+    const { value, error } = normalizeYearEndInput(yearEndInput);
+    setYearEndValue(value);
+    setYearEndError(error);
+  }, [yearEndInput]);
+
   const draftStorageKey = useMemo(() => {
     if (isEditing && editingCaseId) return `${DRAFT_STORAGE_KEY}__${editingCaseId}`;
     if (isEditing) return `${DRAFT_STORAGE_KEY}__editing`;
     return `${DRAFT_STORAGE_KEY}__new`;
   }, [editingCaseId, isEditing]);
+
+  const hasMeaningfulDraft = useCallback((draft) => {
+    if (!draft || typeof draft !== 'object') return false;
+    const yearEndLabel = (draft.yearEndInput || draft.yearEndValue || '').trim();
+    const autoName = buildAutoCaseName({
+      auditArea: draft.auditArea || DEFAULT_AUDIT_AREA,
+      yearEndLabel,
+      caseLevel: draft.caseLevel || 'basic',
+    });
+
+    const caseName = (draft.caseName || '').trim();
+    const hasCustomCaseName = caseName && caseName !== autoName;
+    const hasAuditArea = draft.auditArea && draft.auditArea !== DEFAULT_AUDIT_AREA;
+    const hasLevel = draft.caseLevel && draft.caseLevel !== 'basic';
+    const hasYearEnd = Boolean(yearEndLabel);
+    const hasOverrideDefaults =
+      draft.overrideDefaults ||
+      Boolean((draft.overrideDisbursementCount || '').trim()) ||
+      Boolean((draft.overrideVendorCount || '').trim()) ||
+      Boolean((draft.overrideInvoicesPerVendor || '').trim());
+    const hasVisibility = draft.publicVisible === false;
+    const hasStatus = typeof draft.status === 'string' && draft.status !== 'assigned';
+    const hasSchedule = Boolean((draft.opensAtStr || '').trim() || (draft.dueAtStr || '').trim());
+    const hasGroup =
+      (draft.caseGroupSelection && draft.caseGroupSelection !== '__none') ||
+      (draft.customCaseGroupId || '').trim();
+    const hasLayout =
+      (draft.layoutType && draft.layoutType !== DEFAULT_LAYOUT_TYPE) ||
+      (draft.layoutConfigRaw || '').trim();
+    const hasInstruction = Boolean(
+      (draft.instruction?.title || '').trim() ||
+        (draft.instruction?.moduleCode || '').trim() ||
+        (draft.instruction?.hook?.headline || '').trim() ||
+        (draft.instruction?.hook?.risk || '').trim() ||
+        (draft.instruction?.hook?.body || '').trim() ||
+        (draft.instruction?.heuristic?.rule_text || '').trim() ||
+        (draft.instruction?.heuristic?.reminder || '').trim() ||
+        (draft.instruction?.gateCheck?.question || '').trim() ||
+        (draft.instruction?.gateCheck?.success_message || '').trim() ||
+        (draft.instruction?.gateCheck?.failure_message || '').trim() ||
+        (draft.instruction?.gateCheck?.options || []).some((opt) =>
+          Boolean((opt?.text || '').trim() || (opt?.feedback || '').trim())
+        )
+    );
+    const hasDisbursements = Array.isArray(draft.disbursements)
+      ? draft.disbursements.some((item) => {
+          if (!item || typeof item !== 'object') return false;
+          const hasCore = Boolean(
+            String(item.paymentId || '').trim() ||
+              String(item.payee || '').trim() ||
+              String(item.amount || '').trim() ||
+              String(item.paymentDate || '').trim() ||
+              String(item.transactionType || '').trim()
+          );
+          const hasMappings = Array.isArray(item.mappings)
+            ? item.mappings.some(
+                (mapping) =>
+                  mapping &&
+                  ((mapping.paymentId || '').trim() ||
+                    (mapping.fileName || '').trim() ||
+                    mapping.downloadURL ||
+                    mapping.storagePath ||
+                    mapping.clientSideFile)
+              )
+            : false;
+          const hasAnswerKey =
+            (item.answerKey?.explanation || '').trim() ||
+            (item.answerKey?.reason || '').trim() ||
+            (item.answerKey?.assertion || '').trim();
+          return Boolean(hasCore || hasMappings || hasAnswerKey || item.shouldFlag);
+        })
+      : false;
+    const hasReferences = Array.isArray(draft.referenceDocuments)
+      ? draft.referenceDocuments.some((doc) => {
+          if (!doc || typeof doc !== 'object') return false;
+          return Boolean(
+            (doc.fileName || '').trim() ||
+              doc.downloadURL ||
+              doc.storagePath ||
+              doc.clientSideFile ||
+              (doc.generationSpec && typeof doc.generationSpec === 'object')
+          );
+        })
+      : false;
+    const hasCashContext = Boolean(
+      (draft.cashContext?.bookBalance || '').trim() ||
+        (draft.cashContext?.bankBalance || '').trim() ||
+        (draft.cashContext?.reconciliationDate || '').trim() ||
+        (draft.cashContext?.confirmedBalance || '').trim() ||
+        (draft.cashContext?.testingThreshold || '').trim() ||
+        (draft.cashContext?.cutoffWindowDays || '').trim() ||
+        draft.cashContext?.simulateMathError
+    );
+    const hasCashItems = (list, keys) =>
+      Array.isArray(list) &&
+      list.some((item) => item && keys.some((key) => String(item[key] || '').trim()));
+    const hasCashArtifacts = Array.isArray(draft.cashArtifacts)
+      ? draft.cashArtifacts.some((doc) => {
+          if (!doc || typeof doc !== 'object') return false;
+          return Boolean(
+            (doc.fileName || '').trim() ||
+              doc.downloadURL ||
+              doc.storagePath ||
+              doc.clientSideFile ||
+              (doc.type || '').trim()
+          );
+        })
+      : false;
+    const hasFixedAssets =
+      hasCashItems(draft.faSummary, ['className', 'beginningBalance', 'additions', 'disposals', 'endingBalance']) ||
+      hasCashItems(draft.faAdditions, ['vendor', 'description', 'amount', 'inServiceDate', 'glAccount']) ||
+      hasCashItems(draft.faDisposals, ['assetId', 'description', 'proceeds', 'nbv']) ||
+      Boolean(
+        (draft.faRisk?.tolerableMisstatement || '').trim() ||
+          (draft.faRisk?.sampleSize || '').trim() ||
+          (draft.faRisk?.strategy && draft.faRisk.strategy !== 'all_over_tm')
+      );
+    const hasGenerationPlan = Boolean(
+      draft.generationPlan &&
+        (draft.generationPlan.referenceDocumentSpecs?.length ||
+          (draft.generationPlan.yearEnd || '').trim() ||
+          (draft.generationPlan.caseLevel || '').trim())
+    );
+
+    return Boolean(
+      draft.draftCaseId ||
+        hasCustomCaseName ||
+        hasAuditArea ||
+        hasLevel ||
+        hasYearEnd ||
+        hasVisibility ||
+        hasStatus ||
+        hasSchedule ||
+        hasGroup ||
+        hasLayout ||
+        hasInstruction ||
+        hasDisbursements ||
+        hasReferences ||
+        hasCashContext ||
+        hasCashItems(draft.cashOutstandingItems, ['reference', 'payee', 'issueDate', 'amount']) ||
+        hasCashItems(draft.cashCutoffItems, ['reference', 'clearDate', 'amount']) ||
+        hasCashItems(draft.cashRegisterItems, ['checkNo', 'writtenDate', 'amount', 'payee']) ||
+        hasCashArtifacts ||
+        hasFixedAssets ||
+        hasGenerationPlan ||
+        hasOverrideDefaults
+    );
+  }, []);
+
+  const clearDraftStorage = useCallback(() => {
+    if (!canUseLocalStorage()) return;
+    try {
+      window.localStorage.removeItem(draftStorageKey);
+    } catch (err) {
+      console.error('Failed to clear draft', err);
+    }
+  }, [draftStorageKey]);
+
+  const applyDraftToState = useCallback(
+    (parsed) => {
+      if (!parsed) return;
+      if (parsed.caseName) setCaseName(parsed.caseName);
+      if (parsed.auditArea) setAuditArea(parsed.auditArea);
+      if (parsed.instruction) setInstruction(parsed.instruction);
+      if (parsed.disbursements) setDisbursements(parsed.disbursements);
+      if (parsed.draftCaseId) setDraftCaseId(parsed.draftCaseId);
+      if (parsed.layoutType) setLayoutType(parsed.layoutType);
+      if (parsed.layoutConfigRaw) setLayoutConfigRaw(parsed.layoutConfigRaw);
+      if (parsed.publicVisible !== undefined) setPublicVisible(parsed.publicVisible);
+      if (parsed.selectedUserIds) setSelectedUserIds(parsed.selectedUserIds);
+      if (parsed.caseGroupSelection) setCaseGroupSelection(parsed.caseGroupSelection);
+      if (parsed.customCaseGroupId) setCustomCaseGroupId(parsed.customCaseGroupId);
+      if (parsed.status) setStatus(parsed.status);
+      if (parsed.opensAtStr) setOpensAtStr(parsed.opensAtStr);
+      if (parsed.dueAtStr) setDueAtStr(parsed.dueAtStr);
+      const parsedYearEndInput =
+        typeof parsed.yearEndInput === 'string' ? parsed.yearEndInput.trim() : '';
+      const parsedYearEndValue =
+        typeof parsed.yearEndValue === 'string' ? parsed.yearEndValue.trim() : '';
+      if (parsedYearEndInput || parsedYearEndValue) {
+        setYearEndInput(parsedYearEndInput || parsedYearEndValue);
+        setYearEndValue(parsedYearEndValue || parsedYearEndInput);
+      }
+      if (parsed.caseLevel) {
+        const normalizedLevel = String(parsed.caseLevel || '').trim();
+        if (CASE_LEVEL_VALUES.includes(normalizedLevel)) {
+          setCaseLevel(normalizedLevel);
+        }
+      }
+      if (typeof parsed.overrideDefaults === 'boolean') {
+        setOverrideDefaults(parsed.overrideDefaults);
+      }
+      if (typeof parsed.overrideDisbursementCount === 'string') {
+        setOverrideDisbursementCount(parsed.overrideDisbursementCount);
+      }
+      if (typeof parsed.overrideVendorCount === 'string') {
+        setOverrideVendorCount(parsed.overrideVendorCount);
+      }
+      if (typeof parsed.overrideInvoicesPerVendor === 'string') {
+        setOverrideInvoicesPerVendor(parsed.overrideInvoicesPerVendor);
+      }
+      if (parsed.cashContext) setCashContext(parsed.cashContext);
+      if (parsed.cashOutstandingItems) setCashOutstandingItems(parsed.cashOutstandingItems);
+      if (parsed.cashCutoffItems) setCashCutoffItems(parsed.cashCutoffItems);
+      if (parsed.cashRegisterItems) setCashRegisterItems(parsed.cashRegisterItems);
+      if (parsed.cashArtifacts) setCashArtifacts(parsed.cashArtifacts);
+      if (parsed.faSummary) setFaSummary(parsed.faSummary);
+      if (parsed.faRisk) setFaRisk(parsed.faRisk);
+      if (parsed.faAdditions) setFaAdditions(parsed.faAdditions);
+      if (parsed.faDisposals) setFaDisposals(parsed.faDisposals);
+      if (parsed.referenceDocuments) setReferenceDocuments(parsed.referenceDocuments);
+      if (parsed.generationPlan) {
+        setGenerationPlan(parsed.generationPlan);
+        setHasGeneratedDraft(true);
+      }
+    },
+    []
+  );
+
+  const resetFormForNewCase = useCallback(() => {
+    setCaseName('');
+    setYearEndInput('');
+    setYearEndValue('');
+    setYearEndError('');
+    setCaseLevel('basic');
+    setOverrideDefaults(false);
+    setOverrideDisbursementCount('');
+    setOverrideVendorCount('');
+    setOverrideInvoicesPerVendor('');
+    setSelectedUserIds([]);
+    setPublicVisible(true);
+    setStatus('assigned');
+    setOpensAtStr('');
+    setDueAtStr('');
+    setDisbursements([initialDisbursement()]);
+    setReferenceDocuments([initialReferenceDocument()]);
+    setCashContext({
+      moduleType: 'bank_reconciliation',
+      bookBalance: '',
+      bankBalance: '',
+      reconciliationDate: '',
+      reportingDate: '',
+      simulateMathError: false,
+      confirmedBalance: '',
+      testingThreshold: '',
+      cutoffWindowDays: '',
+    });
+    setCashOutstandingItems([initialOutstandingItem()]);
+    setCashCutoffItems([initialCutoffItem()]);
+    setCashRegisterItems([initialCashRegisterItem()]);
+    setCashReconciliationMap([]);
+    setCashArtifacts([]);
+    setFaSummary([initialFaClass()]);
+    setFaRisk({
+      tolerableMisstatement: '',
+      strategy: 'all_over_tm',
+      sampleSize: '',
+    });
+    setFaAdditions([initialFaAddition()]);
+    setFaDisposals([initialFaDisposal()]);
+    setInstruction(initialInstruction());
+    setLayoutType(DEFAULT_LAYOUT_TYPE);
+    setLayoutConfigRaw('');
+    setOriginalCaseData(null);
+    setGenerationPlan(null);
+    setHasGeneratedDraft(false);
+    setAuditArea(DEFAULT_AUDIT_AREA);
+    setCaseGroupSelection('__none');
+    setCustomCaseGroupId('');
+    setDraftCaseId(null);
+  }, []);
 
   const restoreDraftFromStorage = useCallback(() => {
     if (!canUseLocalStorage()) return;
@@ -155,42 +677,144 @@ function useCaseForm({ params }) {
       if (!savedDraft) return;
       const parsed = JSON.parse(savedDraft);
       if (!parsed || !parsed.updatedAt) return;
+      if (!hasMeaningfulDraft(parsed)) {
+        clearDraftStorage();
+        return;
+      }
 
       if (draftPermissionRef.current === null) {
-        const confirmLoad = window.confirm(
+        pendingDraftRef.current = parsed;
+        showModal(
           isEditing
-            ? 'We found an unsaved draft for this case. Would you like to restore it?'
-            : 'Restoring your unsaved new case draft...'
+            ? 'We found an unsaved draft for this case.'
+            : 'We found an unsaved draft for this new case.',
+          'Resume Draft',
+          (hideModal) => (
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                onClick={async () => {
+                  hideModal();
+                  draftPermissionRef.current = false;
+                  const pending = pendingDraftRef.current;
+                  pendingDraftRef.current = null;
+                  clearDraftStorage();
+                  if (pending?.draftCaseId) {
+                    try {
+                      await markCaseDeleted(pending.draftCaseId);
+                    } catch (err) {
+                      console.warn('[case-form] Failed to delete draft case', err);
+                    }
+                  }
+                  setDraftCaseId(null);
+                  resetFormForNewCase();
+                }}
+              >
+                New Draft
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => {
+                  hideModal();
+                  draftPermissionRef.current = true;
+                  const pending = pendingDraftRef.current;
+                  pendingDraftRef.current = null;
+                  applyDraftToState(pending || parsed);
+                }}
+              >
+                Continue Draft
+              </Button>
+            </div>
+          ),
+          { disableClose: true }
         );
-        draftPermissionRef.current = confirmLoad;
-        if (!confirmLoad) {
-          window.localStorage.removeItem(draftStorageKey);
-        }
+        return;
       }
 
       if (draftPermissionRef.current === true) {
-        if (parsed.caseName) setCaseName(parsed.caseName);
-        if (parsed.auditArea) setAuditArea(parsed.auditArea);
-        if (parsed.instruction) setInstruction(parsed.instruction);
-        if (parsed.disbursements) setDisbursements(parsed.disbursements);
-        if (parsed.draftCaseId) setDraftCaseId(parsed.draftCaseId);
-        if (parsed.layoutType) setLayoutType(parsed.layoutType);
-        if (parsed.layoutConfigRaw) setLayoutConfigRaw(parsed.layoutConfigRaw);
-        if (parsed.publicVisible !== undefined) setPublicVisible(parsed.publicVisible);
-        if (parsed.cashContext) setCashContext(parsed.cashContext);
-        if (parsed.cashOutstandingItems) setCashOutstandingItems(parsed.cashOutstandingItems);
-        if (parsed.cashCutoffItems) setCashCutoffItems(parsed.cashCutoffItems);
-        if (parsed.cashRegisterItems) setCashRegisterItems(parsed.cashRegisterItems);
-        if (parsed.faSummary) setFaSummary(parsed.faSummary);
-        if (parsed.faRisk) setFaRisk(parsed.faRisk);
-        if (parsed.faAdditions) setFaAdditions(parsed.faAdditions);
-        if (parsed.faDisposals) setFaDisposals(parsed.faDisposals);
-        if (parsed.referenceDocuments) setReferenceDocuments(parsed.referenceDocuments);
+        applyDraftToState(parsed);
       }
     } catch (err) {
       console.error('Failed to restore draft', err);
     }
-  }, [draftStorageKey, isEditing]);
+  }, [
+    applyDraftToState,
+    clearDraftStorage,
+    draftStorageKey,
+    hasMeaningfulDraft,
+    isEditing,
+    resetFormForNewCase,
+    showModal,
+  ]);
+
+  const normalizeReferenceDocumentsForForm = useCallback((docs) => {
+    if (!Array.isArray(docs) || docs.length === 0) {
+      return [initialReferenceDocument()];
+    }
+    return docs.map((doc) => ({
+      _tempId: doc._tempId || getUUID(),
+      fileName: doc.fileName || '',
+      storagePath: doc.storagePath || '',
+      downloadURL: doc.downloadURL || '',
+      clientSideFile: null,
+      uploadProgress: doc.storagePath ? 100 : undefined,
+      uploadError: null,
+      contentType: doc.contentType || '',
+      generationSpec: doc.generationSpec || null,
+      generationSpecId: doc.generationSpecId || null,
+    }));
+  }, []);
+
+  const normalizeCashArtifactsForForm = useCallback((docs) => {
+    const list = Array.isArray(docs) ? docs.filter(Boolean) : [];
+    let changed = false;
+    const normalizedList = list.map((doc) => {
+      if (!doc || typeof doc !== 'object') return doc;
+      const normalizedType = normalizeCashArtifactType(doc.type);
+      const nextDoc = { ...doc };
+      if (normalizedType && normalizedType !== doc.type) {
+        nextDoc.type = normalizedType;
+        changed = true;
+      }
+      if (!nextDoc._tempId) {
+        nextDoc._tempId = getUUID();
+        changed = true;
+      }
+      return nextDoc;
+    });
+
+    const requiredTypes = CASH_ARTIFACT_TYPES.map((entry) => entry.value);
+    const requiredSet = new Set(requiredTypes);
+    const byType = new Map();
+    normalizedList.forEach((doc) => {
+      if (!doc || typeof doc !== 'object') return;
+      if (doc.type) byType.set(doc.type, doc);
+    });
+
+    const next = requiredTypes.map((type) => {
+      const existing = byType.get(type);
+      if (existing) return existing;
+      changed = true;
+      return buildCashArtifact(type);
+    });
+
+    normalizedList.forEach((doc) => {
+      if (!doc || typeof doc !== 'object') return;
+      const type = doc.type || '';
+      if (!type || requiredSet.has(type)) return;
+      next.push(doc);
+    });
+
+    return { items: next, changed };
+  }, []);
+
+  useEffect(() => {
+    if (auditArea !== AUDIT_AREAS.CASH) return;
+    setCashArtifacts((prev) => {
+      const { items, changed } = normalizeCashArtifactsForForm(prev);
+      return changed ? items : prev;
+    });
+  }, [auditArea, normalizeCashArtifactsForForm]);
 
   useEffect(() => {
     disbursementsRef.current = disbursements;
@@ -223,16 +847,35 @@ function useCaseForm({ params }) {
 
     const draftData = {
       caseName,
+      yearEndInput,
+      yearEndValue,
+      caseLevel,
+      overrideDefaults,
+      overrideDisbursementCount,
+      overrideVendorCount,
+      overrideInvoicesPerVendor,
       auditArea,
       layoutType,
       layoutConfigRaw,
       publicVisible,
+      selectedUserIds,
+      caseGroupSelection,
+      customCaseGroupId,
+      status,
+      opensAtStr,
+      dueAtStr,
       disbursements: stripClientFilesForDraft(disbursements),
       instruction,
       cashContext,
       cashOutstandingItems,
       cashCutoffItems,
       cashRegisterItems,
+      cashArtifacts: (Array.isArray(cashArtifacts) ? cashArtifacts : []).map((doc) => {
+        if (!doc || typeof doc !== 'object') return doc;
+        // eslint-disable-next-line no-unused-vars
+        const { clientSideFile, ...rest } = doc;
+        return rest;
+      }),
       faSummary,
       faRisk,
       faAdditions,
@@ -243,12 +886,17 @@ function useCaseForm({ params }) {
         const { clientSideFile, ...rest } = doc;
         return rest;
       }),
+      generationPlan,
       draftCaseId,
       updatedAt: Date.now(),
     };
 
     const handler = setTimeout(() => {
       try {
+        if (!hasMeaningfulDraft(draftData)) {
+          window.localStorage.removeItem(draftStorageKey);
+          return;
+        }
         window.localStorage.setItem(draftStorageKey, JSON.stringify(draftData));
       } catch (err) {
         console.error('Failed to save draft', err);
@@ -258,23 +906,39 @@ function useCaseForm({ params }) {
     return () => clearTimeout(handler);
   }, [
     caseName,
+    yearEndInput,
+    yearEndValue,
+    caseLevel,
+    overrideDefaults,
+    overrideDisbursementCount,
+    overrideVendorCount,
+    overrideInvoicesPerVendor,
     auditArea,
     layoutType,
     layoutConfigRaw,
     publicVisible,
+    selectedUserIds,
+    caseGroupSelection,
+    customCaseGroupId,
+    status,
+    opensAtStr,
+    dueAtStr,
     disbursements,
     instruction,
     cashContext,
     cashOutstandingItems,
     cashCutoffItems,
     cashRegisterItems,
+    cashArtifacts,
     faSummary,
     faRisk,
     faAdditions,
     faDisposals,
     referenceDocuments,
+    generationPlan,
     draftCaseId,
     draftStorageKey,
+    hasMeaningfulDraft,
     isHydratedForDrafts,
     stripClientFilesForDraft,
   ]);
@@ -331,6 +995,144 @@ function useCaseForm({ params }) {
       console.warn('[case-upload] validation-failed', { reason, ...extra });
     } catch {}
   };
+  const formatGenerationError = useCallback((error, fallback) => {
+    if (!error) return fallback || 'Unable to queue generation job.';
+    const message = typeof error.message === 'string' ? error.message.trim() : '';
+    const code = error.code ? String(error.code).trim() : '';
+    if (
+      (code === 'internal' || code === 'functions/internal') &&
+      (!message || message.toLowerCase() === 'internal')
+    ) {
+      return 'Cloud Function not reachable. Confirm Functions are deployed and region matches (default us-central1).';
+    }
+    let details = '';
+    if (error.details) {
+      if (typeof error.details === 'string') {
+        details = error.details.trim();
+      } else {
+        try {
+          details = JSON.stringify(error.details);
+        } catch {
+          details = '';
+        }
+      }
+    }
+    const parts = [];
+    if (message) parts.push(message);
+    if (code && code !== message) parts.push(`(${code})`);
+    if (details && details !== message) parts.push(details);
+    return parts.length ? parts.join(' ') : fallback || 'Unable to queue generation job.';
+  }, []);
+
+  const computeGenerationCounts = useCallback((docs) => {
+    if (!Array.isArray(docs)) {
+      return { total: 0, ready: 0, pending: 0 };
+    }
+    const generated = docs.filter(
+      (doc) => doc && doc.generationSpec && typeof doc.generationSpec === 'object'
+    );
+    const ready = generated.filter((doc) => doc.downloadURL || doc.storagePath).length;
+    return {
+      total: generated.length,
+      ready,
+      pending: Math.max(0, generated.length - ready),
+    };
+  }, []);
+
+  const resolveReferenceDownloadUrls = useCallback(async (docs) => {
+    if (!Array.isArray(docs) || docs.length === 0) return docs;
+    const resolved = await Promise.all(
+      docs.map(async (doc) => {
+        if (!doc || doc.downloadURL || !doc.storagePath) return doc;
+        try {
+          const url = await getDownloadURL(storageRef(storage, doc.storagePath));
+          return { ...doc, downloadURL: url };
+        } catch (err) {
+          console.warn('[case-form] Failed to resolve download URL', err);
+          return doc;
+        }
+      })
+    );
+    return resolved;
+  }, []);
+
+  const toSafeDate = useCallback((value) => {
+    if (!value) return null;
+    if (typeof value?.toDate === 'function') {
+      const asDate = value.toDate();
+      return Number.isNaN(asDate?.getTime()) ? null : asDate;
+    }
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }, []);
+
+  const pollGenerationUpdates = useCallback(
+    async (caseIdForJob) => {
+      if (!caseIdForJob || generationPollingRef.current) return;
+      generationPollingRef.current = true;
+      setGenerationPolling(true);
+      const maxAttempts = 180;
+      let lastJobStatus = null;
+      let lastErrorCount = 0;
+      let terminalCountdown = null;
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        // eslint-disable-next-line no-await-in-loop
+        const updated = await fetchCase(caseIdForJob).catch(() => null);
+        if (updated?.referenceDocuments) {
+          const normalized = normalizeReferenceDocumentsForForm(updated.referenceDocuments);
+          const resolved = await resolveReferenceDownloadUrls(normalized);
+          setReferenceDocuments(resolved);
+          const counts = computeGenerationCounts(updated.referenceDocuments);
+          if (counts.pending === 0) {
+            // continue to refresh job status before breaking
+          }
+        }
+        // eslint-disable-next-line no-await-in-loop
+        const refreshedPlan = await fetchCaseGenerationPlan({ caseId: caseIdForJob }).catch(() => null);
+        if (refreshedPlan) {
+          setGenerationPlan(refreshedPlan);
+          lastJobStatus = refreshedPlan?.lastJob?.status || null;
+          lastErrorCount = refreshedPlan?.lastJob?.errorCount || 0;
+        }
+        const counts =
+          updated?.referenceDocuments ? computeGenerationCounts(updated.referenceDocuments) : null;
+        const pending = counts ? counts.pending : null;
+        const terminalStatus =
+          lastJobStatus === 'completed' || lastJobStatus === 'partial' || lastJobStatus === 'error';
+        if (terminalStatus) {
+          if (pending === 0 || pending === null) {
+            break;
+          }
+          if (terminalCountdown === null) {
+            terminalCountdown = 3;
+          } else {
+            terminalCountdown -= 1;
+          }
+          if (terminalCountdown <= 0) {
+            break;
+          }
+        }
+      }
+      generationPollingRef.current = false;
+      setGenerationPolling(false);
+      if (lastJobStatus === 'error' || lastErrorCount > 0) {
+        showModal(
+          'Some documents failed to generate. Review the generation status in the Review step.',
+          'Generation Error'
+        );
+      }
+    },
+    [
+      setReferenceDocuments,
+      normalizeReferenceDocumentsForForm,
+      resolveReferenceDownloadUrls,
+      setGenerationPlan,
+      computeGenerationCounts,
+      showModal,
+    ]
+  );
 
   const {
     uploadFileAndGetMetadata,
@@ -345,6 +1147,9 @@ function useCaseForm({ params }) {
     draftCaseId,
     setDraftCaseId,
     caseName,
+    yearEndValue,
+    yearEndInput,
+    caseLevel,
     auditArea,
     layoutType,
     layoutConfigRaw,
@@ -379,6 +1184,9 @@ function useCaseForm({ params }) {
     meta: { isEditing, editingCaseId, draftCaseId },
     state: {
       caseName,
+      yearEndInput,
+      yearEndValue,
+      caseLevel,
       auditArea,
       layoutType,
       layoutConfigRaw,
@@ -403,6 +1211,7 @@ function useCaseForm({ params }) {
       referenceDocuments,
       cashArtifacts,
       originalCaseData,
+      generationPlan,
     },
     user: { userId, userProfile, role },
     ui: { showModal, navigate, setLoading },
@@ -448,48 +1257,6 @@ function useCaseForm({ params }) {
     return local.toISOString().slice(0, 16);
   };
 
-  const resetFormForNewCase = useCallback(() => {
-    setCaseName('');
-    setSelectedUserIds([]);
-    setPublicVisible(true);
-    setStatus('assigned');
-    setOpensAtStr('');
-    setDueAtStr('');
-    setDisbursements([initialDisbursement()]);
-    setReferenceDocuments([initialReferenceDocument()]);
-    setCashContext({
-      moduleType: 'bank_reconciliation',
-      bookBalance: '',
-      bankBalance: '',
-      reconciliationDate: '',
-      reportingDate: '',
-      simulateMathError: false,
-      confirmedBalance: '',
-      testingThreshold: '',
-      cutoffWindowDays: '',
-    });
-    setCashOutstandingItems([initialOutstandingItem()]);
-    setCashCutoffItems([initialCutoffItem()]);
-    setCashRegisterItems([initialCashRegisterItem()]);
-    setCashReconciliationMap([]);
-    setCashArtifacts([]);
-    setFaSummary([initialFaClass()]);
-    setFaRisk({
-      tolerableMisstatement: '',
-      strategy: 'all_over_tm',
-      sampleSize: '',
-    });
-    setFaAdditions([initialFaAddition()]);
-    setFaDisposals([initialFaDisposal()]);
-    setInstruction(initialInstruction());
-    setLayoutType(DEFAULT_LAYOUT_TYPE);
-    setLayoutConfigRaw('');
-    setOriginalCaseData(null);
-    setAuditArea(DEFAULT_AUDIT_AREA);
-    setCaseGroupSelection('__none');
-    setCustomCaseGroupId('');
-  }, []);
-
   useEffect(() => {
     if (isEditing && editingCaseId) {
       setLoading(true);
@@ -497,6 +1264,8 @@ function useCaseForm({ params }) {
         .then((data) => {
           if (data) {
             setOriginalCaseData(data);
+            setGenerationPlan(null);
+            setHasGeneratedDraft(false);
             setCaseName(data.caseName || data.title || '');
             const inferredPublic =
               typeof data.publicVisible === 'boolean'
@@ -542,7 +1311,7 @@ function useCaseForm({ params }) {
                 ? data.cashReconciliationMap.map((entry) => ({ _tempId: getUUID(), ...entry }))
                 : []
             );
-            setCashArtifacts([...(Array.isArray(data.cashArtifacts) ? data.cashArtifacts : [])]);
+            setCashArtifacts(normalizeCashArtifactsForForm(data.cashArtifacts).items);
             setFaSummary(
               Array.isArray(data.faSummary) && data.faSummary.length > 0
                 ? data.faSummary.map((entry) => ({ _tempId: getUUID(), ...entry }))
@@ -656,24 +1425,26 @@ function useCaseForm({ params }) {
 
             setDisbursements(disbursementsWithMappings);
             setReferenceDocuments(
-              data.referenceDocuments && data.referenceDocuments.length > 0
-                ? data.referenceDocuments.map((doc) => ({
-                    _tempId: doc._tempId || getUUID(),
-                    fileName: doc.fileName || '',
-                    storagePath: doc.storagePath || '',
-                    downloadURL: doc.downloadURL || '',
-                    clientSideFile: null,
-                    uploadProgress: doc.storagePath ? 100 : undefined,
-                    uploadError: null,
-                    contentType: doc.contentType || '',
-                  }))
-                : [initialReferenceDocument()]
+              normalizeReferenceDocumentsForForm(data.referenceDocuments)
             );
             setAuditArea(
               typeof data.auditArea === 'string' && data.auditArea.trim()
                 ? data.auditArea.trim()
                 : DEFAULT_AUDIT_AREA
             );
+            const normalizedLevel =
+              typeof data.caseLevel === 'string' ? data.caseLevel.trim() : '';
+            setCaseLevel(CASE_LEVEL_VALUES.includes(normalizedLevel) ? normalizedLevel : 'basic');
+            const storedYearEndLabel =
+              typeof data.yearEndLabel === 'string' && data.yearEndLabel.trim()
+                ? data.yearEndLabel.trim()
+                : typeof data.yearEnd === 'string'
+                ? data.yearEnd.trim()
+                : '';
+            setYearEndInput(storedYearEndLabel);
+            if (typeof data.yearEnd === 'string' && data.yearEnd.trim()) {
+              setYearEndValue(data.yearEnd.trim());
+            }
             const inferredLayout =
               data?.workpaper?.layoutType ||
               (data.auditArea === AUDIT_AREAS.CASH
@@ -711,6 +1482,27 @@ function useCaseForm({ params }) {
           setLoading(false);
           restoreDraftFromStorage();
           setIsHydratedForDrafts(true);
+
+          fetchCaseGenerationPlan({ caseId: editingCaseId })
+            .then((plan) => {
+              if (plan) {
+                setGenerationPlan(plan);
+                setHasGeneratedDraft(true);
+                if (plan.yearEnd) {
+                  setYearEndInput((prev) => prev || plan.yearEnd);
+                  setYearEndValue((prev) => prev || plan.yearEnd);
+                }
+                if (plan.caseLevel) {
+                  const normalizedLevel = String(plan.caseLevel || '').trim();
+                  if (CASE_LEVEL_VALUES.includes(normalizedLevel)) {
+                    setCaseLevel((prev) => prev || normalizedLevel);
+                  }
+                }
+              }
+            })
+            .catch((error) => {
+              console.warn('[case-form] Failed to load generation plan', error);
+            });
         })
         .catch((error) => {
           console.error('Error fetching case for editing:', error);
@@ -726,7 +1518,206 @@ function useCaseForm({ params }) {
       restoreDraftFromStorage();
       setIsHydratedForDrafts(true);
     }
-  }, [isEditing, editingCaseId, navigate, showModal, resetFormForNewCase, restoreDraftFromStorage]);
+  }, [
+    isEditing,
+    editingCaseId,
+    navigate,
+    showModal,
+    resetFormForNewCase,
+    restoreDraftFromStorage,
+    normalizeReferenceDocumentsForForm,
+    normalizeCashArtifactsForForm,
+  ]);
+
+  const queueGenerationJob = useCallback(async () => {
+    if (!generationPlan) {
+      showModal('No generation plan found for this case.', 'Generation');
+      return;
+    }
+    if (role && role !== 'admin' && role !== 'instructor') {
+      showModal('Only admins or instructors can generate reference documents.', 'Permission Needed');
+      return;
+    }
+    if (!appId) {
+      showModal(
+        'Missing appId. Please ensure the app is initialized (window.__app_id) before generating documents.',
+        'Generation Error'
+      );
+      return;
+    }
+    let caseIdForJob = editingCaseId || draftCaseId;
+    const jobStatus = generationPlan?.lastJob?.status;
+    const lastJobId = generationPlan?.lastJob?.jobId || '';
+    const lastJobUpdatedAt = toSafeDate(generationPlan?.lastJob?.updatedAt);
+    const jobAgeMs = lastJobUpdatedAt ? Date.now() - lastJobUpdatedAt.getTime() : null;
+    const jobFresh = jobAgeMs !== null && jobAgeMs < 5 * 60 * 1000;
+    if ((jobStatus === 'queued' || jobStatus === 'processing') && lastJobId && jobFresh) {
+      pollGenerationUpdates(caseIdForJob);
+      return;
+    }
+    if (!caseIdForJob) {
+      const orgIdFromToken = await getCurrentUserOrgId().catch((e) => {
+        console.warn('[CaseForm] Failed to fetch orgId from token (generation)', e);
+        return null;
+      });
+      const resolvedOrgId = orgIdFromToken ?? userProfile?.orgId ?? null;
+      const resolvedRole = role || 'unknown';
+
+      if (resolvedRole !== 'admin' && !resolvedOrgId) {
+        showModal(
+          'Your account is missing an orgId. Please contact an admin to set your organization before generating documents.',
+          'Permission Needed'
+        );
+        return;
+      }
+
+      let parsedLayoutConfig = {};
+      if (layoutConfigRaw && layoutConfigRaw.trim()) {
+        try {
+          const parsed = JSON.parse(layoutConfigRaw);
+          if (parsed && typeof parsed === 'object') parsedLayoutConfig = parsed;
+        } catch {
+          // Keep generation resilient; layout config can be fixed before final publish.
+        }
+      }
+
+      const rosterIds = Array.isArray(selectedUserIds)
+        ? Array.from(new Set(selectedUserIds)).filter(Boolean)
+        : [];
+      const visibleToUserIds = publicVisible ? [] : rosterIds;
+      const resolvedCaseGroupId =
+        caseGroupSelection === '__custom'
+          ? (customCaseGroupId || '').trim() || null
+          : caseGroupSelection && caseGroupSelection !== '__none'
+          ? caseGroupSelection
+          : null;
+
+      const title = (caseName || '').trim() || 'Untitled draft';
+
+      const draftPayload = {
+        caseName: title,
+        title,
+        orgId: resolvedOrgId,
+        workpaper: { layoutType, layoutConfig: parsedLayoutConfig },
+        instruction,
+        disbursements,
+        invoiceMappings: [],
+        referenceDocuments,
+        visibleToUserIds,
+        publicVisible,
+        status: 'draft',
+        opensAt: null,
+        dueAt: null,
+        createdBy: userId,
+        _deleted: false,
+        auditArea,
+        caseGroupId: resolvedCaseGroupId,
+      };
+
+      try {
+        caseIdForJob = await createCase(draftPayload);
+        setDraftCaseId(caseIdForJob);
+        try {
+          await saveCaseGenerationPlan({ caseId: caseIdForJob, plan: generationPlan });
+        } catch (err) {
+          console.warn('[case-form] Failed to store generation plan for draft case', err);
+          if (err?.code === 'permission-denied') {
+            showModal(
+              'Permission denied saving generation plan. Confirm your role is admin/instructor and Firestore rules are deployed.',
+              'Generation Error'
+            );
+            return;
+          }
+        }
+      } catch (error) {
+        console.error('[case-form] Failed to create draft case for generation', error);
+        showModal(error?.message || 'Unable to create a draft case for generation.', 'Generation Error');
+        return;
+      }
+    }
+    try {
+      let planForJob = generationPlan;
+      if (
+        !planForJob ||
+        !Array.isArray(planForJob.referenceDocumentSpecs) ||
+        planForJob.referenceDocumentSpecs.length === 0
+      ) {
+        const refreshedPlan = await fetchCaseGenerationPlan({ caseId: caseIdForJob }).catch(() => null);
+        if (refreshedPlan) {
+          setGenerationPlan(refreshedPlan);
+          planForJob = refreshedPlan;
+        }
+      }
+      if (
+        !planForJob ||
+        !Array.isArray(planForJob.referenceDocumentSpecs) ||
+        planForJob.referenceDocumentSpecs.length === 0
+      ) {
+        showModal('No valid generation plan found for this case.', 'Generation Error');
+        return;
+      }
+
+      let result = await queueCaseGenerationJob({
+        caseId: caseIdForJob,
+        plan: planForJob,
+        appId,
+      });
+      if (!result?.jobId) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        result = await queueCaseGenerationJob({
+          caseId: caseIdForJob,
+          plan: planForJob,
+          appId,
+        });
+      }
+      if (!result?.jobId) {
+        showModal('Generation job did not return an id. Please retry.', 'Generation Error');
+        return;
+      }
+      setGenerationPlan((prev) =>
+        prev
+          ? {
+              ...prev,
+              lastJob: {
+                ...(prev.lastJob || {}),
+                jobId: result.jobId,
+                status: 'queued',
+                updatedAt: new Date().toISOString(),
+              },
+            }
+          : prev
+      );
+      pollGenerationUpdates(caseIdForJob);
+    } catch (error) {
+      console.error('[case-form] Failed to queue generation job', error);
+      showModal(formatGenerationError(error, 'Unable to queue generation job.'), 'Generation Error');
+    }
+  }, [
+    generationPlan,
+    editingCaseId,
+    draftCaseId,
+    showModal,
+    setGenerationPlan,
+    layoutConfigRaw,
+    selectedUserIds,
+    publicVisible,
+    caseGroupSelection,
+    customCaseGroupId,
+    caseName,
+    userProfile,
+    role,
+    userId,
+    auditArea,
+    instruction,
+    disbursements,
+    referenceDocuments,
+    layoutType,
+    formatGenerationError,
+    pollGenerationUpdates,
+    toSafeDate,
+  ]);
+
+  // Auto-queue removed to prevent UI freeze. Use manual trigger in ReviewStep.
 
   const handleDisbursementChange = (index, updatedItem) => {
     setDisbursements((prev) =>
@@ -876,11 +1867,79 @@ function useCaseForm({ params }) {
 
   const goBack = () => navigate('/admin');
 
+  const generateCaseDraft = useCallback(
+    (recipeId, overrides = {}) => {
+      try {
+        const startedAt = Date.now();
+        console.info('[case-form] generateCaseDraft:start', { recipeId, overrides });
+        const draft = buildCaseDraftFromRecipe({ recipeId, overrides });
+        console.info('[case-form] generateCaseDraft:buildComplete', {
+          recipeId,
+          ms: Date.now() - startedAt,
+        });
+        setCaseName(draft.caseName);
+        setAuditArea(draft.auditArea);
+        setLayoutType(draft.layoutType);
+        setLayoutConfigRaw(draft.layoutConfigRaw || '');
+        setInstruction(draft.instruction);
+        setDisbursements(draft.disbursements);
+        setReferenceDocuments(draft.referenceDocuments);
+        if (draft.cashContext) setCashContext(draft.cashContext);
+        if (draft.cashOutstandingItems) setCashOutstandingItems(draft.cashOutstandingItems);
+        if (draft.cashCutoffItems) setCashCutoffItems(draft.cashCutoffItems);
+        if (draft.cashRegisterItems) setCashRegisterItems(draft.cashRegisterItems);
+        if (draft.cashReconciliationMap) setCashReconciliationMap(draft.cashReconciliationMap);
+        if (draft.faSummary) setFaSummary(draft.faSummary);
+        if (draft.faRisk) setFaRisk(draft.faRisk);
+        if (draft.faAdditions) setFaAdditions(draft.faAdditions);
+        if (draft.faDisposals) setFaDisposals(draft.faDisposals);
+        setGenerationPlan(draft.generationPlan || null);
+        if (draft.generationPlan?.yearEnd) {
+          setYearEndInput(draft.generationPlan.yearEnd);
+          setYearEndValue(draft.generationPlan.yearEnd);
+        }
+        if (draft.generationPlan?.caseLevel) {
+          setCaseLevel(draft.generationPlan.caseLevel);
+        }
+        setHasGeneratedDraft(true);
+        console.info('[case-form] generateCaseDraft:stateApplied', {
+          recipeId,
+          ms: Date.now() - startedAt,
+        });
+        return true;
+      } catch (error) {
+        console.error('[case-form] Failed to generate case draft', error);
+        showModal(error.message || 'Unable to generate case draft.', 'Generation Error');
+        return false;
+      }
+    },
+    [showModal]
+  );
+
+  const resetGeneratedDraft = useCallback(() => {
+    resetFormForNewCase();
+  }, [resetFormForNewCase]);
+
   const basics = {
     caseName,
     setCaseName,
     auditArea,
     setAuditArea,
+    yearEndInput,
+    setYearEndInput,
+    yearEndValue,
+    yearEndError,
+    caseLevel,
+    setCaseLevel,
+    caseLevelOptions: CASE_LEVEL_OPTIONS,
+    overrideDefaults,
+    setOverrideDefaults,
+    overrideDisbursementCount,
+    setOverrideDisbursementCount,
+    overrideVendorCount,
+    setOverrideVendorCount,
+    overrideInvoicesPerVendor,
+    setOverrideInvoicesPerVendor,
     layoutType,
     setLayoutType,
     workpaperLayoutOptions: WORKPAPER_LAYOUT_OPTIONS,
@@ -1000,7 +2059,15 @@ function useCaseForm({ params }) {
     answerKey,
     instructionData,
     files,
-    actions: { handleSubmit, goBack },
+    generation: {
+      recipes: caseRecipeOptions,
+      generationPlan,
+      generateCaseDraft,
+      queueGenerationJob,
+      hasGeneratedDraft,
+      generationPolling,
+    },
+    actions: { handleSubmit, goBack, resetGeneratedDraft },
   };
 }
 
