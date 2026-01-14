@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
-import { LayoutGrid, LogOut } from 'lucide-react';
+import { LayoutGrid, LogOut, UserCircle2 } from 'lucide-react';
 import { Button, useAuth, useRoute, useUser, appId, ROLES } from '../../AppCore';
 
 export default function AppLayout() {
@@ -69,6 +69,13 @@ export default function AppLayout() {
             >
               <LayoutGrid size={16} className="inline mr-1" /> Dashboard
             </Button>
+            <button
+              type="button"
+              className="rounded-full text-slate-500 hover:text-slate-700 transition-colors"
+              aria-label="Profile"
+            >
+              <UserCircle2 size={26} />
+            </button>
             {currentUser && (
               <Button onClick={logout} variant="secondary" className="text-xs sm:text-sm px-2 py-1 sm:px-3">
                 <LogOut size={16} className="inline mr-1" /> Logout

@@ -715,6 +715,78 @@ exports.queueCaseDocGeneration = functions.https.onCall(async (data, context) =>
   return { jobId: jobRef.id, status: payload.status };
 });
 
+exports.deleteRetakeAttempt = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
+  }
+
+  const appId = data?.appId;
+  const caseId = data?.caseId;
+
+  if (!appId || typeof appId !== 'string') {
+    throw new functions.https.HttpsError('invalid-argument', 'appId is required.');
+  }
+  if (!caseId || typeof caseId !== 'string') {
+    throw new functions.https.HttpsError('invalid-argument', 'caseId is required.');
+  }
+
+  const firestore = admin.firestore();
+  const { resolvedRole, requesterOrgId } = await resolveRequesterIdentity({
+    context,
+    appId,
+    firestore,
+    logLabel: 'deleteRetakeAttempt',
+  });
+
+  if (resolvedRole !== 'admin' && resolvedRole !== 'instructor' && resolvedRole !== 'trainee') {
+    throw new functions.https.HttpsError('permission-denied', 'Insufficient permissions.');
+  }
+
+  const caseRef = firestore.doc(`artifacts/${appId}/public/data/cases/${caseId}`);
+  const caseSnap = await caseRef.get();
+  if (!caseSnap.exists) {
+    throw new functions.https.HttpsError('not-found', 'Case not found.');
+  }
+  const caseData = caseSnap.data() || {};
+
+  if (resolvedRole === 'trainee') {
+    const visibleToUserIds = Array.isArray(caseData?.visibleToUserIds)
+      ? caseData.visibleToUserIds
+      : [];
+    if (!visibleToUserIds.includes(context.auth.uid)) {
+      throw new functions.https.HttpsError('permission-denied', 'Case is not assigned to trainee.');
+    }
+    const legacyRetakeEligible =
+      caseData?.publicVisible === false &&
+      visibleToUserIds.length === 1 &&
+      visibleToUserIds[0] === context.auth.uid &&
+      Boolean(caseData?.moduleId) &&
+      !caseData?.orgId;
+    if (caseData?.retakeAttempt !== true && !legacyRetakeEligible) {
+      throw new functions.https.HttpsError('failed-precondition', 'Case is not marked as a retake.');
+    }
+  }
+
+  if (resolvedRole === 'instructor') {
+    if (!requesterOrgId) {
+      throw new functions.https.HttpsError('failed-precondition', 'Instructor has no Org ID.');
+    }
+    if (!caseData?.orgId || caseData.orgId !== requesterOrgId) {
+      throw new functions.https.HttpsError('permission-denied', 'Case is outside instructor org.');
+    }
+  }
+
+  await caseRef.set(
+    {
+      _deleted: true,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  return { caseId, deleted: true };
+});
+
 exports.processCaseDocGenerationJob = onDocumentWritten(
   {
     document: 'artifacts/{appId}/private/data/case_generation_jobs/{jobId}',

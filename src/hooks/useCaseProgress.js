@@ -132,8 +132,10 @@ export default function useCaseProgress({
               cashAdjustments: [],
               cashSummary: {},
             },
+            hasSuccessfulAttempt: false,
           },
           forceOverwrite: true,
+          clearActiveAttempt: true,
         });
       } catch (err) {
         console.error('Failed to reset progress for retake:', err);

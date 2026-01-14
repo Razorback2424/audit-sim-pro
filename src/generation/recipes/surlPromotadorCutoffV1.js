@@ -31,10 +31,11 @@ export const surlPromotadorCutoffV1 = {
   label: 'SURL Cutoff (Generated)',
   description: 'Unrecorded liability trap with post-close disbursements and service-date cutoff.',
   moduleTitle: 'SURL',
-  pathId: 'accounts_payable',
+  pathId: 'foundations',
+  pathTitle: 'Foundations',
   tier: 'foundations',
   auditArea: AUDIT_AREAS.PAYABLES,
-  primarySkill: 'Cutoff',
+  primarySkill: 'SURL',
   build: ({ overrides } = {}) => {
     const seed = getUUID();
     const resolvedYearEnd =

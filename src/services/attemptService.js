@@ -15,7 +15,7 @@ const resolveInstruction = ({ recipeDetails, draftInstruction, recipeVersion }) 
   return { ...draftInstruction, version: recipeVersion };
 };
 
-export const generateAttemptFromRecipe = async ({ moduleId, uid }) => {
+export const generateAttemptFromRecipe = async ({ moduleId, uid, retakeAttempt = false }) => {
   if (!moduleId) {
     throw new Error('generateAttemptFromRecipe requires a moduleId.');
   }
@@ -71,6 +71,8 @@ export const generateAttemptFromRecipe = async ({ moduleId, uid }) => {
     primarySkill: recipeDetails?.primarySkill || recipeMeta.primarySkill || '',
     workflow: recipeDetails?.workflow || { steps: ['instruction', 'selection', 'testing', 'results'], gateScope: 'once' },
     generationConfig: recipeDetails?.generationConfig || {},
+    retakeAttempt: Boolean(retakeAttempt),
+    createdBy: uid,
   };
 
   const caseId = await createCase(casePayload);

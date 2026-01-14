@@ -282,6 +282,7 @@ export default function useCashTesting({
             cashAdjustments,
             cashSummary: cashSummaryDraft,
           },
+          hasSuccessfulAttempt: true,
         },
       });
 

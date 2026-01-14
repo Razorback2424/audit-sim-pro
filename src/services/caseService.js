@@ -18,7 +18,8 @@ import {
   Timestamp,
   getCountFromServer,
 } from 'firebase/firestore';
-import { db, FirestorePaths, appId, auth } from '../AppCore';
+import { db, FirestorePaths, appId, auth, functions } from '../AppCore';
+import { httpsCallable } from 'firebase/functions';
 import { getNow } from '../utils/dates';
 import { toCaseModel } from '../models/case';
 import {
@@ -1165,6 +1166,15 @@ export const updateCase = async (caseId, data) => {
 export const markCaseDeleted = async (caseId) => {
   const ref = doc(db, FirestorePaths.CASE_DOCUMENT(caseId));
   await setDoc(ref, { _deleted: true, updatedAt: serverTimestamp() }, { merge: true });
+};
+
+export const deleteRetakeAttempt = async ({ caseId }) => {
+  if (!caseId) {
+    throw new Error('deleteRetakeAttempt requires a caseId.');
+  }
+  const callable = httpsCallable(functions, 'deleteRetakeAttempt');
+  const result = await callable({ appId, caseId });
+  return result?.data || null;
 };
 
 const toMillis = (timestamp) => {

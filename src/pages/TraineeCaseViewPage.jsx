@@ -6,6 +6,7 @@ import { fetchCase, listStudentCases, subscribeToCase } from '../services/caseSe
 import { saveSubmission } from '../services/submissionService';
 import { fetchProgressForCases, saveProgress, subscribeProgressForCases } from '../services/progressService';
 import { fetchRecipeProgress, saveRecipeProgress } from '../services/recipeProgressService';
+import { generateAttemptFromRecipe } from '../services/attemptService';
 import { Send, Loader2, ExternalLink, Download, BookOpen } from 'lucide-react';
 import ResultsAnalysis from '../components/trainee/ResultsAnalysis';
 import AuditItemCardFactory from '../components/trainee/AuditItemCardFactory';
@@ -242,7 +243,6 @@ export default function TraineeCaseViewPage({ params }) {
   const progressSaveTimeoutRef = useRef(null);
   const lastLocalChangeRef = useRef(0);
   const activeStepRef = useRef(FLOW_STEPS.INSTRUCTION);
-  const gatePassedRef = useRef(false);
   const selectionRef = useRef(selectedDisbursements);
   const classificationRef = useRef(classificationAmounts);
   const selectedIdsRef = useRef([]);
@@ -267,7 +267,8 @@ export default function TraineeCaseViewPage({ params }) {
       if (retakeResettingRef.current) return;
 
       retakeResettingRef.current = true;
-      const initialStep = gatePassedRef.current ? FLOW_STEPS.SELECTION : FLOW_STEPS.INSTRUCTION;
+      const initialStep =
+        gateScope === 'once' ? FLOW_STEPS.SELECTION : FLOW_STEPS.INSTRUCTION;
       setIsRetakeResetting(true);
       setIsLocked(false);
       setActiveStep(initialStep);
@@ -303,8 +304,10 @@ export default function TraineeCaseViewPage({ params }) {
               cashAdjustments: [],
               cashSummary: {},
             },
+            hasSuccessfulAttempt: false,
           },
           forceOverwrite: true,
+          clearActiveAttempt: true,
         });
         didReset = true;
       } catch (err) {
@@ -329,12 +332,53 @@ export default function TraineeCaseViewPage({ params }) {
         }
       }
     },
-    [caseId, userId, setQuery, showModal]
+    [caseId, userId, gateScope, setQuery, showModal]
+  );
+
+  const startRetakeAttempt = useCallback(
+    async ({ clearRetakeQuery } = {}) => {
+      if (!caseData?.moduleId || !userId) return false;
+      if (retakeResettingRef.current) return false;
+
+      retakeResettingRef.current = true;
+      setIsRetakeResetting(true);
+      try {
+        const newCaseId = await generateAttemptFromRecipe({
+          moduleId: caseData.moduleId,
+          uid: userId,
+          retakeAttempt: true,
+        });
+        navigate(`/cases/${newCaseId}`);
+        return true;
+      } catch (err) {
+        console.error('Failed to generate a retake attempt:', err);
+        showModal('We ran into an issue preparing your retake. Please try again.', 'Retake Error');
+        if (clearRetakeQuery && typeof setQuery === 'function') {
+          setQuery(
+            (prev) => {
+              const next = { ...prev };
+              delete next.retake;
+              return next;
+            },
+            { replace: true }
+          );
+        }
+        return false;
+      } finally {
+        setIsRetakeResetting(false);
+        retakeResettingRef.current = false;
+      }
+    },
+    [caseData, navigate, setQuery, showModal, userId]
   );
 
   const requestRetake = useCallback(() => {
+    if (caseData?.moduleId) {
+      startRetakeAttempt();
+      return;
+    }
     resetForRetake();
-  }, [resetForRetake]);
+  }, [caseData, resetForRetake, startRetakeAttempt]);
 
   const parseAmount = useCallback((value) => {
     if (value === '' || value === null || value === undefined) return 0;
@@ -425,10 +469,6 @@ export default function TraineeCaseViewPage({ params }) {
   useEffect(() => {
     isLockedRef.current = isLocked;
   }, [isLocked]);
-
-  useEffect(() => {
-    gatePassedRef.current = gatePassed;
-  }, [gatePassed]);
 
   useEffect(() => {
     if (!caseId || !userId) {
@@ -537,10 +577,15 @@ export default function TraineeCaseViewPage({ params }) {
     const retakeRequested =
       typeof retakeValue === 'string' ? retakeValue.toLowerCase() === 'true' : Boolean(retakeValue);
     if (!retakeRequested || retakeHandledRef.current) return;
+    if (!caseData) return;
 
     retakeHandledRef.current = true;
+    if (caseData?.moduleId) {
+      startRetakeAttempt({ clearRetakeQuery: true });
+      return;
+    }
     resetForRetake({ clearRetakeQuery: true });
-  }, [caseId, userId, query, resetForRetake]);
+  }, [caseId, userId, query, caseData, resetForRetake, startRetakeAttempt]);
 
   useEffect(() => {
     if (!caseId || !userId) return;
@@ -1361,6 +1406,7 @@ export default function TraineeCaseViewPage({ params }) {
             selectedPaymentIds: selectedIds,
             classificationDraft: classificationAmounts,
           },
+          hasSuccessfulAttempt: true,
         },
       });
 

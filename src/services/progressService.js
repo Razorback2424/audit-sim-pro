@@ -8,6 +8,7 @@ import {
   setDoc,
   getDoc,
   serverTimestamp,
+  deleteField,
 } from 'firebase/firestore';
 import { db, FirestorePaths } from '../AppCore';
 import { toProgressModel } from '../models/progress';
@@ -161,7 +162,14 @@ export const fetchProgressRosterForCase = async ({ appId, caseId }) => {
  * Saves progress for a case.
  * @param {{ appId: string, uid: string, caseId: string, patch: Partial<import('../models/progress').ProgressModel> }} params
  */
-export const saveProgress = async ({ appId, uid, caseId, patch, forceOverwrite = false }) => {
+export const saveProgress = async ({
+  appId,
+  uid,
+  caseId,
+  patch,
+  forceOverwrite = false,
+  clearActiveAttempt = false,
+}) => {
   if (!appId || !uid || !caseId) {
     throw new Error('saveProgress requires appId, uid, and caseId.');
   }
@@ -195,6 +203,7 @@ export const saveProgress = async ({ appId, uid, caseId, patch, forceOverwrite =
   }
 
   const progressRef = doc(db, FirestorePaths.STUDENT_PROGRESS_COLLECTION(appId, uid), caseId);
+  const shouldClearActiveAttempt = clearActiveAttempt === true;
 
   for (let i = 0; i < MAX_RETRIES; i++) {
     try {
@@ -228,12 +237,14 @@ export const saveProgress = async ({ appId, uid, caseId, patch, forceOverwrite =
         patch.hasSuccessfulAttempt = true;
       }
 
-      if (patch.activeAttempt === undefined && isRecord(patch.draft)) {
+      if (shouldClearActiveAttempt) {
+        patch.activeAttempt = deleteField();
+      } else if (patch.activeAttempt === undefined && isRecord(patch.draft)) {
         patch.activeAttempt = {
           draft: patch.draft,
           updatedAt: serverTimestamp(),
         };
-      } else if (isRecord(patch.activeAttempt) && !patch.activeAttempt.updatedAt) {
+      } else if (!shouldClearActiveAttempt && isRecord(patch.activeAttempt) && !patch.activeAttempt.updatedAt) {
         patch.activeAttempt = {
           ...patch.activeAttempt,
           updatedAt: serverTimestamp(),

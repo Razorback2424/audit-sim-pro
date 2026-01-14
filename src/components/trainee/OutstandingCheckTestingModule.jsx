@@ -545,8 +545,10 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
               exceptionNotes: {},
             },
           },
+          hasSuccessfulAttempt: false,
         },
         forceOverwrite: true,
+        clearActiveAttempt: true,
       });
       setIsLocked(false);
       setActiveStep(FLOW_STEPS.INSTRUCTION);
@@ -628,6 +630,7 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
               exceptionNotes,
             },
           },
+          hasSuccessfulAttempt: true,
         },
       });
 

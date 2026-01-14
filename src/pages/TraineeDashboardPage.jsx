@@ -1,10 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, UserCircle2 } from 'lucide-react';
+import { CheckCircle2, Loader2 } from 'lucide-react';
 import { Button, useRoute, useModal, useAuth, appId } from '../AppCore';
-import { listStudentCases } from '../services/caseService';
+import { listStudentCases, deleteRetakeAttempt } from '../services/caseService';
 import { listRecipes } from '../services/recipeService';
 import { subscribeProgressForCases, saveProgress } from '../services/progressService';
-import { fetchRecipeProgress } from '../services/recipeProgressService';
 import { generateAttemptFromRecipe } from '../services/attemptService';
 import { nullSafeDate, getNow } from '../utils/dates';
 import { toProgressModel } from '../models/progress';
@@ -20,6 +19,24 @@ const TIER_LABELS = Object.freeze({
   core: 'Core',
   advanced: 'Advanced',
 });
+const MODULE_LABELS = Object.freeze({
+  payables: 'Accounts Payable',
+  cash: 'Cash',
+  fixed_assets: 'Fixed Assets',
+});
+const JOURNEY_STEPS = Object.freeze([
+  { key: 'foundations', label: 'Foundations' },
+  { key: 'core', label: 'Core' },
+  { key: 'advanced', label: 'Advanced' },
+]);
+
+const mapCaseLevelToTier = (caseLevel) => {
+  const normalized = typeof caseLevel === 'string' ? caseLevel.trim().toLowerCase() : '';
+  if (normalized === 'basic') return 'foundations';
+  if (normalized === 'intermediate') return 'core';
+  if (normalized === 'advanced') return 'advanced';
+  return '';
+};
 const DEFAULT_PATH_ID = 'general';
 const DEFAULT_TIER = 'foundations';
 
@@ -49,6 +66,23 @@ const getPathLabel = (pathId, pathTitle) => {
 
 const getModuleTitle = (caseData) =>
   caseData?.moduleTitle || caseData?.title || caseData?.caseName || 'Untitled module';
+
+const getModuleLabel = (caseData) => {
+  const rawArea = typeof caseData?.auditArea === 'string' ? caseData.auditArea.trim().toLowerCase() : '';
+  if (!rawArea) return 'General';
+  return MODULE_LABELS[rawArea] || humanizeToken(rawArea);
+};
+
+const getSkillLabel = (caseData) =>
+  caseData?.primarySkill || caseData?.moduleTitle || caseData?.title || 'Skill';
+
+const formatCaseLevel = (value) => {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (normalized === 'basic') return 'Basics';
+  if (normalized === 'intermediate') return 'Intermediate';
+  if (normalized === 'advanced') return 'Advanced';
+  return 'Basics';
+};
 
 const getModuleSkills = (caseData) => {
   const skills = [];
@@ -147,11 +181,11 @@ export default function TraineeDashboardPage() {
   const [loading, setLoading] = useState(false);
   const [initialLoad, setInitialLoad] = useState(true);
   const [error, setError] = useState('');
-  const [selectedPathId, setSelectedPathId] = useState(null);
+  const [selectedModuleId, setSelectedModuleId] = useState(null);
   const [recipes, setRecipes] = useState([]);
   const [recipesLoading, setRecipesLoading] = useState(false);
-  const [recipeProgress, setRecipeProgress] = useState(new Map());
   const [startingModuleId, setStartingModuleId] = useState('');
+  const [deletingRetakeIds, setDeletingRetakeIds] = useState(() => new Set());
 
   const fetchCases = useCallback(async () => {
     if (!userId) return;
@@ -261,37 +295,6 @@ export default function TraineeDashboardPage() {
     };
   }, [userId]);
 
-  useEffect(() => {
-    if (!userId || recipes.length === 0) {
-      setRecipeProgress(new Map());
-      return;
-    }
-    let isActive = true;
-    const loadRecipeProgress = async () => {
-      try {
-        const entries = await Promise.all(
-          recipes.map((recipe) =>
-            fetchRecipeProgress({ appId, uid: userId, recipeId: recipe.moduleId || recipe.id })
-          )
-        );
-        if (!isActive) return;
-        const map = new Map();
-        entries.forEach((entry) => {
-          if (entry?.recipeId) {
-            map.set(entry.recipeId, entry);
-          }
-        });
-        setRecipeProgress(map);
-      } catch (err) {
-        console.error('Error loading recipe progress:', err);
-      }
-    };
-    loadRecipeProgress();
-    return () => {
-      isActive = false;
-    };
-  }, [recipes, userId]);
-
   const caseIds = useMemo(() => cases.map((c) => c.id), [cases]);
 
   useEffect(() => {
@@ -313,16 +316,120 @@ export default function TraineeDashboardPage() {
     return () => unsubscribe();
   }, [userId, caseIds]);
 
+  const recipeByModuleId = useMemo(() => {
+    const map = new Map();
+    recipes.forEach((recipe) => {
+      const key = recipe?.moduleId || recipe?.id;
+      if (!key) return;
+      map.set(key, recipe);
+    });
+    return map;
+  }, [recipes]);
+
   const casesWithProgress = useMemo(() => {
-    return cases.map((caseData) => ({
-      ...caseData,
-      progress: progress.get(caseData.id) || toProgressModel(null, caseData.id),
-    }));
-  }, [cases, progress]);
+    return cases.map((caseData) => {
+      const recipeMeta = caseData?.moduleId ? recipeByModuleId.get(caseData.moduleId) : null;
+      const fallbackTier = mapCaseLevelToTier(caseData?.caseLevel);
+      const fallbackPathId =
+        caseData?.auditArea && String(caseData.auditArea).trim().toLowerCase() !== 'general'
+          ? 'foundations'
+          : '';
+      const resolvedCase = recipeMeta
+        ? {
+            ...caseData,
+            pathId:
+              (typeof recipeMeta?.pathId === 'string' && recipeMeta.pathId.trim()) ||
+              (typeof caseData?.pathId === 'string' && caseData.pathId.trim()) ||
+              caseData?.pathId,
+            pathTitle:
+              (typeof recipeMeta?.pathTitle === 'string' && recipeMeta.pathTitle.trim()) ||
+              (typeof caseData?.pathTitle === 'string' && caseData.pathTitle.trim()) ||
+              caseData?.pathTitle ||
+              '',
+            pathDescription:
+              (typeof recipeMeta?.pathDescription === 'string' && recipeMeta.pathDescription.trim()) ||
+              (typeof caseData?.pathDescription === 'string' && caseData.pathDescription.trim()) ||
+              caseData?.pathDescription ||
+              '',
+            tier:
+              (typeof recipeMeta?.tier === 'string' && recipeMeta.tier.trim()) ||
+              (typeof caseData?.tier === 'string' && caseData.tier.trim()) ||
+              caseData?.tier,
+            moduleTitle:
+              (typeof recipeMeta?.moduleTitle === 'string' && recipeMeta.moduleTitle.trim()) ||
+              (typeof recipeMeta?.title === 'string' && recipeMeta.title.trim()) ||
+              (typeof caseData?.moduleTitle === 'string' && caseData.moduleTitle.trim()) ||
+              caseData?.moduleTitle ||
+              '',
+            primarySkill:
+              (typeof recipeMeta?.primarySkill === 'string' && recipeMeta.primarySkill.trim()) ||
+              (typeof caseData?.primarySkill === 'string' && caseData.primarySkill.trim()) ||
+              caseData?.primarySkill ||
+              '',
+            secondarySkills:
+              Array.isArray(recipeMeta?.secondarySkills) && recipeMeta.secondarySkills.length > 0
+                ? recipeMeta.secondarySkills
+                : Array.isArray(caseData?.secondarySkills) && caseData.secondarySkills.length > 0
+                ? caseData.secondarySkills
+                : caseData?.secondarySkills || [],
+          }
+        : caseData;
+
+      const normalizedCase = {
+        ...resolvedCase,
+        pathId:
+          (typeof resolvedCase?.pathId === 'string' && resolvedCase.pathId.trim() && resolvedCase.pathId.trim() !== 'general')
+            ? resolvedCase.pathId.trim()
+            : fallbackPathId || resolvedCase?.pathId || DEFAULT_PATH_ID,
+        pathTitle:
+          (typeof resolvedCase?.pathTitle === 'string' && resolvedCase.pathTitle.trim())
+            ? resolvedCase.pathTitle.trim()
+            : fallbackPathId
+            ? 'Foundations'
+            : resolvedCase?.pathTitle || '',
+        tier:
+          (typeof resolvedCase?.tier === 'string' && resolvedCase.tier.trim())
+            ? resolvedCase.tier.trim().toLowerCase()
+            : fallbackTier || resolvedCase?.tier,
+      };
+
+      return {
+        ...normalizedCase,
+        progress: progress.get(caseData.id) || toProgressModel(null, caseData.id),
+      };
+    });
+  }, [cases, progress, recipeByModuleId]);
+
+  const moduleCompletionById = useMemo(() => {
+    const map = new Map();
+    casesWithProgress.forEach((caseData) => {
+      const moduleId = caseData?.moduleId;
+      if (!moduleId) return;
+      if (isModuleCompleted(caseData.progress)) {
+        map.set(moduleId, true);
+      }
+    });
+    return map;
+  }, [casesWithProgress]);
+
+  const isRetakeAttempt = useCallback(
+    (caseData) => {
+      const moduleId = caseData?.moduleId;
+      if (!moduleId) return false;
+      if (!moduleCompletionById.get(moduleId)) return false;
+      return !isModuleCompleted(caseData.progress);
+    },
+    [moduleCompletionById]
+  );
+
+  const primaryCases = useMemo(
+    () => casesWithProgress.filter((caseData) => !isRetakeAttempt(caseData)),
+    [casesWithProgress, isRetakeAttempt]
+  );
 
   const completionByPathTier = useMemo(() => {
     const summary = new Map();
-    casesWithProgress.forEach((caseData) => {
+    primaryCases.forEach((caseData) => {
       const pathId = getPathId(caseData);
       const tier = normalizeTier(caseData?.tier);
       const entry = summary.get(pathId) || {
@@ -337,7 +444,7 @@ export default function TraineeDashboardPage() {
       summary.set(pathId, entry);
     });
     return summary;
-  }, [casesWithProgress]);
+  }, [primaryCases]);
 
   const now = useMemo(() => getNow().date, []);
 
@@ -387,16 +494,16 @@ export default function TraineeDashboardPage() {
   );
 
   const eligibleModules = useMemo(() => {
-    return casesWithProgress.filter((caseData) => {
+    return primaryCases.filter((caseData) => {
       if (isModuleCompleted(caseData.progress)) return false;
       const pathId = getPathId(caseData);
       const tier = normalizeTier(caseData?.tier);
       return isTierUnlocked(pathId, tier);
     });
-  }, [casesWithProgress, isTierUnlocked]);
+  }, [primaryCases, isTierUnlocked]);
 
   const draftCase = useMemo(() => {
-    const candidates = casesWithProgress.filter((caseData) => {
+    const candidates = primaryCases.filter((caseData) => {
       if (!caseData?.progress) return false;
       if (isModuleCompleted(caseData.progress)) return false;
       return hasMeaningfulDraft(caseData.progress);
@@ -406,56 +513,75 @@ export default function TraineeDashboardPage() {
       if (!latest) return current;
       return getProgressUpdatedAtMs(current) > getProgressUpdatedAtMs(latest) ? current : latest;
     }, null);
-  }, [casesWithProgress]);
+  }, [primaryCases]);
 
 
-  const pathOptions = useMemo(() => {
+  const currentPathId = useMemo(() => {
+    if (draftCase) return getPathId(draftCase);
+    if (eligibleModules.length > 0) return getPathId(eligibleModules[0]);
+    if (primaryCases.length > 0) return getPathId(primaryCases[0]);
+    return DEFAULT_PATH_ID;
+  }, [draftCase, eligibleModules, primaryCases]);
+
+  const currentTier = useMemo(() => {
+    if (draftCase) return normalizeTier(draftCase?.tier);
+    return getCurrentTierForPath(currentPathId);
+  }, [currentPathId, getCurrentTierForPath, draftCase]);
+
+  const moduleOptions = useMemo(() => {
     const sourceModules =
       eligibleModules.length > 0
         ? eligibleModules
-        : casesWithProgress.filter((caseData) => !isModuleCompleted(caseData.progress));
-    const pathMap = new Map();
+        : primaryCases.filter((caseData) => !isModuleCompleted(caseData.progress));
+    const moduleMap = new Map();
 
-    sourceModules.forEach((caseData) => {
-      const pathId = getPathId(caseData);
-      const updatedAtMs = getProgressUpdatedAtMs(caseData);
-      const entry = pathMap.get(pathId);
-      if (!entry || updatedAtMs > entry.updatedAtMs) {
-        pathMap.set(pathId, {
-          pathId,
-          title: caseData?.pathTitle || '',
-          description: caseData?.pathDescription || '',
-          updatedAtMs,
-        });
-      }
-    });
+    sourceModules
+      .filter(
+        (caseData) =>
+          getPathId(caseData) === currentPathId && normalizeTier(caseData?.tier) === currentTier
+      )
+      .forEach((caseData) => {
+        const moduleId = (caseData?.auditArea || '').toLowerCase();
+        if (!moduleId) return;
+        const updatedAtMs = getProgressUpdatedAtMs(caseData);
+        const entry = moduleMap.get(moduleId);
+        if (!entry || updatedAtMs > entry.updatedAtMs) {
+          moduleMap.set(moduleId, {
+            moduleId,
+            label: getModuleLabel(caseData),
+            description: caseData?.pathDescription || '',
+            updatedAtMs,
+          });
+        }
+      });
 
-    const ordered = Array.from(pathMap.values()).sort((a, b) => {
+    const ordered = Array.from(moduleMap.values()).sort((a, b) => {
       if (b.updatedAtMs !== a.updatedAtMs) return b.updatedAtMs - a.updatedAtMs;
-      return getPathLabel(a.pathId, a.title).localeCompare(getPathLabel(b.pathId, b.title));
+      return a.label.localeCompare(b.label);
     });
 
     return ordered.slice(0, 6).map((entry) => ({
-      value: entry.pathId,
-      label: getPathLabel(entry.pathId, entry.title),
-      description: entry.description || 'Path modules in this sequence.',
+      value: entry.moduleId,
+      label: entry.label,
+      description: entry.description || '',
     }));
-  }, [casesWithProgress, eligibleModules]);
+  }, [currentPathId, currentTier, eligibleModules, primaryCases]);
 
   useEffect(() => {
-    if (!selectedPathId) return;
-    const stillValid = pathOptions.some((option) => option.value === selectedPathId);
-    if (!stillValid) setSelectedPathId(null);
-  }, [pathOptions, selectedPathId]);
+    if (!selectedModuleId) return;
+    const stillValid = moduleOptions.some((option) => option.value === selectedModuleId);
+    if (!stillValid) setSelectedModuleId(null);
+  }, [moduleOptions, selectedModuleId]);
 
   const recommendedCase = useMemo(() => {
-    const availablePaths = pathOptions;
-    const fallbackPathId = availablePaths[0]?.value || DEFAULT_PATH_ID;
-    const pathId = selectedPathId || fallbackPathId;
-    const activeTier = getCurrentTierForPath(pathId);
-
+    const activeModuleId = selectedModuleId || moduleOptions[0]?.value || '';
     const sortedModules = eligibleModules
-      .filter((caseData) => getPathId(caseData) === pathId && normalizeTier(caseData?.tier) === activeTier)
+      .filter((caseData) => {
+        if (getPathId(caseData) !== currentPathId) return false;
+        if (normalizeTier(caseData?.tier) !== currentTier) return false;
+        if (!activeModuleId) return true;
+        return (caseData?.auditArea || '').toLowerCase() === activeModuleId;
+      })
       .sort((a, b) => {
         const aIndex = Number(a?.orderIndex ?? Number.POSITIVE_INFINITY);
         const bIndex = Number(b?.orderIndex ?? Number.POSITIVE_INFINITY);
@@ -464,29 +590,63 @@ export default function TraineeDashboardPage() {
       });
 
     return sortedModules[0] || null;
-  }, [eligibleModules, getCurrentTierForPath, pathOptions, selectedPathId]);
+  }, [eligibleModules, currentPathId, currentTier, moduleOptions, selectedModuleId]);
 
   const heroCase = draftCase || recommendedCase;
   const heroMode = draftCase ? 'resume' : 'continue';
-  const heroPathId = heroCase ? getPathId(heroCase) : DEFAULT_PATH_ID;
-  const heroTier = normalizeTier(heroCase?.tier);
+  const heroPathId = heroCase ? getPathId(heroCase) : currentPathId;
+  const heroTier = normalizeTier(heroCase?.tier || currentTier);
   const heroPathLabel = heroCase ? getPathLabel(heroPathId, heroCase?.pathTitle) : getPathLabel(heroPathId, '');
   const heroSkills = heroCase ? getModuleSkills(heroCase) : [];
 
   const currentFocusCase = heroCase;
-  const currentPathId = currentFocusCase
-    ? getPathId(currentFocusCase)
-    : selectedPathId || pathOptions[0]?.value || DEFAULT_PATH_ID;
   const currentPathLabel = currentFocusCase
     ? getPathLabel(currentPathId, currentFocusCase?.pathTitle)
     : getPathLabel(currentPathId, '');
-  const currentTier = currentFocusCase ? normalizeTier(currentFocusCase?.tier) : getCurrentTierForPath(currentPathId);
   const currentTierLabel = formatTier(currentTier);
+  const moduleLabelFromOptions =
+    moduleOptions.find((option) => option.value === selectedModuleId)?.label ||
+    moduleOptions[0]?.label ||
+    'General';
+  const currentModuleLabel = currentFocusCase
+    ? getModuleLabel(currentFocusCase) === 'General'
+      ? moduleLabelFromOptions
+      : getModuleLabel(currentFocusCase)
+    : moduleLabelFromOptions;
 
   const currentPathStats = getTierStatsForPath(currentPathId);
   const currentTierStats = currentPathStats[currentTier] || { done: 0, total: 0 };
 
   const shouldShowFocusSkills = heroSkills.length > 0 && Boolean(heroCase);
+
+  const highestTierWithModules = useMemo(() => {
+    const tiersWithModules = new Set();
+    primaryCases.forEach((caseData) => {
+      if (getPathId(caseData) !== currentPathId) return;
+      const tier = normalizeTier(caseData?.tier);
+      tiersWithModules.add(tier);
+    });
+    for (let i = TIER_ORDER.length - 1; i >= 0; i -= 1) {
+      if (tiersWithModules.has(TIER_ORDER[i])) {
+        return TIER_ORDER[i];
+      }
+    }
+    return 'foundations';
+  }, [currentPathId, primaryCases]);
+
+  const journeyTier = highestTierWithModules === 'foundations' ? 'foundations' : currentTier;
+
+  const getJourneyStepState = (stepKey) => {
+    const currentIndex = TIER_ORDER.indexOf(journeyTier);
+    const stepIndex = TIER_ORDER.indexOf(stepKey);
+    if (stepIndex === -1) return 'upcoming';
+    if (currentIndex === -1) {
+      return stepKey === 'foundations' ? 'active' : 'upcoming';
+    }
+    if (stepIndex < currentIndex) return 'completed';
+    if (stepIndex === currentIndex) return 'active';
+    return 'upcoming';
+  };
 
   const getNextTierGateMessage = () => {
     if (!currentFocusCase) return '';
@@ -503,7 +663,7 @@ export default function TraineeDashboardPage() {
     const modal = showModalRef.current;
     if (!modal) return;
     if (options.length === 0) {
-      modal('No other activities are available right now.', 'Choose a different activity');
+      modal('No other cases are available right now.', 'Choose a different case');
       return;
     }
     const orderedOptions = heroCase
@@ -523,8 +683,8 @@ export default function TraineeDashboardPage() {
       <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
         <p className="text-sm text-gray-600">
           {heroMode === 'resume'
-            ? 'Pick another activity to work on now. Your draft stays saved.'
-            : 'Pick another activity to work on now.'}
+            ? 'Pick another case to work on now. Your draft stays saved.'
+            : 'Pick another case to work on now.'}
         </p>
         <div className="space-y-3">
           {orderedOptions.map((caseData) => (
@@ -545,7 +705,7 @@ export default function TraineeDashboardPage() {
           ))}
         </div>
       </div>,
-      'Choose a different activity'
+      'Choose a different case'
     );
   };
 
@@ -580,10 +740,10 @@ export default function TraineeDashboardPage() {
                     state: 'not_started',
                     step: 'selection',
                     draft: {},
-                    activeAttempt: {},
                     hasSuccessfulAttempt: false,
                   },
                   forceOverwrite: true,
+                  clearActiveAttempt: true,
                 });
               } catch (err) {
                 const errorMessage = err?.message || 'Unable to discard the draft.';
@@ -599,23 +759,23 @@ export default function TraineeDashboardPage() {
     );
   };
 
-  const handleOpenFocusPicker = () => {
+  const handleOpenModulePicker = () => {
     const modal = showModalRef.current;
     if (!modal) return;
-    if (pathOptions.length === 0) {
-      modal('No paths are available yet.', 'Change Path');
+    if (moduleOptions.length === 0) {
+      modal('No modules are available yet.', 'Change Module');
       return;
     }
     modal(
       <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
-        <p className="text-sm text-gray-600">Choose a path for your next stretch of work.</p>
+        <p className="text-sm text-gray-600">Choose a module within this path.</p>
         <div className="space-y-3">
-          {pathOptions.map((option) => (
+          {moduleOptions.map((option) => (
             <button
               key={option.value}
               type="button"
               onClick={() => {
-                setSelectedPathId(option.value);
+                setSelectedModuleId(option.value);
                 hideModal();
               }}
               className="w-full rounded-md border border-gray-200 p-3 text-left hover:border-gray-400 hover:bg-gray-50 transition-colors"
@@ -628,13 +788,23 @@ export default function TraineeDashboardPage() {
           ))}
         </div>
       </div>,
-      'Change Path'
+      'Change Module'
     );
   };
 
-  if (!userId && initialLoad) {
-    return <div className="p-4 text-center">Authenticating user, please wait...</div>;
-  }
+  const availableModules = useMemo(() => {
+    return recipes.filter((recipe) => {
+      const moduleId = recipe?.moduleId || recipe?.id;
+      if (!moduleId) return false;
+      return !moduleCompletionById.get(moduleId);
+    });
+  }, [recipes, moduleCompletionById]);
+
+  const retakeCases = useMemo(() => {
+    return casesWithProgress
+      .filter((caseData) => isRetakeAttempt(caseData))
+      .sort((a, b) => getProgressUpdatedAtMs(b) - getProgressUpdatedAtMs(a));
+  }, [casesWithProgress, isRetakeAttempt]);
 
   const lastEditedMs = heroCase ? getProgressUpdatedAtMs(heroCase) : 0;
   const lastEditedLabel = heroCase
@@ -642,8 +812,10 @@ export default function TraineeDashboardPage() {
     : '';
   const estimatedTime = heroCase ? formatMinutes(heroCase?.estimatedMinutes) : '';
   const focusGateMessage = getNextTierGateMessage();
-
-  const availableModules = recipes;
+  const heroActionLabel = heroMode === 'resume' ? 'Resume' : 'Start Case';
+  const heroHierarchyLabel = heroCase
+    ? `${getPathLabel(getPathId(heroCase), heroCase?.pathTitle)} -> ${getModuleLabel(heroCase)} -> ${getSkillLabel(heroCase)} -> ${formatCaseLevel(heroCase?.caseLevel)}`
+    : '';
 
   const handleStartModule = async (moduleId) => {
     if (!moduleId || !userId) return;
@@ -661,27 +833,110 @@ export default function TraineeDashboardPage() {
     }
   };
 
+  const handleDeleteRetake = useCallback(
+    (caseData) => {
+      if (!caseData?.id || !userId) return;
+      const modal = showModalRef.current;
+      if (!modal) return;
+      modal(
+        <div className="space-y-3">
+          <p className="text-gray-700">
+            This will permanently remove the retake attempt and its generated documents.
+          </p>
+          <p className="text-sm text-gray-500">This can’t be undone.</p>
+        </div>,
+        'Delete retake attempt?',
+        (close) => (
+          <>
+            <Button variant="secondary" onClick={close}>
+              Keep retake
+            </Button>
+            <Button
+              variant="danger"
+              onClick={async () => {
+                close();
+                try {
+                  setDeletingRetakeIds((prev) => {
+                    const next = new Set(prev);
+                    next.add(caseData.id);
+                    return next;
+                  });
+                  await deleteRetakeAttempt({ caseId: caseData.id });
+                  await fetchCases();
+                } catch (err) {
+                  const errorMessage = err?.message || 'Unable to delete the retake attempt.';
+                  const fallbackModal = showModalRef.current;
+                  if (fallbackModal) fallbackModal(errorMessage, 'Error');
+                } finally {
+                  setDeletingRetakeIds((prev) => {
+                    const next = new Set(prev);
+                    next.delete(caseData.id);
+                    return next;
+                  });
+                }
+              }}
+            >
+              Delete retake
+            </Button>
+          </>
+        )
+      );
+    },
+    [fetchCases, userId]
+  );
+
+  if (!userId && initialLoad) {
+    return <div className="p-4 text-center">Authenticating user, please wait...</div>;
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
-      <header className="border-b border-gray-200 bg-white">
-        <div className="max-w-5xl mx-auto px-6 py-3 flex items-center justify-between">
-          <div className="text-sm font-semibold tracking-wide text-gray-700">Audit Simulator</div>
-          <button
-            type="button"
-            className="rounded-full text-gray-500 hover:text-gray-700 transition-colors"
-            aria-label="Profile"
-          >
-            <UserCircle2 size={28} />
-          </button>
-        </div>
-      </header>
-
       <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
         {error ? (
           <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-md p-4">
             {error}
           </div>
         ) : null}
+
+        <div className="bg-white rounded-lg border border-gray-100 p-6">
+          <div className="flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
+            {JOURNEY_STEPS.map((step, index) => {
+              const state = getJourneyStepState(step.key);
+              return (
+                <div key={step.key} className="flex items-center">
+                  <div className="flex items-center gap-2">
+                    {state === 'completed' ? (
+                      <CheckCircle2 size={22} className="text-emerald-600" />
+                    ) : (
+                      <span
+                        className={`h-5 w-5 rounded-full border-2 ${
+                          state === 'active'
+                            ? 'border-blue-600 bg-blue-100'
+                            : 'border-gray-300 bg-white'
+                        }`}
+                        aria-hidden="true"
+                      />
+                    )}
+                    <span
+                      className={`text-base font-semibold ${
+                        state === 'active'
+                          ? 'text-blue-700'
+                          : state === 'completed'
+                          ? 'text-emerald-700'
+                          : 'text-gray-500'
+                      }`}
+                    >
+                      {step.label}
+                    </span>
+                  </div>
+                  {index < JOURNEY_STEPS.length - 1 ? (
+                    <div className="mx-4 h-px w-16 bg-gray-200" aria-hidden="true" />
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
 
         {initialLoad && loading ? (
           <div className="text-center py-16 bg-white rounded-lg shadow-sm">
@@ -699,13 +954,13 @@ export default function TraineeDashboardPage() {
               </h1>
               {heroMode === 'resume' ? (
                 <div className="text-sm text-gray-600 space-y-1">
+                  {heroHierarchyLabel ? <div>{heroHierarchyLabel}</div> : null}
                   <div>Last edited: {lastEditedLabel}</div>
                   {estimatedTime ? <div>Estimated time: {estimatedTime}</div> : null}
                 </div>
               ) : (
                 <div className="text-sm text-gray-600">
-                  Continues {heroPathLabel} in {formatTier(heroTier)}
-                  {heroSkills.length > 0 ? ` · Focus: ${heroSkills[0]}` : ''}.
+                  {heroHierarchyLabel}
                 </div>
               )}
             </div>
@@ -714,7 +969,7 @@ export default function TraineeDashboardPage() {
                 onClick={() => navigate(`/cases/${heroCase.id}`)}
                 className="sm:w-auto w-full"
               >
-                {heroMode === 'resume' ? 'Resume' : 'Continue'}
+                {heroActionLabel}
               </Button>
               <div className="flex flex-wrap items-center gap-4 text-sm text-gray-500">
                 <button
@@ -722,7 +977,7 @@ export default function TraineeDashboardPage() {
                   onClick={handleChooseDifferent}
                   className="hover:text-gray-700 transition-colors"
                 >
-                  Choose a different activity
+                  Choose a different case
                 </button>
                 {heroMode === 'resume' ? (
                   <button
@@ -744,7 +999,7 @@ export default function TraineeDashboardPage() {
                 {availableModules[0]?.moduleTitle || availableModules[0]?.title || 'Module'}
               </h1>
               <div className="text-sm text-gray-600">
-                Start your first attempt to enter the cockpit.
+                Start your first case to enter the cockpit.
               </div>
             </div>
             <div className="mt-6 flex flex-col sm:flex-row sm:items-center sm:gap-6 gap-3">
@@ -754,7 +1009,7 @@ export default function TraineeDashboardPage() {
                 isLoading={startingModuleId === (availableModules[0]?.moduleId || availableModules[0]?.id)}
                 disabled={startingModuleId !== '' && startingModuleId !== (availableModules[0]?.moduleId || availableModules[0]?.id)}
               >
-                Start Module
+                Start Case
               </Button>
             </div>
           </div>
@@ -768,18 +1023,20 @@ export default function TraineeDashboardPage() {
           </div>
         )}
 
-        <div className="flex items-center justify-between text-sm text-gray-500">
-          <div>
-            Current Path: {currentPathLabel} → {currentTierLabel}
+        {heroHierarchyLabel || moduleOptions.length > 0 ? (
+          <div className="flex items-center justify-between text-sm text-gray-500">
+            <div>
+              Current Module: {heroHierarchyLabel || `${currentPathLabel} → ${currentModuleLabel}`}
+            </div>
+            <button
+              type="button"
+              onClick={handleOpenModulePicker}
+              className="text-gray-500 hover:text-gray-700 transition-colors"
+            >
+              Change Module
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={handleOpenFocusPicker}
-            className="text-gray-500 hover:text-gray-700 transition-colors"
-          >
-            Change Path
-          </button>
-        </div>
+        ) : null}
 
         {heroCase ? (
           <div className="bg-white rounded-lg border border-gray-100 p-5 space-y-3">
@@ -794,6 +1051,16 @@ export default function TraineeDashboardPage() {
           </div>
         ) : null}
 
+        <div className="flex items-center justify-end text-sm text-gray-500">
+          <button
+            type="button"
+            onClick={() => navigate('/trainee/submission-history')}
+            className="hover:text-gray-700 transition-colors"
+          >
+            Completed cases
+          </button>
+        </div>
+
         {shouldShowFocusSkills ? (
           <div className="bg-white rounded-lg border border-gray-100 p-5 space-y-3">
             <div className="text-sm font-semibold text-gray-800">Focus skills for your next step</div>
@@ -805,36 +1072,48 @@ export default function TraineeDashboardPage() {
           </div>
         ) : null}
 
-        {availableModules.length > 0 ? (
+        {retakeCases.length > 0 ? (
           <div className="bg-white rounded-lg border border-gray-100 p-5 space-y-3">
-            <div className="text-sm font-semibold text-gray-800">Modules</div>
+            <div className="text-sm font-semibold text-gray-800">Practice attempts</div>
+            <p className="text-sm text-gray-600">
+              These are optional retakes. Your main path continues above.
+            </p>
             <div className="space-y-3">
-              {availableModules.map((recipe) => {
-                const moduleId = recipe.moduleId || recipe.id;
-                const progress = recipeProgress.get(moduleId);
-                const gatePassed = progress && progress.passedVersion >= (recipe.recipeVersion || 1);
+              {retakeCases.map((caseData) => {
+                const retakeHasDraft = hasMeaningfulDraft(caseData.progress);
+                const isDeleting = deletingRetakeIds.has(caseData.id);
                 return (
                   <div
-                    key={moduleId}
+                    key={caseData.id}
                     className="flex flex-col gap-3 rounded-lg border border-gray-200 p-4 sm:flex-row sm:items-center sm:justify-between"
                   >
                     <div>
                       <div className="text-sm font-semibold text-gray-900">
-                        {recipe.moduleTitle || recipe.title || 'Module'}
+                        {getModuleTitle(caseData)}
                       </div>
                       <div className="text-xs text-gray-500 mt-1">
-                        {getPathLabel(recipe.pathId || DEFAULT_PATH_ID, '')} · {formatTier(recipe.tier)}
+                        {getPathLabel(getPathId(caseData), caseData?.pathTitle)} · {formatTier(caseData?.tier)}
                       </div>
                     </div>
-                    <Button
-                      variant="secondary"
-                      onClick={() => handleStartModule(moduleId)}
-                      isLoading={startingModuleId === moduleId}
-                      disabled={startingModuleId !== '' && startingModuleId !== moduleId}
-                      className="sm:w-auto w-full"
-                    >
-                      {gatePassed ? 'Generate new attempt' : 'Start Module'}
-                    </Button>
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                      <Button
+                        variant="secondary"
+                        onClick={() => navigate(`/cases/${caseData.id}`)}
+                        className="sm:w-auto w-full"
+                        disabled={isDeleting}
+                      >
+                        {retakeHasDraft ? 'Resume retake' : 'Start retake'}
+                      </Button>
+                      <Button
+                        variant="danger"
+                        onClick={() => handleDeleteRetake(caseData)}
+                        className="sm:w-auto w-full"
+                        disabled={isDeleting}
+                        isLoading={isDeleting}
+                      >
+                        {isDeleting ? 'Deleting...' : 'Delete retake'}
+                      </Button>
+                    </div>
                   </div>
                 );
               })}
