@@ -819,17 +819,34 @@ export const surlPromotadorCutoffV1 = {
         return 'properlyExcluded';
       };
 
-      const buildDisbursementExplanation = (classification) => {
+      const buildDisbursementExplanation = ({ classification, invoices }) => {
+        const yearEndLabel = yearEnd;
+        const resolveDate = (invoice) => {
+          if (!invoice || typeof invoice !== 'object') return { label: 'Activity date', value: '' };
+          if (invoice.serviceDate) return { label: 'Service date', value: invoice.serviceDate };
+          if (invoice.shippingDate) return { label: 'Shipping date', value: invoice.shippingDate };
+          return { label: 'Activity date', value: '' };
+        };
+
+        const pickInvoice = (predicate) => invoices.find(predicate) || invoices[0] || null;
         if (classification === 'improperlyExcluded') {
-          return 'Services or shipping occurred before year-end but missing from AP aging.';
+          const invoice = pickInvoice((inv) => shouldBeInAging(inv.serviceDate, inv.shippingDate) && !inv.isRecorded);
+          const { label, value } = resolveDate(invoice);
+          return `${label} ${value || 'before year-end'} was before ${yearEndLabel}, but the invoice was missing from AP aging.`;
         }
         if (classification === 'improperlyIncluded') {
-          return 'Services or shipping occurred after year-end but were included in AP aging.';
+          const invoice = pickInvoice((inv) => !shouldBeInAging(inv.serviceDate, inv.shippingDate) && inv.isRecorded);
+          const { label, value } = resolveDate(invoice);
+          return `${label} ${value || 'after year-end'} was after ${yearEndLabel}, but the invoice was included in AP aging.`;
         }
         if (classification === 'properlyIncluded') {
-          return 'Services or shipping occurred before year-end and are included in AP aging.';
+          const invoice = pickInvoice((inv) => shouldBeInAging(inv.serviceDate, inv.shippingDate) && inv.isRecorded);
+          const { label, value } = resolveDate(invoice);
+          return `${label} ${value || 'before year-end'} was before ${yearEndLabel}, and the invoice appears in AP aging.`;
         }
-        return 'Services and shipping occurred after year-end and are correctly excluded.';
+        const invoice = pickInvoice((inv) => !shouldBeInAging(inv.serviceDate, inv.shippingDate) && !inv.isRecorded);
+        const { label, value } = resolveDate(invoice);
+        return `${label} ${value || 'after year-end'} was after ${yearEndLabel}, so it was correctly excluded from AP aging.`;
       };
 
       const disbursements = targets.map((target) => {
@@ -842,7 +859,7 @@ export const surlPromotadorCutoffV1 = {
           amount: total,
           paymentDate: target.paymentDate,
           answerKeyClassification: classification,
-          explanation: buildDisbursementExplanation(classification),
+          explanation: buildDisbursementExplanation({ classification, invoices }),
         });
       });
 

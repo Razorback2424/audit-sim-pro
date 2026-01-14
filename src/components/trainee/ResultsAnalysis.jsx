@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertOctagon, CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, RotateCcw } from 'lucide-react';
+import { CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, RotateCcw } from 'lucide-react';
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { currencyFormatter } from '../../utils/formatters';
 import { storage } from '../../AppCore';
@@ -115,11 +115,11 @@ const extractCorrectDecision = (item) => {
   return { primaryKey: '', breakdown: [] };
 };
 
-const DecoyTable = ({ items, studentAnswers }) => {
+const DecoyTable = ({ items }) => {
   if (items.length === 0) {
     return (
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 text-sm text-gray-500">
-        No decoy transactions were included in this submission.
+        No routine items were correctly handled.
       </div>
     );
   }
@@ -127,7 +127,7 @@ const DecoyTable = ({ items, studentAnswers }) => {
   return (
     <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
       <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
-        <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Routine Transactions (Decoys)</h3>
+        <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Correct Routine Transactions</h3>
       </div>
       <table className="min-w-full divide-y divide-gray-200">
         <thead className="bg-gray-50">
@@ -136,52 +136,33 @@ const DecoyTable = ({ items, studentAnswers }) => {
               Transaction
             </th>
             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Your Decision
+              Your Answer
             </th>
             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Result
+              Correct Answer
             </th>
           </tr>
         </thead>
         <tbody className="bg-white divide-y divide-gray-200">
-          {items.map((item) => {
-            const answer = studentAnswers[item.paymentId] || {};
-            const flagged = !!answer.isException;
-            const isFalsePositive = flagged;
-
-            return (
-              <tr key={item.paymentId}>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  <div className="font-medium">{item.payee}</div>
-                  <div className="text-xs text-gray-500">{currencyFormatter.format(Number(item.amount) || 0)}</div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm">
-                  {flagged ? (
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
-                      Flagged Exception
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                      Passed
-                    </span>
-                  )}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm">
-                  {isFalsePositive ? (
-                    <div className="flex items-center text-amber-600">
-                      <AlertOctagon size={16} className="mr-1.5" />
-                      <span>False Positive (Inefficient)</span>
-                    </div>
-                  ) : (
-                    <div className="flex items-center text-emerald-600">
-                      <CheckCircle2 size={16} className="mr-1.5" />
-                      <span>Correct</span>
-                    </div>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
+          {items.map(({ item, studentDecision, correctDecision }) => (
+            <tr key={item.paymentId}>
+              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                <div className="font-medium">{item.payee}</div>
+                <div className="text-xs text-gray-500">{currencyFormatter.format(Number(item.amount) || 0)}</div>
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap text-sm">
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                  {keyToLabel(studentDecision?.primaryKey)}
+                </span>
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap text-sm">
+                <div className="flex items-center text-emerald-600">
+                  <CheckCircle2 size={16} className="mr-1.5" />
+                  <span>{keyToLabel(correctDecision?.primaryKey)}</span>
+                </div>
+              </td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
@@ -196,22 +177,26 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
   const [highlightError, setHighlightError] = useState('');
   const [highlightInlineNotSupported, setHighlightInlineNotSupported] = useState(false);
 
-  const { traps, decoys, issues, falsePositiveCount, caughtTraps } = useMemo(() => {
+  const { traps, routineCorrect, issues, falsePositiveCount, caughtTraps } = useMemo(() => {
     const traps = [];
-    const decoys = [];
+    const routineCorrect = [];
     const issues = [];
     const caughtTraps = [];
     let falsePositiveCount = 0;
+    const selectedIds = new Set(
+      studentAnswers && typeof studentAnswers === 'object' ? Object.keys(studentAnswers) : []
+    );
 
     (disbursements || []).forEach((item) => {
+      if (!item || !item.paymentId) return;
       const isTrap = !!item.shouldFlag;
       const answer = studentAnswers[item.paymentId] || {};
+      const hasAnswer = selectedIds.has(item.paymentId);
+      const studentDecision = extractDecisionFromAllocation(answer);
+      const correctDecision = extractCorrectDecision(item);
 
       if (isTrap) {
         traps.push(item);
-
-        const studentDecision = extractDecisionFromAllocation(answer);
-        const correctDecision = extractCorrectDecision(item);
 
         const studentFlaggedException = answer?.isException === true;
         if (!studentFlaggedException) {
@@ -242,17 +227,48 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
           caughtTraps.push({ item, studentDecision, correctDecision });
         }
       } else {
-        decoys.push(item);
-        if (answer?.isException) falsePositiveCount += 1;
+        if (!hasAnswer) return;
+        const studentFlaggedException = answer?.isException === true;
+        if (studentFlaggedException) {
+          falsePositiveCount += 1;
+          issues.push({
+            type: 'false_positive',
+            item,
+            studentDecision,
+            correctDecision,
+          });
+          return;
+        }
+
+        if (
+          correctDecision.primaryKey &&
+          normalize(studentDecision.primaryKey) === normalize(correctDecision.primaryKey)
+        ) {
+          routineCorrect.push({ item, studentDecision, correctDecision });
+          return;
+        }
+
+        if (correctDecision.primaryKey) {
+          issues.push({
+            type: 'wrong_routine_classification',
+            item,
+            studentDecision,
+            correctDecision,
+          });
+        }
       }
     });
 
-    return { traps, decoys, issues, falsePositiveCount, caughtTraps };
+    return { traps, routineCorrect, issues, falsePositiveCount, caughtTraps };
   }, [disbursements, studentAnswers]);
 
   const currentIssue = issues[activeIssueIndex] || null;
   const isDone = issues.length > 0 && activeIssueIndex >= issues.length;
-  const missedCount = issues.length;
+  const criticalIssues = issues.filter(
+    (issue) => issue.type === 'missed_exception' || issue.type === 'wrong_classification'
+  );
+  const criticalMissCount = criticalIssues.length;
+  const routineIssueCount = Math.max(0, issues.length - criticalMissCount);
   const hasTraps = traps.length > 0;
   const showRetake = typeof onRequestRetake === 'function' && hasTraps;
   const showReturn = typeof onReturnToDashboard === 'function';
@@ -314,7 +330,9 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
     <div className="max-w-4xl mx-auto space-y-8">
       <div
         className={`rounded-xl border shadow-sm px-6 py-5 ${
-          !hasTraps || missedCount === 0 ? 'bg-emerald-50/60 border-emerald-200' : 'bg-rose-50/60 border-rose-200'
+          !hasTraps || criticalMissCount === 0
+            ? 'bg-emerald-50/60 border-emerald-200'
+            : 'bg-rose-50/60 border-rose-200'
         }`}
       >
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -323,26 +341,32 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
             <h2 className="mt-1 text-2xl font-bold text-gray-900">
               {!hasTraps
                 ? 'No critical items were configured for this case.'
-                : missedCount === 0
-                ? 'Nice work! You caught all the errors in the selections made.'
-                : `You missed ${missedCount} critical ${missedCount === 1 ? 'item' : 'items'}.`}
+                : criticalMissCount === 0
+                ? routineIssueCount > 0
+                  ? 'Critical items were handled correctly.'
+                  : 'Nice work! You caught all the errors in the selections made.'
+                : `You missed ${criticalMissCount} critical ${criticalMissCount === 1 ? 'item' : 'items'}.`}
             </h2>
             {(() => {
               const baseMessage = !hasTraps
                 ? 'Ask your instructor to add critical risks (traps) to enable a full review walkthrough.'
-                : missedCount === 0
+                : criticalMissCount === 0
                 ? ''
                 : 'We’ll walk through each one step-by-step and show you exactly where it appears in the evidence.';
+              const routineNote =
+                routineIssueCount > 0
+                  ? `${baseMessage ? ' ' : ''}(${baseMessage ? 'You also missed' : 'You missed'} ${routineIssueCount} routine ${routineIssueCount === 1 ? 'item' : 'items'}.)`
+                  : '';
               const falsePositiveMessage =
                 falsePositiveCount > 0
-                  ? `${baseMessage ? ' ' : ''}(You also flagged ${falsePositiveCount} routine ${falsePositiveCount === 1 ? 'item' : 'items'}.)`
+                  ? `${baseMessage || routineNote ? ' ' : ''}(${baseMessage || routineNote ? 'You also flagged' : 'You flagged'} ${falsePositiveCount} routine ${falsePositiveCount === 1 ? 'item' : 'items'}.)`
                   : '';
-              const message = `${baseMessage}${falsePositiveMessage}`.trim();
+              const message = `${baseMessage}${routineNote}${falsePositiveMessage}`.trim();
               if (!message) return null;
               return <p className="mt-1 text-sm text-gray-700">{message}</p>;
             })()}
           </div>
-          {showRetake && missedCount === 0 && showReturn ? (
+          {showRetake && criticalMissCount === 0 && showReturn ? (
             <div className="flex flex-col sm:flex-row gap-2">
               <button
                 type="button"
@@ -595,7 +619,7 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
         </div>
       ) : null}
 
-      {decoys.length > 0 ? (
+      {routineCorrect.length > 0 ? (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
           <button
             type="button"
@@ -604,11 +628,11 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
           >
             <div>
               <div className="text-xs font-semibold uppercase tracking-wide text-gray-600">Optional</div>
-              <div className="text-sm font-semibold text-gray-900">Routine transactions</div>
+              <div className="text-sm font-semibold text-gray-900">Correct routine transactions</div>
             </div>
             <div className="text-sm font-semibold text-blue-700">{showDecoys ? 'Hide' : 'Show'}</div>
           </button>
-          {showDecoys ? <DecoyTable items={decoys} studentAnswers={studentAnswers} /> : null}
+          {showDecoys ? <DecoyTable items={routineCorrect} /> : null}
         </div>
       ) : null}
 

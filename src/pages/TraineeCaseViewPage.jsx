@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { Timestamp } from 'firebase/firestore';
 import { storage, Button, useRoute, useAuth, useModal, appId } from '../AppCore';
-import { listStudentCases, subscribeToCase } from '../services/caseService';
+import { fetchCase, listStudentCases, subscribeToCase } from '../services/caseService';
 import { saveSubmission } from '../services/submissionService';
 import { fetchProgressForCases, saveProgress, subscribeProgressForCases } from '../services/progressService';
 import { fetchRecipeProgress, saveRecipeProgress } from '../services/recipeProgressService';
@@ -206,6 +206,7 @@ export default function TraineeCaseViewPage({ params }) {
   }, []);
 
   const [caseData, setCaseData] = useState(null);
+  const [caseWithKeys, setCaseWithKeys] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeStep, setActiveStep] = useState(FLOW_STEPS.INSTRUCTION);
   const [recipeProgress, setRecipeProgress] = useState(null);
@@ -484,6 +485,24 @@ export default function TraineeCaseViewPage({ params }) {
 
     return () => unsubscribe();
   }, [caseId, navigate, userId, showModal]);
+
+  useEffect(() => {
+    let active = true;
+    if (!caseId || activeStep !== FLOW_STEPS.RESULTS) return undefined;
+    fetchCase(caseId)
+      .then((caseDoc) => {
+        if (!active) return;
+        setCaseWithKeys(caseDoc);
+      })
+      .catch((error) => {
+        if (!active) return;
+        console.warn('[TraineeCaseViewPage] Failed to load case keys for results', error);
+        setCaseWithKeys(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [caseId, activeStep]);
 
   useEffect(() => {
     if (!caseData || !userId || !recipeId) return;
@@ -2025,6 +2044,7 @@ export default function TraineeCaseViewPage({ params }) {
   };
 
   const renderResultsStep = () => {
+    const resultsDisbursements = caseWithKeys?.disbursements || disbursementList;
     return (
       <div className="space-y-6">
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
@@ -2034,7 +2054,7 @@ export default function TraineeCaseViewPage({ params }) {
           </div>
           
           <ResultsAnalysis 
-            disbursements={selectedDisbursementDetails} 
+            disbursements={resultsDisbursements} 
             studentAnswers={classificationAmounts} 
             onRequestRetake={requestRetake}
             onReturnToDashboard={() => navigate('/trainee')}
