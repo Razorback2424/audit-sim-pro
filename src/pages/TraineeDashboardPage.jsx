@@ -3,6 +3,7 @@ import { CheckCircle2, Loader2 } from 'lucide-react';
 import { Button, useRoute, useModal, useAuth, appId } from '../AppCore';
 import { listStudentCases, deleteRetakeAttempt } from '../services/caseService';
 import { listRecipes } from '../services/recipeService';
+import { listCaseRecipes } from '../generation/recipeRegistry';
 import { subscribeProgressForCases, saveProgress } from '../services/progressService';
 import { generateAttemptFromRecipe } from '../services/attemptService';
 import { nullSafeDate, getNow } from '../utils/dates';
@@ -97,6 +98,21 @@ const getModuleSkills = (caseData) => {
     });
   }
   return skills.slice(0, 3);
+};
+
+const resolveCaseLevelLabel = (caseData, codedMap) => {
+  if (typeof caseData?.caseLevel === 'string' && caseData.caseLevel.trim()) {
+    return formatCaseLevel(caseData.caseLevel);
+  }
+  const moduleId = caseData?.moduleId || caseData?.id;
+  const coded = moduleId ? codedMap.get(moduleId) : null;
+  if (coded?.caseLevel) {
+    return formatCaseLevel(coded.caseLevel);
+  }
+  const tier = normalizeTier(caseData?.tier);
+  if (tier === 'core') return 'Intermediate';
+  if (tier === 'advanced') return 'Advanced';
+  return 'Basics';
 };
 
 const isRecipeConfigured = (recipe) => {
@@ -325,6 +341,15 @@ export default function TraineeDashboardPage() {
     });
     return map;
   }, [recipes]);
+
+  const codedRecipeById = useMemo(() => {
+    const map = new Map();
+    listCaseRecipes().forEach((recipe) => {
+      if (!recipe?.id) return;
+      map.set(recipe.id, recipe);
+    });
+    return map;
+  }, []);
 
   const casesWithProgress = useMemo(() => {
     return cases.map((caseData) => {
@@ -738,7 +763,7 @@ export default function TraineeDashboardPage() {
                   patch: {
                     percentComplete: 0,
                     state: 'not_started',
-                    step: 'selection',
+                    step: 'instruction',
                     draft: {},
                     hasSuccessfulAttempt: false,
                   },
@@ -815,6 +840,13 @@ export default function TraineeDashboardPage() {
   const heroActionLabel = heroMode === 'resume' ? 'Resume' : 'Start Case';
   const heroHierarchyLabel = heroCase
     ? `${getPathLabel(getPathId(heroCase), heroCase?.pathTitle)} -> ${getModuleLabel(heroCase)} -> ${getSkillLabel(heroCase)} -> ${formatCaseLevel(heroCase?.caseLevel)}`
+    : '';
+  const availableModule = availableModules[0] || null;
+  const availableLevelLabel = availableModule
+    ? resolveCaseLevelLabel(availableModule, codedRecipeById)
+    : '';
+  const availableHierarchyLabel = availableModule
+    ? `${getPathLabel(getPathId(availableModule), availableModule?.pathTitle)} -> ${getModuleLabel(availableModule)} -> ${getSkillLabel(availableModule)} -> ${availableLevelLabel}`
     : '';
 
   const handleStartModule = async (moduleId) => {
@@ -998,8 +1030,11 @@ export default function TraineeDashboardPage() {
               <h1 className="text-3xl font-semibold text-gray-900">
                 {availableModules[0]?.moduleTitle || availableModules[0]?.title || 'Module'}
               </h1>
+              {availableHierarchyLabel ? (
+                <div className="text-sm text-gray-600">{availableHierarchyLabel}</div>
+              ) : null}
               <div className="text-sm text-gray-600">
-                Start your first case to enter the cockpit.
+                {availableLevelLabel ? `New level unlocked: ${availableLevelLabel}.` : 'Start your next case to enter the cockpit.'}
               </div>
             </div>
             <div className="mt-6 flex flex-col sm:flex-row sm:items-center sm:gap-6 gap-3">

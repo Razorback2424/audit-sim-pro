@@ -111,6 +111,7 @@ import {
  * @property {string} [caseLevel]
  * @property {string|null} [caseGroupId]
  * @property {CaseWorkpaper} [workpaper]
+ * @property {Record<string, any>} [workflow]
  * @property {CaseInstruction} [instruction]
  * @property {string} [pathId]
  * @property {string} [pathCategory]

@@ -1,8 +1,15 @@
 import React from 'react';
-import { Users, AlertTriangle, ClipboardList } from 'lucide-react';
+import { Users, AlertTriangle, ClipboardList, FolderKanban } from 'lucide-react';
 import { Button } from '../../AppCore';
 
 const ACTIONS = [
+  {
+    key: 'manage-cases',
+    label: 'Manage cases',
+    description: 'Review active cases and delete stale drafts.',
+    icon: FolderKanban,
+    path: '/admin/cases',
+  },
   {
     key: 'manage-users',
     label: 'Manage roster',
@@ -33,7 +40,7 @@ const QuickActions = ({ onNavigate }) => {
         <h2 className="text-xl font-semibold text-gray-800">Quick actions</h2>
         <button
           type="button"
-          onClick={() => onNavigate?.('/admin/case-overview')}
+          onClick={() => onNavigate?.('/admin/cases')}
           className="text-sm font-medium text-blue-600 hover:text-blue-700"
         >
           See all

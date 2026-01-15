@@ -3,12 +3,14 @@ import { apAgingSummaryV1 } from './apAging/apAgingSummaryV1.js';
 import { endeavorrInvoiceV1 } from './endeavorr/endeavorrInvoiceV1.js';
 import { glamitInvoiceV1 } from './glamit/glamitInvoiceV1.js';
 import { promotadorInvoiceV1 } from './promotador/promotadorInvoiceV1.js';
+import { apLeadSheetV1 } from './leadsheet/apLeadSheetV1.js';
 
 export const templates = {
   'invoice.endeavorr.v1': endeavorrInvoiceV1,
   'invoice.glamit.v1': glamitInvoiceV1,
   'invoice.promotador.v1': promotadorInvoiceV1,
   'refdoc.ap-aging.v1': apAgingSummaryV1,
+  'refdoc.ap-leadsheet.v1': apLeadSheetV1,
 };
 
 const registeredIds = Object.keys(templates);

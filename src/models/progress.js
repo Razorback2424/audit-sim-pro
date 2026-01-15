@@ -5,7 +5,7 @@ import { Timestamp } from 'firebase/firestore';
  */
 
 /**
- * @typedef {'selection' | 'testing' | 'results'} ProgressStep
+ * @typedef {'instruction' | 'ca_check' | 'selection' | 'testing' | 'results'} ProgressStep
  */
 
 /**
@@ -37,7 +37,7 @@ import { Timestamp } from 'firebase/firestore';
 
 const VALID_STATES = ['not_started', 'in_progress', 'submitted'];
 const DEFAULT_STATE = 'not_started';
-const DEFAULT_STEP = 'selection';
+const DEFAULT_STEP = 'instruction';
 
 const isRecord = (value) => typeof value === 'object' && value !== null;
 const isStringArray = (value) => Array.isArray(value) && value.every((item) => typeof item === 'string');

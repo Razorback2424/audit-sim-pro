@@ -16,12 +16,13 @@ import { getCaseLevelLabel, normalizeCaseLevel } from '../models/caseConstants';
 
 const FLOW_STEPS = Object.freeze({
   INSTRUCTION: 'instruction',
+  CA_CHECK: 'ca_check',
   SELECTION: 'selection',
   TESTING: 'testing',
   RESULTS: 'results',
 });
 
-const STEP_SEQUENCE = [
+const DEFAULT_STEP_SEQUENCE = [
   FLOW_STEPS.INSTRUCTION,
   FLOW_STEPS.SELECTION,
   FLOW_STEPS.TESTING,
@@ -30,6 +31,7 @@ const STEP_SEQUENCE = [
 
 const STEP_LABELS = {
   [FLOW_STEPS.INSTRUCTION]: 'Instruction',
+  [FLOW_STEPS.CA_CHECK]: 'C&A Tie-Out',
   [FLOW_STEPS.SELECTION]: 'Select Disbursements',
   [FLOW_STEPS.TESTING]: 'Classify Results',
   [FLOW_STEPS.RESULTS]: 'Review Outcome',
@@ -37,6 +39,7 @@ const STEP_LABELS = {
 
 const STEP_DESCRIPTIONS = {
   [FLOW_STEPS.INSTRUCTION]: 'Review the materials and successfully answer the knowledge check questions to access the simulation.',
+  [FLOW_STEPS.CA_CHECK]: 'Confirm the AP aging ties to the ledger before selecting items.',
   [FLOW_STEPS.SELECTION]: 'Choose which disbursements you will test.',
   [FLOW_STEPS.TESTING]: 'Allocate the amounts across each classification and review documents.',
   [FLOW_STEPS.RESULTS]: 'See a recap of your responses.',
@@ -62,6 +65,8 @@ const isInvoiceReferenceDoc = (doc) => {
   return false;
 };
 
+const getReferenceKey = (doc) => doc?.id || doc?.storagePath || doc?.downloadURL || doc?.fileName || '';
+
 const isInlinePreviewable = (contentType, fileNameOrPath) => {
   const normalizedType = typeof contentType === 'string' ? contentType.toLowerCase() : '';
   if (normalizedType === 'application/pdf' || normalizedType === 'application/x-pdf') {
@@ -80,6 +85,7 @@ const isInlinePreviewable = (contentType, fileNameOrPath) => {
 
 const computePercentComplete = (step, selectedCount, classifiedCount) => {
   if (step === FLOW_STEPS.INSTRUCTION) return 0;
+  if (step === FLOW_STEPS.CA_CHECK) return 10;
   if (step === FLOW_STEPS.RESULTS) return 100;
   if (selectedCount <= 0) return 0;
   if (step === FLOW_STEPS.SELECTION) return 25;
@@ -226,8 +232,26 @@ export default function TraineeCaseViewPage({ params }) {
   const [saveStatus, setSaveStatus] = useState('saved');
   const [furthestStepIndex, setFurthestStepIndex] = useState(0);
   const [levelGate, setLevelGate] = useState({ locked: false, message: '' });
+  const [tieOutSelectionId, setTieOutSelectionId] = useState('');
+  const [tieOutAssessmentFeedback, setTieOutAssessmentFeedback] = useState('');
+  const [tieOutActionSelectionId, setTieOutActionSelectionId] = useState('');
+  const [tieOutActionFeedback, setTieOutActionFeedback] = useState('');
+  const [tieOutAssessmentPassed, setTieOutAssessmentPassed] = useState(false);
+  const [tieOutNeedsAction, setTieOutNeedsAction] = useState(false);
+  const [tieOutPassed, setTieOutPassed] = useState(false);
+  const [tieOutGateResult, setTieOutGateResult] = useState(null);
+  const [selectionGateResult, setSelectionGateResult] = useState(null);
+  const [tieOutDocViews, setTieOutDocViews] = useState({});
+  const [apAgingPreviewUrl, setApAgingPreviewUrl] = useState('');
+  const [apAgingPreviewLoading, setApAgingPreviewLoading] = useState(false);
+  const [apAgingPreviewError, setApAgingPreviewError] = useState('');
 
   const recipeId = useMemo(() => getRecipeId(caseData), [caseData]);
+  const recipeGateId = useMemo(() => {
+    const base = recipeId || '';
+    const level = typeof caseData?.caseLevel === 'string' ? caseData.caseLevel.trim().toLowerCase() : '';
+    return level ? `${base}::${level}` : base;
+  }, [caseData, recipeId]);
   const recipeVersion = useMemo(() => getRecipeVersion(caseData), [caseData]);
   const gateScope = useMemo(() => {
     const scope = caseData?.workflow?.gateScope;
@@ -238,6 +262,47 @@ export default function TraineeCaseViewPage({ params }) {
     [recipeProgress, recipeVersion]
   );
   const gateRequired = gateScope === 'per_attempt' ? true : !gatePassed;
+  const workflowSteps = useMemo(() => {
+    const steps = Array.isArray(caseData?.workflow?.steps) ? caseData.workflow.steps : [];
+    const allowed = new Set(Object.values(FLOW_STEPS));
+    let normalized = [];
+    steps.forEach((step) => {
+      if (!allowed.has(step)) return;
+      if (!normalized.includes(step)) normalized.push(step);
+    });
+    if (normalized.length === 0) {
+      normalized = [...DEFAULT_STEP_SEQUENCE];
+    }
+    if (!normalized.includes(FLOW_STEPS.INSTRUCTION)) {
+      normalized.unshift(FLOW_STEPS.INSTRUCTION);
+    }
+    const tieOutEnabled = Boolean(caseData?.workpaper?.layoutConfig?.tieOutGate?.enabled);
+    if (tieOutEnabled && !normalized.includes(FLOW_STEPS.CA_CHECK)) {
+      const instructionIndex = normalized.indexOf(FLOW_STEPS.INSTRUCTION);
+      const insertIndex = instructionIndex >= 0 ? instructionIndex + 1 : 0;
+      normalized.splice(insertIndex, 0, FLOW_STEPS.CA_CHECK);
+    }
+    if (!normalized.includes(FLOW_STEPS.RESULTS)) {
+      normalized.push(FLOW_STEPS.RESULTS);
+    }
+    return normalized;
+  }, [caseData]);
+  const firstPostInstructionStep = useMemo(() => {
+    const index = workflowSteps.indexOf(FLOW_STEPS.INSTRUCTION);
+    if (index >= 0 && index + 1 < workflowSteps.length) {
+      return workflowSteps[index + 1];
+    }
+    return workflowSteps[0] || FLOW_STEPS.SELECTION;
+  }, [workflowSteps]);
+  const workpaperConfig = useMemo(() => caseData?.workpaper?.layoutConfig || {}, [caseData]);
+  const tieOutGateConfig = useMemo(() => {
+    const gate = workpaperConfig?.tieOutGate;
+    return gate && gate.enabled ? gate : null;
+  }, [workpaperConfig]);
+  const selectionScopeConfig = useMemo(
+    () => workpaperConfig?.selectionScope || null,
+    [workpaperConfig]
+  );
 
   const lastResolvedEvidenceRef = useRef({ evidenceId: null, storagePath: null, url: null, inlineNotSupported: false });
   const progressSaveTimeoutRef = useRef(null);
@@ -245,6 +310,7 @@ export default function TraineeCaseViewPage({ params }) {
   const activeStepRef = useRef(FLOW_STEPS.INSTRUCTION);
   const selectionRef = useRef(selectedDisbursements);
   const classificationRef = useRef(classificationAmounts);
+  const tieOutGateResultRef = useRef(tieOutGateResult);
   const selectedIdsRef = useRef([]);
   const classifiedCountRef = useRef(0);
   const isLockedRef = useRef(false);
@@ -252,6 +318,32 @@ export default function TraineeCaseViewPage({ params }) {
   const retakeResettingRef = useRef(false);
   const decisionHintTimeoutRef = useRef(null);
   const lockNoticeRef = useRef(false);
+
+  useEffect(() => {
+    if (!tieOutGateConfig) {
+      setTieOutPassed(true);
+      setTieOutGateResult(null);
+      setTieOutSelectionId('');
+      setTieOutAssessmentFeedback('');
+      setTieOutActionSelectionId('');
+      setTieOutActionFeedback('');
+      setTieOutAssessmentPassed(false);
+      setTieOutNeedsAction(false);
+      setSelectionGateResult(null);
+      setTieOutDocViews({});
+      return;
+    }
+    setTieOutPassed(false);
+    setTieOutGateResult(null);
+    setTieOutSelectionId('');
+    setTieOutAssessmentFeedback('');
+    setTieOutActionSelectionId('');
+    setTieOutActionFeedback('');
+    setTieOutAssessmentPassed(false);
+    setTieOutNeedsAction(false);
+    setSelectionGateResult(null);
+    setTieOutDocViews({});
+  }, [caseId, selectionScopeConfig, tieOutGateConfig]);
 
   const createEmptyAllocation = useCallback(() => {
     const template = {};
@@ -268,7 +360,7 @@ export default function TraineeCaseViewPage({ params }) {
 
       retakeResettingRef.current = true;
       const initialStep =
-        gateScope === 'once' ? FLOW_STEPS.SELECTION : FLOW_STEPS.INSTRUCTION;
+        gateScope === 'once' ? firstPostInstructionStep : FLOW_STEPS.INSTRUCTION;
       setIsRetakeResetting(true);
       setIsLocked(false);
       setActiveStep(initialStep);
@@ -280,6 +372,15 @@ export default function TraineeCaseViewPage({ params }) {
       setActiveEvidenceUrl(null);
       setActiveEvidenceError('');
       setActiveEvidenceLoading(false);
+      setTieOutPassed(!tieOutGateConfig);
+      setTieOutGateResult(null);
+      setTieOutSelectionId('');
+      setTieOutAssessmentFeedback('');
+      setTieOutActionSelectionId('');
+      setTieOutActionFeedback('');
+      setTieOutAssessmentPassed(false);
+      setTieOutNeedsAction(false);
+      setSelectionGateResult(null);
       lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null, inlineNotSupported: false };
 
       let didReset = false;
@@ -299,6 +400,7 @@ export default function TraineeCaseViewPage({ params }) {
             draft: {
               selectedPaymentIds: [],
               classificationDraft: {},
+              tieOutGate: null,
               fixedAssetDraft: {},
               cashLinkMap: {},
               cashAdjustments: [],
@@ -332,7 +434,7 @@ export default function TraineeCaseViewPage({ params }) {
         }
       }
     },
-    [caseId, userId, gateScope, setQuery, showModal]
+    [caseId, userId, gateScope, setQuery, showModal, tieOutGateConfig, firstPostInstructionStep]
   );
 
   const startRetakeAttempt = useCallback(
@@ -448,11 +550,11 @@ export default function TraineeCaseViewPage({ params }) {
 
   useEffect(() => {
     activeStepRef.current = activeStep;
-    const currentIndex = STEP_SEQUENCE.indexOf(activeStep);
+    const currentIndex = workflowSteps.indexOf(activeStep);
     if (currentIndex >= 0) {
       setFurthestStepIndex((prev) => Math.max(prev, currentIndex));
     }
-  }, [activeStep]);
+  }, [activeStep, workflowSteps]);
 
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -465,6 +567,10 @@ export default function TraineeCaseViewPage({ params }) {
   useEffect(() => {
     classificationRef.current = classificationAmounts;
   }, [classificationAmounts]);
+
+  useEffect(() => {
+    tieOutGateResultRef.current = tieOutGateResult;
+  }, [tieOutGateResult]);
 
   useEffect(() => {
     isLockedRef.current = isLocked;
@@ -545,10 +651,10 @@ export default function TraineeCaseViewPage({ params }) {
   }, [caseId, activeStep]);
 
   useEffect(() => {
-    if (!caseData || !userId || !recipeId) return;
+    if (!caseData || !userId || !recipeGateId) return;
     let isActive = true;
 
-    fetchRecipeProgress({ appId, uid: userId, recipeId })
+    fetchRecipeProgress({ appId, uid: userId, recipeId: recipeGateId })
       .then((progress) => {
         if (!isActive) return;
         setRecipeProgress(progress);
@@ -563,7 +669,7 @@ export default function TraineeCaseViewPage({ params }) {
     return () => {
       isActive = false;
     };
-  }, [caseData, userId, recipeId]);
+  }, [caseData, userId, recipeGateId]);
 
   useEffect(() => {
     if (!query?.retake) {
@@ -604,7 +710,7 @@ export default function TraineeCaseViewPage({ params }) {
         if (retakeResettingRef.current) {
           const percentComplete = Number(entry?.percentComplete || 0);
           const state = typeof entry?.state === 'string' ? entry.state.toLowerCase() : '';
-          const step = STEP_SEQUENCE.includes(entry.step) ? entry.step : FLOW_STEPS.INSTRUCTION;
+          const step = workflowSteps.includes(entry.step) ? entry.step : FLOW_STEPS.INSTRUCTION;
           const isResetSnapshot =
             percentComplete === 0 && (state === 'not_started' || step === FLOW_STEPS.INSTRUCTION);
 
@@ -612,14 +718,8 @@ export default function TraineeCaseViewPage({ params }) {
           retakeResettingRef.current = false;
         }
 
-        const nextStep = STEP_SEQUENCE.includes(entry.step) ? entry.step : FLOW_STEPS.INSTRUCTION;
+        const nextStep = workflowSteps.includes(entry.step) ? entry.step : FLOW_STEPS.INSTRUCTION;
         let resolvedStep = nextStep;
-        if (gatePassed && nextStep === FLOW_STEPS.INSTRUCTION) {
-          resolvedStep =
-            activeStepRef.current === FLOW_STEPS.INSTRUCTION && furthestStepIndex === 0
-              ? FLOW_STEPS.SELECTION
-              : activeStepRef.current;
-        }
         if (
           (!recentlyChanged || resolvedStep === FLOW_STEPS.RESULTS) &&
           activeStepRef.current !== resolvedStep
@@ -646,6 +746,17 @@ export default function TraineeCaseViewPage({ params }) {
           setClassificationAmounts(nextClassifications);
         }
 
+        const tieOutDraft = entry.draft?.tieOutGate;
+        if (!recentlyChanged && tieOutGateConfig && tieOutDraft?.passed) {
+          const currentTieOut = tieOutGateResultRef.current;
+          if (!currentTieOut || !currentTieOut.passed) {
+            setTieOutGateResult(tieOutDraft);
+            setTieOutPassed(true);
+            setTieOutAssessmentPassed(true);
+            setTieOutNeedsAction(false);
+          }
+        }
+
         const shouldLock = entry.state === 'submitted' || nextStep === FLOW_STEPS.RESULTS;
         if (isLockedRef.current !== shouldLock) {
           setIsLocked(shouldLock);
@@ -657,7 +768,16 @@ export default function TraineeCaseViewPage({ params }) {
     );
 
     return () => unsubscribe();
-  }, [caseId, userId, normalizePaymentId, gatePassed, furthestStepIndex]);
+  }, [
+    caseId,
+    userId,
+    normalizePaymentId,
+    gatePassed,
+    furthestStepIndex,
+    workflowSteps,
+    firstPostInstructionStep,
+    tieOutGateConfig,
+  ]);
 
   useEffect(() => {
     if (!caseData || !userId) return;
@@ -733,7 +853,7 @@ export default function TraineeCaseViewPage({ params }) {
     [caseData, normalizePaymentId]
   );
 
-  const referenceDocuments = useMemo(() => {
+  const allReferenceDocuments = useMemo(() => {
     const docs = Array.isArray(caseData?.referenceDocuments) ? caseData.referenceDocuments : [];
     const usedIds = new Set();
     const normalized = [];
@@ -745,8 +865,11 @@ export default function TraineeCaseViewPage({ params }) {
       const storagePath = (doc.storagePath || '').trim();
       const downloadURL = (doc.downloadURL || '').trim();
       const contentType = (doc.contentType || '').trim();
-      if (!storagePath && !downloadURL) return;
-      const baseId = storagePath || downloadURL || `${fileName}-${index}`;
+      const generationSpec = doc.generationSpec && typeof doc.generationSpec === 'object' ? doc.generationSpec : null;
+      const generationSpecId = typeof doc.generationSpecId === 'string' ? doc.generationSpecId.trim() : '';
+      const hasGenerationSpec = Boolean(generationSpec || generationSpecId);
+      if (!storagePath && !downloadURL && !hasGenerationSpec) return;
+      const baseId = storagePath || downloadURL || generationSpecId || `${fileName}-${index}`;
       let id = baseId;
       let suffix = 1;
       while (usedIds.has(id)) {
@@ -760,11 +883,100 @@ export default function TraineeCaseViewPage({ params }) {
         storagePath,
         downloadURL,
         contentType,
+        generationSpec,
+        generationSpecId: generationSpecId || null,
+        pending: !storagePath && !downloadURL && hasGenerationSpec,
       });
     });
 
     return normalized;
   }, [caseData]);
+
+  const tieOutReferenceDocuments = useMemo(() => {
+    const targetNames = Array.isArray(tieOutGateConfig?.referenceDocNames)
+      ? tieOutGateConfig.referenceDocNames
+      : [];
+    if (targetNames.length === 0) return [];
+    const nameSet = new Set(targetNames.map((name) => String(name).toLowerCase()));
+    return allReferenceDocuments.filter((doc) => nameSet.has(String(doc.fileName || '').toLowerCase()));
+  }, [allReferenceDocuments, tieOutGateConfig]);
+
+  const correctedReferenceDocuments = useMemo(() => {
+    const targetNames = Array.isArray(tieOutGateConfig?.correctedReferenceDocNames)
+      ? tieOutGateConfig.correctedReferenceDocNames
+      : [];
+    if (targetNames.length === 0) return [];
+    const nameSet = new Set(targetNames.map((name) => String(name).toLowerCase()));
+    return allReferenceDocuments.filter((doc) => nameSet.has(String(doc.fileName || '').toLowerCase()));
+  }, [allReferenceDocuments, tieOutGateConfig]);
+
+  const referenceDocuments = useMemo(() => {
+    if (!tieOutGateConfig) return allReferenceDocuments;
+    if (!tieOutPassed) {
+      return tieOutReferenceDocuments.length > 0 ? tieOutReferenceDocuments : allReferenceDocuments;
+    }
+    return correctedReferenceDocuments.length > 0 ? correctedReferenceDocuments : allReferenceDocuments;
+  }, [allReferenceDocuments, correctedReferenceDocuments, tieOutGateConfig, tieOutPassed, tieOutReferenceDocuments]);
+
+  const apAgingDoc = useMemo(() => {
+    return referenceDocuments.find((doc) => {
+      const templateId =
+        typeof doc?.generationSpec?.templateId === 'string'
+          ? doc.generationSpec.templateId.toLowerCase()
+          : '';
+      if (templateId === 'refdoc.ap-aging.v1') return true;
+      const fileName = String(doc?.fileName || '').toLowerCase();
+      return fileName.includes('ap aging');
+    }) || null;
+  }, [referenceDocuments]);
+
+  useEffect(() => {
+    if (!apAgingDoc) {
+      setApAgingPreviewUrl('');
+      setApAgingPreviewError('');
+      setApAgingPreviewLoading(false);
+      return;
+    }
+    if (apAgingDoc.downloadURL) {
+      setApAgingPreviewUrl(apAgingDoc.downloadURL);
+      setApAgingPreviewError('');
+      setApAgingPreviewLoading(false);
+      return;
+    }
+    if (!apAgingDoc.storagePath || !storage?.app) {
+      setApAgingPreviewUrl('');
+      setApAgingPreviewError('AP aging preview unavailable.');
+      setApAgingPreviewLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setApAgingPreviewLoading(true);
+    setApAgingPreviewError('');
+    setApAgingPreviewUrl('');
+
+    getDownloadURL(storageRef(storage, apAgingDoc.storagePath))
+      .then((url) => {
+        if (cancelled) return;
+        setApAgingPreviewUrl(url);
+        setApAgingPreviewError('');
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        const message =
+          error?.code === 'storage/object-not-found'
+            ? 'AP aging document is missing from storage.'
+            : 'Unable to load AP aging preview.';
+        setApAgingPreviewError(message);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setApAgingPreviewLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apAgingDoc, storage]);
 
   const hasPendingGeneration = useMemo(() => {
     const docs = Array.isArray(caseData?.referenceDocuments) ? caseData.referenceDocuments : [];
@@ -826,6 +1038,121 @@ export default function TraineeCaseViewPage({ params }) {
     () => selectedIds.map((id) => disbursementById.get(id)).filter(Boolean),
     [selectedIds, disbursementById]
   );
+
+  const scopeThreshold = useMemo(() => {
+    const explicit = Number(selectionScopeConfig?.thresholdAmount);
+    if (Number.isFinite(explicit) && explicit > 0) return explicit;
+    const pm = Number(selectionScopeConfig?.performanceMateriality || 0);
+    const pct = Number(selectionScopeConfig?.scopePercent || 0);
+    if (Number.isFinite(pm) && pm > 0 && Number.isFinite(pct) && pct > 0) {
+      return Math.round((pm * pct + Number.EPSILON) * 100) / 100;
+    }
+    return 0;
+  }, [selectionScopeConfig]);
+  const requiredSelectionIds = useMemo(() => {
+    if (!selectionScopeConfig || !Number.isFinite(scopeThreshold) || scopeThreshold <= 0) return [];
+    return disbursementList
+      .filter((item) => Number(item?.amount || 0) >= scopeThreshold)
+      .map((item) => item.paymentId)
+      .filter(Boolean);
+  }, [disbursementList, scopeThreshold, selectionScopeConfig]);
+
+  const missingRequiredIds = requiredSelectionIds.filter((id) => !selectedDisbursements[id]);
+
+  const tieOutDocsOpened = useMemo(() => {
+    if (!tieOutGateConfig) return true;
+    if (!tieOutGateConfig.requireOpenedDocs) return true;
+    if (tieOutReferenceDocuments.length === 0) return true;
+    return tieOutReferenceDocuments.every((doc) => openedReferenceDocs.has(getReferenceKey(doc)));
+  }, [openedReferenceDocs, tieOutGateConfig, tieOutReferenceDocuments]);
+
+  useEffect(() => {
+    if (!tieOutGateConfig) {
+      setTieOutDocViews({});
+      return;
+    }
+    const docs = tieOutReferenceDocuments.length > 0 ? tieOutReferenceDocuments : [];
+    if (docs.length === 0) {
+      setTieOutDocViews({});
+      return;
+    }
+
+    let cancelled = false;
+    const initialViews = {};
+    docs.forEach((doc) => {
+      initialViews[doc.id] = {
+        url: doc.downloadURL || '',
+        loading: Boolean(!doc.downloadURL && doc.storagePath),
+        error: '',
+      };
+    });
+    setTieOutDocViews(initialViews);
+
+    if (!storage?.app) {
+      setTieOutDocViews((prev) => {
+        const next = { ...prev };
+        docs.forEach((doc) => {
+          if (!next[doc.id]?.url) {
+            next[doc.id] = {
+              ...next[doc.id],
+              loading: false,
+              error: 'Preview unavailable in this environment.',
+            };
+          }
+        });
+        return next;
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    Promise.all(
+      docs.map(async (doc) => {
+        if (doc.downloadURL || !doc.storagePath) {
+          return { id: doc.id, url: doc.downloadURL || '', error: '' };
+        }
+        try {
+          const url = await getDownloadURL(storageRef(storage, doc.storagePath));
+          return { id: doc.id, url, error: '' };
+        } catch (error) {
+          const message =
+            error?.code === 'storage/object-not-found'
+              ? 'Document is missing from storage.'
+              : 'Unable to load document preview.';
+          return { id: doc.id, url: '', error: message };
+        }
+      })
+    ).then((results) => {
+      if (cancelled) return;
+      setTieOutDocViews((prev) => {
+        const next = { ...prev };
+        results.forEach((result) => {
+          next[result.id] = {
+            url: result.url,
+            loading: false,
+            error: result.error,
+          };
+        });
+        return next;
+      });
+      setOpenedReferenceDocs((prev) => {
+        const next = new Set(prev);
+        docs.forEach((doc) => {
+          const view = results.find((item) => item.id === doc.id);
+          if (view?.url) {
+            const key = getReferenceKey(doc);
+            if (key) next.add(key);
+          }
+        });
+        return next;
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [storage, tieOutGateConfig, tieOutReferenceDocuments]);
 
   const classifiedCount = useMemo(() => {
     return selectedDisbursementDetails.filter((disbursement) =>
@@ -903,7 +1230,7 @@ export default function TraineeCaseViewPage({ params }) {
     return apAgingReferenceIds.some((id) => openedReferenceDocs.has(id));
   }, [apAgingReferenceIds, openedReferenceDocs]);
 
-  const mustOpenReference = isSurlCase && apAgingReferenceIds.length > 0;
+  const mustOpenReference = false;
 
   const handleSelectPayment = useCallback(
     (paymentId) => {
@@ -1145,6 +1472,7 @@ export default function TraineeCaseViewPage({ params }) {
         const percentComplete = computePercentComplete(step, selectedCount, classified);
         const snapshot = classificationRef.current || {};
         const nextDraft = {};
+        const tieOutGateSnapshot = tieOutGateResultRef.current;
         selectedPaymentIds.forEach((id) => {
           if (snapshot[id]) nextDraft[id] = snapshot[id];
         });
@@ -1156,6 +1484,7 @@ export default function TraineeCaseViewPage({ params }) {
           draft: {
             selectedPaymentIds: selectedPaymentIds,
             classificationDraft: nextDraft,
+            ...(tieOutGateSnapshot?.passed ? { tieOutGate: tieOutGateSnapshot } : {}),
           },
         };
 
@@ -1177,15 +1506,27 @@ export default function TraineeCaseViewPage({ params }) {
 
   const handleEnterSimulation = useCallback(() => {
     if (isLocked) return;
-    if (!gatePassed && recipeId && userId) {
-      setRecipeProgress({ recipeId, passedVersion: recipeVersion, passedAt: null });
-      saveRecipeProgress({ appId, uid: userId, recipeId, passedVersion: recipeVersion }).catch((error) => {
+    if (!gatePassed && recipeGateId && userId) {
+      setRecipeProgress({ recipeId: recipeGateId, passedVersion: recipeVersion, passedAt: null });
+      saveRecipeProgress({ appId, uid: userId, recipeId: recipeGateId, passedVersion: recipeVersion }).catch((error) => {
         console.error('Failed to save recipe progress:', error);
       });
     }
-    enqueueProgressSave(FLOW_STEPS.SELECTION);
-    setActiveStep(FLOW_STEPS.SELECTION);
-  }, [gatePassed, recipeId, recipeVersion, userId, isLocked, enqueueProgressSave]);
+    lastLocalChangeRef.current = Date.now();
+    enqueueProgressSave(firstPostInstructionStep);
+    setActiveStep(firstPostInstructionStep);
+  }, [gatePassed, recipeGateId, recipeVersion, userId, isLocked, enqueueProgressSave, firstPostInstructionStep]);
+
+  const updateActiveStep = useCallback(
+    (stepKey) => {
+      if (isLocked) return;
+      if (!stepKey) return;
+      lastLocalChangeRef.current = Date.now();
+      enqueueProgressSave(stepKey);
+      setActiveStep(stepKey);
+    },
+    [enqueueProgressSave, isLocked]
+  );
 
   useEffect(
     () => () => {
@@ -1198,6 +1539,10 @@ export default function TraineeCaseViewPage({ params }) {
 
   const handleSelectionChange = (paymentIdRaw) => {
     if (isLocked) return;
+    if (tieOutGateConfig && !tieOutPassed) {
+      showModal('Complete the C&A tie-out step before making selections.', 'Tie-Out Required');
+      return;
+    }
     const paymentId = normalizePaymentId(paymentIdRaw);
     if (!paymentId) return;
     lastLocalChangeRef.current = Date.now();
@@ -1248,6 +1593,90 @@ export default function TraineeCaseViewPage({ params }) {
     enqueueProgressSave();
   };
 
+  const handleTieOutAssessmentSubmit = () => {
+    if (!tieOutGateConfig) return;
+    const options = Array.isArray(tieOutGateConfig.assessmentOptions)
+      ? tieOutGateConfig.assessmentOptions
+      : [];
+    const selected = options.find((option) => option.id === tieOutSelectionId);
+    if (!selected) {
+      setTieOutAssessmentFeedback('Select a response before continuing.');
+      return;
+    }
+    if (!tieOutDocsOpened) {
+      setTieOutAssessmentFeedback('Review both documents before answering.');
+      return;
+    }
+    if (!selected.correct) {
+      setTieOutAssessmentFeedback(selected.feedback || 'Re-check the totals and try again.');
+      return;
+    }
+
+    const outcome = selected.outcome || '';
+    setTieOutAssessmentPassed(true);
+    setTieOutAssessmentFeedback(selected.feedback || '');
+
+    if (outcome === 'match') {
+      const result = {
+        passed: true,
+        assessment: {
+          selectedOptionId: selected.id,
+          selectedOptionText: selected.text,
+          outcome,
+        },
+        action: null,
+        skillTag: tieOutGateConfig.skillTag || '',
+      };
+      setTieOutPassed(true);
+      setTieOutGateResult(result);
+      tieOutGateResultRef.current = result;
+      lastLocalChangeRef.current = Date.now();
+      enqueueProgressSave();
+      return;
+    }
+
+    setTieOutNeedsAction(true);
+  };
+
+  const handleTieOutActionSubmit = () => {
+    if (!tieOutGateConfig) return;
+    const options = Array.isArray(tieOutGateConfig.actionOptions)
+      ? tieOutGateConfig.actionOptions
+      : Array.isArray(tieOutGateConfig.options)
+      ? tieOutGateConfig.options
+      : [];
+    const selected = options.find((option) => option.id === tieOutActionSelectionId);
+    if (!selected) {
+      setTieOutActionFeedback('Select a response before continuing.');
+      return;
+    }
+    if (!selected.correct) {
+      setTieOutActionFeedback(selected.feedback || tieOutGateConfig.failureMessage || 'Try again.');
+      return;
+    }
+
+    const result = {
+      passed: true,
+      assessment: {
+        selectedOptionId: tieOutSelectionId,
+        selectedOptionText:
+          (tieOutGateConfig.assessmentOptions || []).find((opt) => opt.id === tieOutSelectionId)?.text || '',
+        outcome: 'mismatch',
+      },
+      action: {
+        selectedOptionId: selected.id,
+        selectedOptionText: selected.text,
+      },
+      skillTag: tieOutGateConfig.skillTag || '',
+    };
+    setTieOutPassed(true);
+    setTieOutGateResult(result);
+    tieOutGateResultRef.current = result;
+    lastLocalChangeRef.current = Date.now();
+    enqueueProgressSave();
+    setTieOutActionFeedback(selected.feedback || tieOutGateConfig.successMessage || 'Correct.');
+  };
+
   const handleAllocationChange = (paymentId, fieldKey, value) => {
     if (isLocked) return;
     const normalizedId = normalizePaymentId(paymentId);
@@ -1292,9 +1721,30 @@ export default function TraineeCaseViewPage({ params }) {
 
   const goToTestingStep = () => {
     if (isLocked) return;
+    if (tieOutGateConfig && !tieOutPassed) {
+      showModal('Complete the C&A tie-out check before selecting items to test.', 'Tie-Out Required');
+      return;
+    }
     if (selectedIds.length === 0) {
       showModal('Please select at least one disbursement to continue.', 'No Selection');
       return;
+    }
+    if (selectionScopeConfig) {
+      if (missingRequiredIds.length > 0) {
+        showModal(
+          `Selection missing one or more disbursements above ${currencyFormatter.format(scopeThreshold)}.`,
+          'Selection Gate'
+        );
+        return;
+      }
+      setSelectionGateResult({
+        requiredIds: requiredSelectionIds,
+        missingRequiredIds,
+        thresholdAmount: scopeThreshold,
+        performanceMateriality: Number(selectionScopeConfig?.performanceMateriality || 0),
+        scopePercent: Number(selectionScopeConfig?.scopePercent || 0),
+        requiredMet: true,
+      });
     }
     const missingDocs = selectedEvidenceItems.filter((item) => !item?.hasLinkedDocument);
     if (missingDocs.length > 0) {
@@ -1391,6 +1841,10 @@ export default function TraineeCaseViewPage({ params }) {
         retrievedDocuments: documents,
         disbursementClassifications: allocationPayload,
         expectedClassifications: expectedPayload,
+        surlGateResults: {
+          tieOut: tieOutGateResult,
+          selection: selectionGateResult,
+        },
         submittedAt: Timestamp.now(),
       });
 
@@ -1519,11 +1973,11 @@ export default function TraineeCaseViewPage({ params }) {
     );
   }
 
-  const stepIndex = STEP_SEQUENCE.indexOf(activeStep);
+  const stepIndex = workflowSteps.indexOf(activeStep);
 
   const renderStepper = () => (
     <ol className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between rounded-xl border border-slate-200 bg-gradient-to-r from-slate-50 via-white to-slate-50 px-4 py-4 shadow-sm">
-      {STEP_SEQUENCE.map((stepKey, idx) => {
+      {workflowSteps.map((stepKey, idx) => {
         const isCompleted = furthestStepIndex > idx;
         const isActive = stepIndex === idx;
         const canNavigate = idx <= furthestStepIndex;
@@ -1534,7 +1988,7 @@ export default function TraineeCaseViewPage({ params }) {
               onClick={() => {
                 if (!canNavigate) return;
                 if (activeStep === stepKey) return;
-                setActiveStep(stepKey);
+                updateActiveStep(stepKey);
               }}
               className={`flex items-center space-x-3 text-left ${
                 canNavigate ? 'cursor-pointer' : 'cursor-not-allowed'
@@ -1664,7 +2118,16 @@ export default function TraineeCaseViewPage({ params }) {
   const handleDownloadReferenceDoc = async (doc) => {
     if (!doc) return;
     const displayName = (doc.fileName || 'reference-document').trim() || 'reference-document';
-    const referenceKey = doc.id || doc.storagePath || doc.downloadURL || doc.fileName;
+    const referenceKey = getReferenceKey(doc);
+    const hasLink = Boolean(doc.storagePath || doc.downloadURL);
+    if (!hasLink) {
+      const message =
+        doc.generationSpec || doc.generationSpecId
+          ? 'This reference document is still generating. Please try again in a moment.'
+          : 'Reference document is missing a download link.';
+      showModal(message, 'Reference Unavailable');
+      return;
+    }
     try {
       setDownloadingReferenceId(doc.id);
       let url = '';
@@ -1715,29 +2178,11 @@ export default function TraineeCaseViewPage({ params }) {
       );
     }
 
-    const bannerClasses = mustOpenReference
-      ? apAgingOpened
-        ? 'border-emerald-200 bg-emerald-50'
-        : 'border-rose-200 bg-rose-50'
-      : 'border-blue-200 bg-blue-50';
-
-    const titleClasses = mustOpenReference
-      ? apAgingOpened
-        ? 'text-emerald-700'
-        : 'text-rose-700'
-      : 'text-blue-700';
-
-    const bodyClasses = mustOpenReference
-      ? apAgingOpened
-        ? 'text-emerald-900'
-        : 'text-rose-900'
-      : 'text-blue-900';
-
-    const bannerMessage = mustOpenReference
-      ? apAgingOpened
-        ? 'Reference material opened. You can now complete classifications.'
-        : 'Required before classifying: open the AP Aging reference.'
-      : 'Use these documents to complete the audit procedures. Download and keep them open while you classify.';
+    const bannerClasses = 'border-blue-200 bg-blue-50';
+    const titleClasses = 'text-blue-700';
+    const bodyClasses = 'text-blue-900';
+    const bannerMessage =
+      'Use these documents to complete the audit procedures. Download and keep them open while you classify.';
 
     return (
       <div className={`rounded-xl border px-4 py-3 shadow-sm ${bannerClasses}`}>
@@ -1748,22 +2193,27 @@ export default function TraineeCaseViewPage({ params }) {
           </div>
           <div className="flex w-full flex-wrap gap-3 sm:w-auto">
             {referenceDocuments.map((doc) => {
-              const referenceKey = doc.id || doc.storagePath || doc.downloadURL || doc.fileName;
+              const referenceKey = getReferenceKey(doc);
               const isOpened = referenceKey ? openedReferenceDocs.has(referenceKey) : false;
+              const hasLink = Boolean(doc.storagePath || doc.downloadURL);
+              const isPending = doc.pending || (!hasLink && (doc.generationSpec || doc.generationSpecId));
               return (
                 <Button
                   key={doc.id}
                   variant="secondary"
                   className={`text-xs px-4 py-2 border ${
-                    isOpened ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-rose-200 bg-rose-50 text-rose-700'
+                    isOpened ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-white text-slate-700'
                   } hover:bg-white w-[260px]`}
                   onClick={() => handleDownloadReferenceDoc(doc)}
                   isLoading={downloadingReferenceId === doc.id}
-                  disabled={downloadingReferenceId && downloadingReferenceId !== doc.id}
-                  title={doc.fileName}
+                  disabled={!hasLink || (downloadingReferenceId && downloadingReferenceId !== doc.id)}
+                  title={isPending ? 'Document is generating' : doc.fileName}
                 >
                   <Download size={14} className="inline mr-2" />
-                  <span className="truncate inline-block align-middle">{doc.fileName || 'Reference'}</span>
+                  <span className="truncate inline-block align-middle">
+                    {doc.fileName || 'Reference'}
+                    {isPending ? ' (Generating)' : ''}
+                  </span>
                 </Button>
               );
             })}
@@ -1773,11 +2223,18 @@ export default function TraineeCaseViewPage({ params }) {
     );
   };
 
+  const getStepNumber = (stepKey) => {
+    const idx = workflowSteps.indexOf(stepKey);
+    return idx >= 0 ? idx + 1 : null;
+  };
+
   const renderInstructionStep = () => {
     if (!caseData?.instruction) {
       return (
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
-          <h2 className="text-2xl font-semibold text-slate-900">Step 1 — Instruction</h2>
+          <h2 className="text-2xl font-semibold text-slate-900">
+            Step {getStepNumber(FLOW_STEPS.INSTRUCTION) || 1} — Instruction
+          </h2>
           <p className="text-sm text-slate-600 mt-2">
             Instructional material is missing for this case. Ask your instructor to add a briefing and gate
             check before continuing.
@@ -1789,7 +2246,9 @@ export default function TraineeCaseViewPage({ params }) {
     return (
       <div className="space-y-4">
         <div>
-          <h2 className="text-2xl font-semibold text-slate-900">Step 1 — Instruction</h2>
+          <h2 className="text-2xl font-semibold text-slate-900">
+            Step {getStepNumber(FLOW_STEPS.INSTRUCTION) || 1} — Instruction
+          </h2>
           <p className="text-sm text-slate-600">
             {gateScope === 'per_attempt'
               ? 'Review the materials and successfully answer the knowledge check questions to access the simulation.'
@@ -1809,14 +2268,247 @@ export default function TraineeCaseViewPage({ params }) {
     );
   };
 
+  const renderCaCheckStep = () => {
+    if (!tieOutGateConfig) {
+      return (
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6 space-y-4">
+        <div>
+          <h2 className="text-2xl font-semibold text-slate-900">
+            Step {getStepNumber(FLOW_STEPS.CA_CHECK) || 2} — C&amp;A Tie-Out
+          </h2>
+          <p className="text-sm text-slate-600">
+            This case does not include a tie-out gate. Continue to selection.
+          </p>
+        </div>
+          <div className="flex justify-end">
+            <Button onClick={() => updateActiveStep(FLOW_STEPS.SELECTION)}>
+              Continue to Selection
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    const tieOutDocs =
+      tieOutReferenceDocuments.length > 0 ? tieOutReferenceDocuments : referenceDocuments;
+    const assessmentOptions = Array.isArray(tieOutGateConfig?.assessmentOptions)
+      ? tieOutGateConfig.assessmentOptions
+      : [
+          { id: 'assess_yes', text: 'Yes, they tie out.', correct: false, outcome: 'match' },
+          { id: 'assess_no', text: 'No, they do not tie out.', correct: true, outcome: 'mismatch' },
+        ];
+    const actionOptions = Array.isArray(tieOutGateConfig?.actionOptions)
+      ? tieOutGateConfig.actionOptions
+      : Array.isArray(tieOutGateConfig?.options)
+      ? tieOutGateConfig.options
+      : [];
+    const tieOutFeedback = tieOutAssessmentFeedback;
+
+    return (
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6 space-y-4">
+        <div>
+          <h2 className="text-2xl font-semibold text-slate-900">
+            Step {getStepNumber(FLOW_STEPS.CA_CHECK) || 2} — C&amp;A Tie-Out
+          </h2>
+          <p className="text-sm text-slate-600">
+            Review the AP aging and the ledger, then determine whether the totals tie before you select items to test.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-4">
+          <div>
+            <h3 className="text-base font-semibold text-amber-900">Tie-Out Evidence</h3>
+            <p className="text-sm text-amber-800">
+              Review the AP aging and the AP ledger in parallel.
+            </p>
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            {tieOutDocs.map((doc) => {
+              const view = tieOutDocViews[doc.id] || {};
+              const previewUrl = view.url || doc.downloadURL || '';
+              const previewError = view.error || '';
+              const previewLoading = view.loading || false;
+              const hasLink = Boolean(doc.storagePath || doc.downloadURL);
+              const isPending = doc.pending || (!hasLink && (doc.generationSpec || doc.generationSpecId));
+              const canPreview = isInlinePreviewable(doc.contentType, doc.fileName || previewUrl);
+              return (
+                <div key={doc.id} className="bg-white border border-amber-200 rounded-lg overflow-hidden shadow-sm">
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-amber-200 bg-amber-50">
+                    <div className="text-xs font-semibold text-amber-900 truncate">{doc.fileName || 'Reference'}</div>
+                    <Button
+                      variant="secondary"
+                      className="text-xs px-2 py-1"
+                      onClick={() => handleDownloadReferenceDoc(doc)}
+                      isLoading={downloadingReferenceId === doc.id}
+                      disabled={!hasLink || (downloadingReferenceId && downloadingReferenceId !== doc.id)}
+                    >
+                      <ExternalLink size={12} className="inline mr-1" /> Open
+                    </Button>
+                  </div>
+                  <div className="bg-white">
+                    {previewLoading ? (
+                      <div className="flex flex-col items-center justify-center text-amber-700 h-[320px]">
+                        <Loader2 size={24} className="animate-spin mb-2" />
+                        <p className="text-xs">Loading document…</p>
+                      </div>
+                    ) : isPending ? (
+                      <div className="flex flex-col items-center justify-center text-amber-800 h-[320px]">
+                        <p className="text-xs font-semibold">Document is generating…</p>
+                        <p className="text-[11px] text-amber-700">This will appear once processing finishes.</p>
+                      </div>
+                    ) : previewError ? (
+                      <div className="px-4 py-6 text-xs text-amber-800">{previewError}</div>
+                    ) : canPreview && previewUrl ? (
+                      <iframe
+                        title={doc.fileName || 'Reference document'}
+                        src={previewUrl}
+                        className="w-full h-[320px] md:h-[360px] xl:h-[380px]"
+                      />
+                    ) : (
+                      <div className="px-4 py-6 text-xs text-amber-800">
+                        Preview not available. Use “Open” to view this document.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {!tieOutPassed ? (
+            <div className="space-y-3">
+              {!tieOutAssessmentPassed ? (
+                <>
+                  <p className="text-sm font-semibold text-amber-900">
+                    {tieOutGateConfig?.assessmentQuestion || 'Do the AP aging and AP ledger totals tie out?'}
+                  </p>
+                  <div className="space-y-2">
+                    {assessmentOptions.map((option) => (
+                      <label key={option.id} className="flex items-start gap-3 text-sm text-amber-900">
+                        <input
+                          type="radio"
+                          name="tie-out-assessment"
+                          value={option.id}
+                          checked={tieOutSelectionId === option.id}
+                          onChange={() => {
+                            setTieOutSelectionId(option.id);
+                            setTieOutAssessmentFeedback('');
+                            setTieOutActionSelectionId('');
+                            setTieOutActionFeedback('');
+                            setTieOutAssessmentPassed(false);
+                            setTieOutNeedsAction(false);
+                          }}
+                          className="mt-1"
+                        />
+                        <span>{option.text}</span>
+                      </label>
+                    ))}
+                  </div>
+                  {tieOutFeedback ? (
+                    <div className="text-sm text-amber-800">{tieOutFeedback}</div>
+                  ) : null}
+                  <div className="flex items-center gap-3">
+                    <Button variant="secondary" onClick={handleTieOutAssessmentSubmit}>
+                      Submit Tie-Out Assessment
+                    </Button>
+                    {!tieOutDocsOpened ? (
+                      <span className="text-xs text-amber-700">Review both documents before answering.</span>
+                    ) : null}
+                  </div>
+                </>
+              ) : tieOutNeedsAction ? (
+                <>
+                  <p className="text-sm font-semibold text-amber-900">
+                    {tieOutGateConfig?.actionQuestion ||
+                      'You indicated the reports do not tie. What is the best next step?'}
+                  </p>
+                  <div className="space-y-2">
+                    {actionOptions.map((option) => (
+                      <label key={option.id} className="flex items-start gap-3 text-sm text-amber-900">
+                        <input
+                          type="radio"
+                          name="tie-out-action"
+                          value={option.id}
+                          checked={tieOutActionSelectionId === option.id}
+                          onChange={() => {
+                            setTieOutActionSelectionId(option.id);
+                            setTieOutActionFeedback('');
+                          }}
+                          className="mt-1"
+                        />
+                        <span>{option.text}</span>
+                      </label>
+                    ))}
+                  </div>
+                  {tieOutActionFeedback ? (
+                    <div className="text-sm text-amber-800">{tieOutActionFeedback}</div>
+                  ) : null}
+                  <div className="flex items-center gap-3">
+                    <Button variant="secondary" onClick={handleTieOutActionSubmit}>
+                      Submit Next Step
+                    </Button>
+                  </div>
+                </>
+              ) : null}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-sm text-emerald-700 font-semibold">
+                Tie-out cleared. Use the corrected population for your selections.
+              </div>
+              <Button onClick={() => updateActiveStep(FLOW_STEPS.SELECTION)}>
+                Continue to Selection
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   const renderSelectionStep = () => (
-    <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6 space-y-4">
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6 space-y-4">
       <div>
-        <h2 className="text-2xl font-semibold text-slate-900">Step 2 — Select Disbursements</h2>
+        <h2 className="text-2xl font-semibold text-slate-900">
+          Step {getStepNumber(FLOW_STEPS.SELECTION) || 2} — Select Disbursements
+        </h2>
         <p className="text-sm text-slate-500">
           Choose which disbursements you want to test. You will review supporting documents on the next step.
         </p>
       </div>
+
+      {selectionScopeConfig ? (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-2">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h3 className="text-base font-semibold text-slate-900">Selection Scope</h3>
+              <p className="text-sm text-slate-600">
+                Select every disbursement at or above the threshold.
+              </p>
+            </div>
+            <div className="text-sm text-slate-700 font-semibold">
+              Threshold: {currencyFormatter.format(scopeThreshold || 0)} (
+              {Math.round(Number(selectionScopeConfig?.scopePercent || 0) * 100)}% of PM)
+            </div>
+          </div>
+          <div className="grid gap-3 md:grid-cols-2 text-sm text-slate-700">
+            <div>
+              <span className="font-semibold">Performance materiality:</span>{' '}
+              {currencyFormatter.format(Number(selectionScopeConfig?.performanceMateriality || 0))}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {tieOutGateConfig && !tieOutPassed ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <span>Complete the C&amp;A tie-out step before selecting disbursements.</span>
+          <Button variant="secondary" onClick={() => updateActiveStep(FLOW_STEPS.CA_CHECK)}>
+            Return to Tie-Out
+          </Button>
+        </div>
+      ) : null}
 
       {hasPendingGeneration ? (
         <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-6 py-8 text-center">
@@ -1833,7 +2525,8 @@ export default function TraineeCaseViewPage({ params }) {
           {disbursementList.map((d, index) => {
             const paymentId = d.paymentId;
             const checkboxId = paymentId ? `cb-${paymentId}` : `cb-missing-${index + 1}`;
-            const disabled = isLocked || hasPendingGeneration || !paymentId;
+            const selectionLocked = tieOutGateConfig && !tieOutPassed;
+            const disabled = isLocked || hasPendingGeneration || !paymentId || selectionLocked;
             return (
               <div
                 key={d.__rowKey}
@@ -1879,7 +2572,15 @@ export default function TraineeCaseViewPage({ params }) {
         <Button variant="secondary" onClick={() => navigate('/trainee')}> 
           Back to Cases
         </Button>
-        <Button onClick={goToTestingStep} disabled={selectedIds.length === 0 || isLocked || hasPendingGeneration}>
+        <Button
+          onClick={goToTestingStep}
+          disabled={
+            selectedIds.length === 0 ||
+            isLocked ||
+            hasPendingGeneration ||
+            (tieOutGateConfig && !tieOutPassed)
+          }
+        >
           Continue to Classification
         </Button>
       </div>
@@ -1889,14 +2590,16 @@ export default function TraineeCaseViewPage({ params }) {
   const renderTestingStep = () => {
     const missingDocuments = selectedEvidenceItems.filter((item) => !item?.hasLinkedDocument);
     const missingPaymentIds = Array.from(new Set(missingDocuments.map((item) => item?.paymentId || 'Unknown ID'))); 
-    const canMakeDecision = !mustOpenReference || apAgingOpened;
+  const canMakeDecision = true;
 
     return (
       <div className="space-y-4">
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4 space-y-3">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <h2 className="text-2xl font-semibold text-slate-900">Step 3 — Classify Results</h2>
+              <h2 className="text-2xl font-semibold text-slate-900">
+                Step {getStepNumber(FLOW_STEPS.TESTING) || 3} — Classify Results
+              </h2>
               <p className="text-sm text-slate-600">
                 Review the supporting documents and allocate the disbursement amount across each classification category.
               </p>
@@ -1945,7 +2648,7 @@ export default function TraineeCaseViewPage({ params }) {
           <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6 text-sm text-slate-600">
             You do not have any disbursements selected. Return to the selection step to add them before testing.
             <div className="mt-4">
-              <Button variant="secondary" onClick={() => setActiveStep(FLOW_STEPS.SELECTION)}>
+              <Button variant="secondary" onClick={() => updateActiveStep(FLOW_STEPS.SELECTION)}>
                 Back to Selection
               </Button>
             </div>
@@ -1963,15 +2666,7 @@ export default function TraineeCaseViewPage({ params }) {
                   <p className="text-xs text-slate-500 mb-1">
                     Click a row to load its document on the left, then complete the workpaper to get the “green board” effect.
                   </p>
-                  {!canMakeDecision ? (
-                    <div className="mb-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2">
-                      <p className={`text-xs font-medium ${decisionBlockedHint ? 'text-rose-700' : 'text-rose-600'}`}>
-                        Open the AP Aging reference to unlock classifications.
-                      </p>
-                    </div>
-                  ) : (
-                    <div className="mb-4" />
-                  )}
+                  <div className="mb-4" />
                   <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
                     <div className="divide-y divide-slate-200 bg-white">
                       {selectedDisbursementDetails.map((d) => {
@@ -2058,7 +2753,6 @@ export default function TraineeCaseViewPage({ params }) {
                                   onNoteChange={(id, val) => handleAllocationChange(id, 'workpaperNote', val)}
                                   onRationaleChange={handleRationaleChange}
                                   canMakeDecision={canMakeDecision}
-                                  onDecisionBlocked={() => setDecisionBlockedHint(true)}
                                   isLocked={isLocked}
                                   totalsMatch={totalsMatch}
                                   totalEntered={totalEntered}
@@ -2074,7 +2768,7 @@ export default function TraineeCaseViewPage({ params }) {
                 </div>
 
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-2 pb-10">
-                  <Button variant="secondary" onClick={() => setActiveStep(FLOW_STEPS.SELECTION)} disabled={isLocked}>
+                  <Button variant="secondary" onClick={() => updateActiveStep(FLOW_STEPS.SELECTION)} disabled={isLocked}>
                     Back to Selection
                   </Button>
                   <Button onClick={handleSubmitTesting} disabled={!allClassified || isLocked}>
@@ -2083,6 +2777,43 @@ export default function TraineeCaseViewPage({ params }) {
                 </div>
               </div>
             </div>
+            {apAgingDoc ? (
+              <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-4">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-3">
+                  <div>
+                    <h3 className="text-lg font-semibold text-slate-900">AP Aging Reference</h3>
+                    <p className="text-xs text-slate-500">Review the AP aging summary while you classify.</p>
+                  </div>
+                  <Button
+                    variant="secondary"
+                    className="text-xs px-3 py-1"
+                    onClick={() => handleDownloadReferenceDoc(apAgingDoc)}
+                  >
+                    <ExternalLink size={14} className="inline mr-1" /> Open in new tab
+                  </Button>
+                </div>
+                <div className="bg-slate-50 rounded-lg border border-slate-200 overflow-hidden">
+                  {apAgingPreviewLoading ? (
+                    <div className="flex flex-col items-center justify-center text-slate-500 h-[320px]">
+                      <Loader2 size={24} className="animate-spin mb-2" />
+                      <p className="text-sm">Loading AP aging…</p>
+                    </div>
+                  ) : apAgingPreviewError ? (
+                    <div className="px-4 py-6 text-sm text-amber-700">{apAgingPreviewError}</div>
+                  ) : apAgingPreviewUrl ? (
+                    <iframe
+                      title="AP Aging Summary"
+                      src={apAgingPreviewUrl}
+                      className="w-full h-[360px] md:h-[420px] lg:h-[480px]"
+                    />
+                  ) : (
+                    <div className="px-4 py-6 text-sm text-slate-500">
+                      AP aging preview is not available yet.
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : null}
           </>
         )}
       </div>
@@ -2102,6 +2833,8 @@ export default function TraineeCaseViewPage({ params }) {
           <ResultsAnalysis 
             disbursements={resultsDisbursements} 
             studentAnswers={classificationAmounts} 
+            gateResults={{ tieOut: tieOutGateResult, selection: selectionGateResult }}
+            referenceDocuments={referenceDocuments}
             onRequestRetake={requestRetake}
             onReturnToDashboard={() => navigate('/trainee')}
           />
@@ -2119,6 +2852,8 @@ export default function TraineeCaseViewPage({ params }) {
   let stepContent = null;
   if (activeStep === FLOW_STEPS.INSTRUCTION) {
     stepContent = renderInstructionStep();
+  } else if (activeStep === FLOW_STEPS.CA_CHECK) {
+    stepContent = renderCaCheckStep();
   } else if (activeStep === FLOW_STEPS.SELECTION) {
     stepContent = renderSelectionStep();
   } else if (activeStep === FLOW_STEPS.TESTING) {

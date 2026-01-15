@@ -169,13 +169,22 @@ const DecoyTable = ({ items }) => {
   );
 };
 
-export default function ResultsAnalysis({ disbursements, studentAnswers, onRequestRetake, onReturnToDashboard }) {
+export default function ResultsAnalysis({
+  disbursements,
+  studentAnswers,
+  gateResults,
+  referenceDocuments = [],
+  onRequestRetake,
+  onReturnToDashboard,
+}) {
   const [activeIssueIndex, setActiveIssueIndex] = useState(0);
   const [showDecoys, setShowDecoys] = useState(false);
   const [highlightUrl, setHighlightUrl] = useState('');
   const [highlightLoading, setHighlightLoading] = useState(false);
   const [highlightError, setHighlightError] = useState('');
   const [highlightInlineNotSupported, setHighlightInlineNotSupported] = useState(false);
+  const tieOutGate = gateResults?.tieOut || null;
+  const selectionGate = gateResults?.selection || null;
 
   const { traps, routineCorrect, issues, falsePositiveCount, caughtTraps } = useMemo(() => {
     const traps = [];
@@ -185,6 +194,9 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
     let falsePositiveCount = 0;
     const selectedIds = new Set(
       studentAnswers && typeof studentAnswers === 'object' ? Object.keys(studentAnswers) : []
+    );
+    const requiredIds = new Set(
+      Array.isArray(selectionGate?.requiredIds) ? selectionGate.requiredIds : []
     );
 
     (disbursements || []).forEach((item) => {
@@ -200,6 +212,9 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
 
         const studentFlaggedException = answer?.isException === true;
         if (!studentFlaggedException) {
+          if (!hasAnswer && !requiredIds.has(item.paymentId)) {
+            return;
+          }
           issues.push({
             type: 'missed_exception',
             item,
@@ -260,7 +275,7 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
     });
 
     return { traps, routineCorrect, issues, falsePositiveCount, caughtTraps };
-  }, [disbursements, studentAnswers]);
+  }, [disbursements, selectionGate, studentAnswers]);
 
   const currentIssue = issues[activeIssueIndex] || null;
   const isDone = issues.length > 0 && activeIssueIndex >= issues.length;
@@ -273,15 +288,40 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
   const showRetake = typeof onRequestRetake === 'function' && hasTraps;
   const showReturn = typeof onReturnToDashboard === 'function';
 
-  const hasRevealForItem = (item) =>
-    !!item?.highlightedDocument && !!(item.highlightedDocument.downloadURL || item.highlightedDocument.storagePath);
+  const invoiceDoc = useMemo(() => {
+    const item = currentIssue?.item;
+    if (!item) return null;
+    if (item.highlightedDocument) return item.highlightedDocument;
+    const supporting = Array.isArray(item.supportingDocuments) ? item.supportingDocuments : [];
+    if (supporting.length > 0) {
+      const doc = supporting.find((entry) => entry && (entry.storagePath || entry.downloadURL || entry.fileName));
+      if (doc) return doc;
+    }
+    if (item.storagePath || item.downloadURL || item.fileName) {
+      return {
+        storagePath: item.storagePath,
+        downloadURL: item.downloadURL,
+        fileName: item.fileName,
+        contentType: item.contentType,
+      };
+    }
+    return null;
+  }, [currentIssue]);
+
+  const apAgingDoc = useMemo(() => {
+    const docs = Array.isArray(referenceDocuments) ? referenceDocuments : [];
+    const corrected = docs.find((doc) => String(doc?.fileName || '').toLowerCase().includes('corrected'));
+    const templateMatch = docs.find((doc) => doc?.generationSpec?.templateId === 'refdoc.ap-aging.v1');
+    const nameMatch = docs.find((doc) => String(doc?.fileName || '').toLowerCase().includes('ap aging'));
+    return corrected || templateMatch || nameMatch || null;
+  }, [referenceDocuments]);
 
   useEffect(() => {
     setHighlightUrl('');
     setHighlightError('');
     setHighlightInlineNotSupported(false);
 
-    const doc = currentIssue?.item?.highlightedDocument;
+    const doc = invoiceDoc;
     if (!doc || (!doc.downloadURL && !doc.storagePath)) {
       setHighlightLoading(false);
       return;
@@ -313,7 +353,53 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
     return () => {
       cancelled = true;
     };
-  }, [currentIssue?.item?.highlightedDocument]);
+  }, [invoiceDoc]);
+
+  const [apAgingUrl, setApAgingUrl] = useState('');
+  const [apAgingLoading, setApAgingLoading] = useState(false);
+  const [apAgingError, setApAgingError] = useState('');
+  const [apAgingInlineUnsupported, setApAgingInlineUnsupported] = useState(false);
+
+  useEffect(() => {
+    setApAgingUrl('');
+    setApAgingError('');
+    setApAgingInlineUnsupported(false);
+
+    if (!apAgingDoc || (!apAgingDoc.downloadURL && !apAgingDoc.storagePath)) {
+      setApAgingLoading(false);
+      return;
+    }
+
+    const previewOk = isInlinePreviewable(
+      apAgingDoc.contentType,
+      apAgingDoc.fileName || apAgingDoc.storagePath || apAgingDoc.downloadURL
+    );
+    setApAgingInlineUnsupported(!previewOk);
+
+    let cancelled = false;
+    setApAgingLoading(true);
+
+    resolveDocumentUrl(apAgingDoc)
+      .then((url) => {
+        if (cancelled) return;
+        setApAgingUrl(url || '');
+        setApAgingError(url ? '' : 'AP aging document is not available.');
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error('[ResultsAnalysis] Failed to load AP aging preview', err);
+        setApAgingUrl('');
+        setApAgingError('Unable to load AP aging document.');
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setApAgingLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apAgingDoc]);
 
   const goPrev = useCallback(() => {
     setActiveIssueIndex((prev) => Math.max(0, prev - 1));
@@ -328,6 +414,39 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
 
   return (
     <div className="max-w-4xl mx-auto space-y-8">
+      {tieOutGate || selectionGate ? (
+        <div className="rounded-xl border border-slate-200 bg-white shadow-sm px-6 py-5 space-y-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Gate Summary</div>
+          <div className="grid gap-3 md:grid-cols-2 text-sm text-gray-700">
+            {tieOutGate ? (
+              <div>
+                <span className="font-semibold">C&amp;A tie-out:</span>{' '}
+                {tieOutGate.passed ? 'Passed' : 'Not passed'}
+              </div>
+            ) : null}
+            {selectionGate ? (
+              <div>
+                <span className="font-semibold">Selection threshold:</span>{' '}
+                {currencyFormatter.format(Number(selectionGate.thresholdAmount || 0))}
+              </div>
+            ) : null}
+            {selectionGate ? (
+              <div>
+                <span className="font-semibold">Performance materiality:</span>{' '}
+                {currencyFormatter.format(Number(selectionGate.performanceMateriality || 0))}
+              </div>
+            ) : null}
+            {selectionGate ? (
+              <div>
+                <span className="font-semibold">Required picks:</span>{' '}
+                {Array.isArray(selectionGate.requiredIds) && selectionGate.requiredIds.length > 0
+                  ? selectionGate.requiredIds.join(', ')
+                  : 'None'}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       <div
         className={`rounded-xl border shadow-sm px-6 py-5 ${
           !hasTraps || criticalMissCount === 0
@@ -450,6 +569,111 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
             </div>
           ) : currentIssue ? (
             <div className="px-6 py-6 space-y-5">
+              {(() => {
+                const isCritical =
+                  currentIssue.type === 'missed_exception' || currentIssue.type === 'wrong_classification';
+                if (!isCritical) return null;
+                return (
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+                      <div className="border-b border-gray-200 bg-gray-50 px-4 py-3 flex items-center justify-between">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Invoice evidence</div>
+                          <div className="text-sm text-gray-700">
+                            {invoiceDoc?.fileName || 'Invoice'}
+                          </div>
+                        </div>
+                        {highlightUrl ? (
+                          <a
+                            href={highlightUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:underline"
+                          >
+                            <ExternalLink size={14} />
+                            Open
+                          </a>
+                        ) : null}
+                      </div>
+                      <div className="bg-gray-100">
+                        {!invoiceDoc ? (
+                          <div className="px-6 py-10 text-center text-sm text-gray-600">
+                            No invoice is linked to this item.
+                          </div>
+                        ) : highlightLoading ? (
+                          <div className="px-6 py-10 text-center text-sm text-gray-600">Loading invoice…</div>
+                        ) : highlightError ? (
+                          <div className="px-6 py-10 text-center text-sm text-amber-700">{highlightError}</div>
+                        ) : highlightInlineNotSupported ? (
+                          <div className="px-6 py-10 text-center text-sm text-gray-600">
+                            Preview not available for this file type. Use “Open”.
+                          </div>
+                        ) : highlightUrl ? (
+                          <iframe
+                            title="Invoice evidence"
+                            src={highlightUrl}
+                            className="w-full"
+                            style={{ height: '420px' }}
+                          />
+                        ) : (
+                          <div className="px-6 py-10 text-center text-sm text-gray-600">
+                            Invoice preview not available.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+                      <div className="border-b border-gray-200 bg-gray-50 px-4 py-3 flex items-center justify-between">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">AP aging</div>
+                          <div className="text-sm text-gray-700">
+                            {apAgingDoc?.fileName || 'AP Aging Summary'}
+                          </div>
+                        </div>
+                        {apAgingUrl ? (
+                          <a
+                            href={apAgingUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:underline"
+                          >
+                            <ExternalLink size={14} />
+                            Open
+                          </a>
+                        ) : null}
+                      </div>
+                      <div className="bg-gray-100">
+                        {!apAgingDoc ? (
+                          <div className="px-6 py-10 text-center text-sm text-gray-600">
+                            AP aging reference not found.
+                          </div>
+                        ) : apAgingLoading ? (
+                          <div className="px-6 py-10 text-center text-sm text-gray-600">Loading AP aging…</div>
+                        ) : apAgingError ? (
+                          <div className="px-6 py-10 text-center text-sm text-amber-700">{apAgingError}</div>
+                        ) : apAgingInlineUnsupported ? (
+                          <div className="px-6 py-10 text-center text-sm text-gray-600">
+                            Preview not available for this file type. Use “Open”.
+                          </div>
+                        ) : apAgingUrl ? (
+                          <iframe
+                            title="AP aging reference"
+                            src={apAgingUrl}
+                            className="w-full"
+                            style={{ height: '420px' }}
+                          />
+                        ) : (
+                          <div className="px-6 py-10 text-center text-sm text-gray-600">
+                            AP aging preview not available.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
                 <div>
                   <div className="flex flex-col gap-1">
@@ -522,54 +746,6 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
                   </div>
                 </div>
 
-                <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-                  <div className="border-b border-gray-200 bg-gray-50 px-4 py-3 flex items-center justify-between">
-                    <div>
-                      <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Highlighted invoice</div>
-                      <div className="text-sm text-gray-700">
-                        {currentIssue.item?.highlightedDocument?.fileName || 'Highlighted evidence'}
-                      </div>
-                    </div>
-                    {highlightUrl ? (
-                      <a
-                        href={highlightUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:underline"
-                      >
-                        <ExternalLink size={14} />
-                        Open
-                      </a>
-                    ) : null}
-                  </div>
-
-                  <div className="bg-gray-100">
-                    {!hasRevealForItem(currentIssue.item) ? (
-                      <div className="px-6 py-10 text-center text-sm text-gray-600">
-                        No highlighted invoice was provided for this item.
-                      </div>
-                    ) : highlightLoading ? (
-                      <div className="px-6 py-10 text-center text-sm text-gray-600">Loading highlighted invoice…</div>
-                    ) : highlightError ? (
-                      <div className="px-6 py-10 text-center text-sm text-amber-700">{highlightError}</div>
-                    ) : highlightInlineNotSupported ? (
-                      <div className="px-6 py-10 text-center text-sm text-gray-600">
-                        Preview not available for this file type. Use “Open”.
-                      </div>
-                    ) : highlightUrl ? (
-                      <iframe
-                        title="Highlighted invoice"
-                        src={highlightUrl}
-                        className="w-full"
-                        style={{ height: '520px' }}
-                      />
-                    ) : (
-                      <div className="px-6 py-10 text-center text-sm text-gray-600">
-                        Highlighted invoice not available.
-                      </div>
-                    )}
-                  </div>
-                </div>
             </div>
           ) : null}
         </div>

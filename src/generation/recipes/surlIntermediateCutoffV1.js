@@ -9,8 +9,27 @@ import {
 
 const toMoney = (value) => Number(value || 0);
 
-const buildDisbursement = ({ paymentId, payee, amount, paymentDate, answerKeyClassification, explanation }) => {
+const buildDisbursement = ({
+  paymentId,
+  payee,
+  amount,
+  paymentDate,
+  answerKeyMode = 'single',
+  answerKeyClassification,
+  answerKey,
+  explanation,
+  shouldFlag,
+  meta,
+}) => {
   const base = initialDisbursement();
+  const resolvedAnswerKey =
+    answerKey && typeof answerKey === 'object'
+      ? answerKey
+      : buildSingleAnswerKey(answerKeyClassification, toMoney(amount), explanation);
+  const resolvedShouldFlag =
+    typeof shouldFlag === 'boolean'
+      ? shouldFlag
+      : ['improperlyExcluded', 'improperlyIncluded'].includes(answerKeyClassification);
   return {
     ...base,
     _tempId: getUUID(),
@@ -18,23 +37,24 @@ const buildDisbursement = ({ paymentId, payee, amount, paymentDate, answerKeyCla
     payee,
     amount: String(amount),
     paymentDate,
-    answerKeyMode: 'single',
+    answerKeyMode,
     answerKeySingleClassification: answerKeyClassification || DEFAULT_ANSWER_KEY_CLASSIFICATION,
-    answerKey: buildSingleAnswerKey(answerKeyClassification, toMoney(amount), explanation),
-    shouldFlag: ['improperlyExcluded', 'improperlyIncluded'].includes(answerKeyClassification),
+    answerKey: resolvedAnswerKey,
+    shouldFlag: resolvedShouldFlag,
+    meta: meta && typeof meta === 'object' ? { ...meta } : {},
   };
 };
 
-export const surlPromotadorCutoffV1 = {
-  id: 'case.surl.promotador.v1',
+export const surlIntermediateCutoffV1 = {
+  id: 'case.surl.intermediate.v1',
   version: 1,
-  label: 'SURL Cutoff (Generated)',
-  description: 'Unrecorded liability trap with post-close disbursements and service-date cutoff.',
+  label: 'SURL Intermediate Cutoff (Generated)',
+  description: 'Intermediate SURL with tie-out gate, scoped selection, and allocation trap.',
   moduleTitle: 'SURL',
   pathId: 'foundations',
   pathTitle: 'Foundations',
   tier: 'foundations',
-  caseLevel: 'basic',
+  caseLevel: 'intermediate',
   auditArea: AUDIT_AREAS.PAYABLES,
   primarySkill: 'SURL',
   build: ({ overrides } = {}) => {
@@ -46,7 +66,7 @@ export const surlPromotadorCutoffV1 = {
     const resolvedCaseLevel =
       typeof overrides?.caseLevel === 'string' && overrides.caseLevel.trim()
         ? overrides.caseLevel.trim()
-        : 'basic';
+        : 'intermediate';
     const hashSeed = (value) => {
       let hash = 2166136261;
       const str = String(value);
@@ -527,24 +547,24 @@ export const surlPromotadorCutoffV1 = {
     const instruction = {
       ...initialInstruction(),
       title: 'Search for Unrecorded Liabilities',
-      moduleCode: 'SURL-101',
+      moduleCode: 'SURL-201',
       hook: {
-        headline: 'Year-end expenses can hide in January invoices.',
-        risk: 'Cutoff errors can overstate income and understate liabilities.',
-        body: 'Scan supporting invoices and compare service dates to the period end.',
+        headline: 'Tie-out first, then follow the scope.',
+        risk: 'If the population is wrong or the scope is ignored, real liabilities stay hidden.',
+        body: 'Confirm the AP reports are usable, then select enough dollars to meet the coverage rule.',
       },
       heuristic: {
-        rule_text: 'Expenses follow the work, not the paper.',
-        reminder: 'If the service happened in December, it belongs in December.',
+        rule_text: 'You can’t test a broken population, and you can’t eyeball scope.',
+        reminder: 'Tie-out first. Then hit the coverage target with required picks included.',
       },
       gateCheck: {
         question:
-          'An invoice is dated Jan 6 for services performed Dec 28. Which period should record the expense?',
-        success_message: 'Correct. The expense belongs in December.',
-        failure_message: 'Check the service date. The work happened in December.',
+          'A payment clears in January for work performed in December. Which period should record the expense?',
+        success_message: 'Correct. The expense belongs to the year the work occurred.',
+        failure_message: 'Focus on when the service happened, not when cash left.',
         options: [
-          { id: 'opt1', text: 'December', correct: true, feedback: 'Match the expense to the service date.' },
-          { id: 'opt2', text: 'January', correct: false, feedback: 'Invoice date does not control cutoff.' },
+          { id: 'opt1', text: 'December', correct: true, feedback: 'Match the expense to the service period.' },
+          { id: 'opt2', text: 'January', correct: false, feedback: 'Cash timing does not control cutoff.' },
         ],
       },
     };
@@ -634,11 +654,17 @@ export const surlPromotadorCutoffV1 = {
       .map((value, index) => (value === 'pre' ? index : null))
       .filter((value) => value !== null);
     const trapIndex = preIndexes[randomInt(0, preIndexes.length - 1)];
+    const allocationTrapIndex = (() => {
+      if (preIndexes.length <= 1) return trapIndex;
+      const eligible = preIndexes.filter((index) => index !== trapIndex);
+      return eligible[randomInt(0, eligible.length - 1)];
+    })();
 
     const disbursementTargets = offsets.map((offset, index) => {
-      let amount = Math.round(randomInt(800, 4200) / 5) * 5;
+      const isAllocationTrap = index === allocationTrapIndex;
+      let amount = Math.round(randomInt(12000, 90000) / 25) * 25;
       while (amountSet.has(amount)) {
-        amount += 5;
+        amount += 25;
       }
       amountSet.add(amount);
       const invoiceCount =
@@ -647,14 +673,16 @@ export const surlPromotadorCutoffV1 = {
           : rng() < 0.25
           ? 2
           : 1;
+      const resolvedInvoiceCount = isAllocationTrap ? 1 : invoiceCount;
       return {
         paymentId: `P-${101 + index}`,
         payee: payees[index],
         paymentDate: addDaysPseudo(yearEnd, offset),
         amount,
-        invoiceCount,
+        invoiceCount: resolvedInvoiceCount,
         serviceTiming: serviceTiming[index],
         trap: index === trapIndex,
+        allocationTrap: isAllocationTrap,
       };
     });
 
@@ -703,7 +731,7 @@ export const surlPromotadorCutoffV1 = {
       if (issues.some((issue) => issue.code === 'amount-variation')) {
         nextTargets = nextTargets.map((target, index) => ({
           ...target,
-          amount: target.amount + index * 5,
+          amount: target.amount + index * 25,
         }));
       }
       if (issues.some((issue) => issue.code === 'no-trap')) {
@@ -735,21 +763,34 @@ export const surlPromotadorCutoffV1 = {
         amounts.push(primary, secondary);
       }
       return amounts.map((amount, idx) => {
+        const isAllocationTrap = target.allocationTrap && idx === 0;
+        const servicePeriodStart = isAllocationTrap
+          ? addDaysPseudo(yearEnd, -12)
+          : null;
+        const servicePeriodEnd = isAllocationTrap
+          ? addDaysPseudo(yearEnd, 10)
+          : null;
         const serviceDate =
-          target.serviceTiming === 'pre'
+          servicePeriodStart ||
+          (target.serviceTiming === 'pre'
             ? addDaysPseudo(yearEnd, -(12 + idx * 3))
-            : addDaysPseudo(yearEnd, 7 + idx * 5);
+            : addDaysPseudo(yearEnd, 7 + idx * 5));
         const invoiceDate = addDaysPseudo(target.paymentDate, -(4 + idx));
-        const shippingDate = addDaysPseudo(serviceDate, 2);
+        const shippingDate = isAllocationTrap ? null : addDaysPseudo(serviceDate, 2);
         const dueDate = addDaysPseudo(target.paymentDate, 26 + idx);
         const shouldInclude = shouldBeInAging(serviceDate, shippingDate);
-        const isRecorded = target.trap && idx === 0 && shouldInclude ? false : shouldInclude;
+        const isRecorded =
+          (target.trap || target.allocationTrap) && idx === 0 && shouldInclude
+            ? false
+            : shouldInclude;
         return {
           paymentId: target.paymentId,
           vendor: target.payee,
           invoiceNumber: `INV-${invoiceIndexStart + idx + 1}`,
           invoiceDate,
           serviceDate,
+          servicePeriodStart,
+          servicePeriodEnd,
           shippingDate,
           dueDate,
           amount,
@@ -794,7 +835,7 @@ export const surlPromotadorCutoffV1 = {
         }
       });
 
-      const apAgingRows = invoiceCatalog
+      const apAgingRowsCorrected = invoiceCatalog
         .filter((invoice) => invoice.isRecorded)
         .map((invoice) => ({
           vendor: invoice.vendor,
@@ -804,6 +845,43 @@ export const surlPromotadorCutoffV1 = {
           amount: invoice.amount,
           buckets: { current: invoice.amount, days30: 0, days60: 0, days90: 0, days90Plus: 0 },
         }));
+
+      const computeAgingTotal = (rows = []) =>
+        rows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+
+      const apAgingTotal = computeAgingTotal(apAgingRowsCorrected);
+      const apAgingRowsMismatch = (() => {
+        if (apAgingRowsCorrected.length === 0) return [];
+        const largestIndex = apAgingRowsCorrected.reduce(
+          (best, row, index) =>
+            Number(row.amount || 0) > Number(apAgingRowsCorrected[best].amount || 0) ? index : best,
+          0
+        );
+        const deltaRaw = apAgingTotal * (0.02 + rng() * 0.06);
+        const minDelta = Math.min(5000, apAgingTotal * 0.05);
+        const maxDelta = Math.max(minDelta, apAgingTotal * 0.15);
+        const delta = roundMoney(Math.min(maxDelta, Math.max(minDelta, deltaRaw)));
+        return apAgingRowsCorrected.map((row, index) => {
+          if (index !== largestIndex) return { ...row };
+          const nextAmount = Math.max(0, roundMoney(Number(row.amount || 0) - delta));
+          return {
+            ...row,
+            amount: nextAmount,
+            buckets: { current: nextAmount, days30: 0, days60: 0, days90: 0, days90Plus: 0 },
+          };
+        });
+      })();
+
+      const leadScheduleRows = [
+        {
+          vendor: 'Accounts Payable - Trade',
+          invoiceNumber: 'GL-AP',
+          invoiceDate: yearEnd,
+          dueDate: yearEnd,
+          amount: apAgingTotal,
+          buckets: { current: apAgingTotal, days30: 0, days60: 0, days90: 0, days90Plus: 0 },
+        },
+      ];
 
       const classifyDisbursement = (invoices) => {
         const hasPriorPeriod = invoices.some((inv) =>
@@ -851,9 +929,56 @@ export const surlPromotadorCutoffV1 = {
         return `${label} ${value || 'after year-end'} was after ${yearEndLabel}, so it was correctly excluded from AP aging.`;
       };
 
+      const computeAllocationSplit = (invoice, totalAmount) => {
+        if (!invoice || !yearEndDate) return null;
+        const start = parseCutoffDate(invoice.servicePeriodStart);
+        const end = parseCutoffDate(invoice.servicePeriodEnd);
+        if (!start || !end) return null;
+        const msPerDay = 1000 * 60 * 60 * 24;
+        const totalDays = Math.round((end.getTime() - start.getTime()) / msPerDay) + 1;
+        if (totalDays <= 0) return null;
+        const cutoffEnd = new Date(Math.min(end.getTime(), yearEndDate.getTime()));
+        const preDays = cutoffEnd.getTime() >= start.getTime()
+          ? Math.round((cutoffEnd.getTime() - start.getTime()) / msPerDay) + 1
+          : 0;
+        const preAmount = roundMoney((Number(totalAmount || 0) * preDays) / totalDays);
+        const postAmount = roundMoney(Number(totalAmount || 0) - preAmount);
+        return {
+          preAmount,
+          postAmount,
+          preDays,
+          totalDays,
+          startLabel: invoice.servicePeriodStart,
+          endLabel: invoice.servicePeriodEnd,
+        };
+      };
+
       const disbursements = targets.map((target) => {
         const invoices = invoiceCatalog.filter((invoice) => invoice.paymentId === target.paymentId);
         const total = invoices.reduce((sum, inv) => sum + Number(inv.amount || 0), 0);
+        const allocationInvoice = invoices.find((invoice) => invoice.servicePeriodStart && invoice.servicePeriodEnd);
+        if (target.allocationTrap && allocationInvoice) {
+          const split = computeAllocationSplit(allocationInvoice, total);
+          if (split) {
+            const explanation = `Service period ${split.startLabel} - ${split.endLabel} spans year-end. Accrue ${split.preDays}/${split.totalDays} of the cost.`;
+            return buildDisbursement({
+              paymentId: target.paymentId,
+              payee: target.payee,
+              amount: total,
+              paymentDate: target.paymentDate,
+              answerKeyMode: 'split',
+              answerKeyClassification: 'improperlyExcluded',
+              answerKey: {
+                properlyIncluded: 0,
+                properlyExcluded: split.postAmount,
+                improperlyIncluded: 0,
+                improperlyExcluded: split.preAmount,
+                explanation,
+              },
+              shouldFlag: true,
+            });
+          }
+        }
         const classification = classifyDisbursement(invoices);
         return buildDisbursement({
           paymentId: target.paymentId,
@@ -865,10 +990,16 @@ export const surlPromotadorCutoffV1 = {
         });
       });
 
-      return { invoiceCatalog, apAgingRows, disbursements };
+      return {
+        invoiceCatalog,
+        apAgingRowsCorrected,
+        apAgingRowsMismatch,
+        leadScheduleRows,
+        disbursements,
+      };
     };
 
-    const validateCaseData = ({ targets, invoiceCatalog, apAgingRows, disbursements }) => {
+    const validateCaseData = ({ targets, invoiceCatalog, apAgingRowsCorrected, disbursements }) => {
       const issues = [];
       if (disbursements.length < 10) {
         issues.push({ code: 'disbursement-count-low', message: 'Fewer than 10 disbursements generated.' });
@@ -951,7 +1082,7 @@ export const surlPromotadorCutoffV1 = {
         }
       });
 
-      const apMap = new Map(apAgingRows.map((row) => [row.invoiceNumber, row]));
+      const apMap = new Map(apAgingRowsCorrected.map((row) => [row.invoiceNumber, row]));
       let trapCount = 0;
       invoiceCatalog.forEach((invoice) => {
         const shouldInclude = shouldBeInAging(invoice.serviceDate, invoice.shippingDate);
@@ -994,7 +1125,9 @@ export const surlPromotadorCutoffV1 = {
 
     let validatedTargets = disbursementTargets;
     let invoiceCatalog = [];
-    let apAgingRows = [];
+    let apAgingRowsCorrected = [];
+    let apAgingRowsMismatch = [];
+    let leadScheduleRows = [];
     let disbursements = [];
     let lastIssues = [];
 
@@ -1002,12 +1135,14 @@ export const surlPromotadorCutoffV1 = {
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       const built = buildCaseData(validatedTargets);
       invoiceCatalog = built.invoiceCatalog;
-      apAgingRows = built.apAgingRows;
+      apAgingRowsCorrected = built.apAgingRowsCorrected;
+      apAgingRowsMismatch = built.apAgingRowsMismatch;
+      leadScheduleRows = built.leadScheduleRows;
       disbursements = built.disbursements;
       lastIssues = validateCaseData({
         targets: validatedTargets,
         invoiceCatalog,
-        apAgingRows,
+        apAgingRowsCorrected,
         disbursements,
       });
       if (lastIssues.length === 0) break;
@@ -1057,9 +1192,13 @@ export const surlPromotadorCutoffV1 = {
       const shippingTerms =
         templateId === 'invoice.endeavorr.v1' ? 'Shipping Point' : 'FOB Shipping Point';
       const serviceInvoice = isServiceInvoice(invoice.vendor);
-      const dateLabel = serviceInvoice ? 'Service Date' : '';
+      const servicePeriodLabel =
+        invoice.servicePeriodStart && invoice.servicePeriodEnd
+          ? `${invoice.servicePeriodStart} - ${invoice.servicePeriodEnd}`
+          : '';
+      const dateLabel = serviceInvoice ? (servicePeriodLabel ? 'Service Period' : 'Service Date') : '';
       const dateValue = serviceInvoice
-        ? buildServiceDateValue(invoice.serviceDate || invoice.shippingDate || invoice.invoiceDate)
+        ? servicePeriodLabel || buildServiceDateValue(invoice.serviceDate || invoice.shippingDate || invoice.invoiceDate)
         : invoice.shippingDate;
       const data = {
         brandName: invoice.vendor.toUpperCase(),
@@ -1087,10 +1226,84 @@ export const surlPromotadorCutoffV1 = {
       return data;
     };
 
-    const apAgingData = {
+    const sumAmounts = (list) =>
+      list.reduce((sum, item) => sum + Number(item?.amount || 0), 0);
+
+    const disbursementTotal = sumAmounts(disbursements);
+    const minScopePercent = 0.1;
+    const maxScopePercent = 0.15;
+    const scopePercent = minScopePercent + rng() * (maxScopePercent - minScopePercent);
+    const sortedAmounts = disbursements
+      .map((item) => Number(item?.amount || 0))
+      .filter((amount) => Number.isFinite(amount) && amount > 0)
+      .sort((a, b) => b - a);
+    const minRequired = 3;
+    const maxRequired = 7;
+    const targetRequired = Math.min(
+      sortedAmounts.length,
+      Math.max(minRequired, randomInt(minRequired, maxRequired))
+    );
+    const roundDownThousand = (value) => Math.floor(Number(value || 0) / 1000) * 1000;
+    let thresholdAmount = roundDownThousand(sortedAmounts[targetRequired - 1] || 0);
+
+    const amountsSet = new Set(sortedAmounts.map((amount) => roundMoney(amount)));
+    if (amountsSet.has(thresholdAmount)) {
+      thresholdAmount = roundDownThousand(Math.max(0, thresholdAmount - 1000));
+    }
+
+    const lowerPmBound = thresholdAmount / maxScopePercent;
+    const upperPmBound = thresholdAmount / minScopePercent;
+    const baselinePm = disbursementTotal * (0.9 + rng() * 0.35);
+    const unclampedPm = Math.max(250000, baselinePm);
+    const performanceMateriality = roundMoney(
+      Math.min(Math.max(unclampedPm, lowerPmBound), upperPmBound)
+    );
+
+    const thresholdGuard = (() => {
+      if (!Number.isFinite(performanceMateriality) || performanceMateriality <= 0) return thresholdAmount;
+      const rawThreshold = performanceMateriality * scopePercent;
+      let rounded = roundDownThousand(rawThreshold);
+      if (amountsSet.has(rounded)) {
+        rounded = roundDownThousand(Math.max(0, rounded - 1000));
+      }
+      return rounded;
+    })();
+    thresholdAmount = thresholdGuard;
+
+    const apAgingMismatchData = {
       companyName: 'Team Up Promotional Products, LLC',
       asOfDate: 'December 31 20X2',
-      rows: apAgingRows,
+      rows: apAgingRowsMismatch,
+    };
+
+    const apAgingCorrectedData = {
+      companyName: 'Team Up Promotional Products, LLC',
+      asOfDate: 'December 31 20X2',
+      rows: apAgingRowsCorrected,
+    };
+
+    const apAgingTotalForLead = sumAmounts(apAgingRowsCorrected);
+    const priorBalanceRatio = 0.85 + rng() * 0.3;
+    const priorBalance = roundMoney(Math.max(0, apAgingTotalForLead * priorBalanceRatio));
+    const apLeadScheduleData = {
+      clientName: 'Team Up Promotional Products, LLC',
+      workpaperTitle: 'AP Lead Schedule (GL)',
+      periodEnding: 'December 31 20X2',
+      trialBalanceName: 'Trial Balance',
+      currentDate: 'December 31 20X2',
+      priorDate: 'December 31 20X1',
+      lines: leadScheduleRows.map((row) => ({
+        account: '2000',
+        description: row.vendor || 'Accounts Payable - Trade',
+        priorAmount: priorBalance,
+        unadjAmount: row.amount,
+        finalAmount: row.amount,
+      })),
+      total: {
+        prior_amount: priorBalance,
+        unadj_amount: sumAmounts(leadScheduleRows),
+        final_amount: sumAmounts(leadScheduleRows),
+      },
     };
 
     const referenceDocuments = [
@@ -1116,11 +1329,31 @@ export const surlPromotadorCutoffV1 = {
       {
         ...initialReferenceDocument(),
         _tempId: getUUID(),
-        fileName: 'AP Aging Summary.pdf',
+        fileName: 'AP Aging Summary (Initial).pdf',
         generationSpecId: null,
         generationSpec: {
           templateId: 'refdoc.ap-aging.v1',
-          data: apAgingData,
+          data: apAgingMismatchData,
+        },
+      },
+      {
+        ...initialReferenceDocument(),
+        _tempId: getUUID(),
+        fileName: 'AP Lead Schedule (GL).pdf',
+        generationSpecId: null,
+        generationSpec: {
+          templateId: 'refdoc.ap-leadsheet.v1',
+          data: apLeadScheduleData,
+        },
+      },
+      {
+        ...initialReferenceDocument(),
+        _tempId: getUUID(),
+        fileName: 'AP Aging Summary (Corrected).pdf',
+        generationSpecId: null,
+        generationSpec: {
+          templateId: 'refdoc.ap-aging.v1',
+          data: apAgingCorrectedData,
         },
       },
     ];
@@ -1129,11 +1362,78 @@ export const surlPromotadorCutoffV1 = {
       doc.generationSpecId = doc._tempId;
     });
 
+    const tieOutGate = {
+      enabled: true,
+      skillTag: 'ca_tie_out',
+      assessmentQuestion: 'Do the AP aging and AP ledger totals tie out?',
+      assessmentOptions: [
+        {
+          id: 'assess_yes',
+          text: 'Yes, they tie out.',
+          correct: false,
+          outcome: 'match',
+          feedback: 'Double-check the totals and the report run dates before moving on.',
+        },
+        {
+          id: 'assess_no',
+          text: 'No, they do not tie out.',
+          correct: true,
+          outcome: 'mismatch',
+          feedback: 'Good catch. Resolve the mismatch before selecting items to test.',
+        },
+      ],
+      actionQuestion: 'You indicated the reports do not tie. What is the best next step?',
+      successMessage: 'Correct. Get a corrected population before selecting items.',
+      failureMessage: 'Not yet. Resolve the tie-out before you select items to test.',
+      actionOptions: [
+        {
+          id: 'opt1',
+          text: 'Proceed with selection and note the mismatch for later.',
+          correct: false,
+          feedback: 'You need a corrected population before you can scope testing.',
+        },
+        {
+          id: 'opt2',
+          text: 'Ask the client to correct the tie-out and rerun the reports.',
+          correct: true,
+          feedback: 'That is the right next step.',
+        },
+        {
+          id: 'opt3',
+          text: 'Ignore the aging and test disbursements randomly.',
+          correct: false,
+          feedback: 'Testing off a broken population risks missing liabilities.',
+        },
+      ],
+      referenceDocNames: ['AP Aging Summary (Initial).pdf', 'AP Lead Schedule (GL).pdf'],
+      correctedReferenceDocNames: ['AP Aging Summary (Corrected).pdf', 'AP Lead Schedule (GL).pdf'],
+      requireOpenedDocs: true,
+      mismatch: {
+        agingTotal: sumAmounts(apAgingRowsMismatch),
+        ledgerTotal: sumAmounts(leadScheduleRows),
+      },
+    };
+
+    const selectionScope = {
+      performanceMateriality,
+      scopePercent,
+      thresholdAmount,
+      skillTag: 'scope_threshold',
+    };
+
     return {
       caseName: `SURL Cutoff: January Disbursements (${yearEnd})`,
       auditArea: AUDIT_AREAS.PAYABLES,
       layoutType: 'two_pane',
       instruction,
+      workpaper: {
+        layoutType: 'two_pane',
+        layoutConfig: { tieOutGate, selectionScope },
+      },
+      workflow: {
+        steps: ['instruction', 'ca_check', 'selection', 'testing', 'results'],
+        gateScope: 'per_attempt',
+      },
       disbursements,
       referenceDocuments,
       generationPlan: {

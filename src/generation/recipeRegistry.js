@@ -1,6 +1,7 @@
 import { surlPromotadorCutoffV1 } from './recipes/surlPromotadorCutoffV1';
+import { surlIntermediateCutoffV1 } from './recipes/surlIntermediateCutoffV1';
 
-const RECIPES = [surlPromotadorCutoffV1];
+const RECIPES = [surlPromotadorCutoffV1, surlIntermediateCutoffV1];
 
 export const listCaseRecipes = () =>
   RECIPES.map((recipe) => ({
@@ -12,6 +13,7 @@ export const listCaseRecipes = () =>
     tier: recipe.tier || 'foundations',
     auditArea: recipe.auditArea || '',
     primarySkill: recipe.primarySkill || '',
+    caseLevel: recipe.caseLevel || '',
     version: Number.isFinite(Number(recipe.version)) ? Number(recipe.version) : 1,
   }));
 

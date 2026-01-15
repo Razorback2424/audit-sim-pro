@@ -30,7 +30,7 @@ import DashboardMetrics from '../components/admin/DashboardMetrics';
 import SetupAlerts from '../components/admin/SetupAlerts';
 import RecentActivity from '../components/admin/RecentActivity';
 import QuickActions from '../components/admin/QuickActions';
-import { AUDIT_AREA_VALUES } from '../models/caseConstants';
+import { AUDIT_AREA_VALUES, getCaseLevelLabel } from '../models/caseConstants';
 
 const STATUS_OPTIONS = [
   { value: 'assigned', label: 'Assigned' },
@@ -62,6 +62,8 @@ const humanizeToken = (value = '') =>
 
 const formatTierLabel = (tier) => TIER_LABELS[tier] || humanizeToken(tier) || 'Tier';
 const formatPathLabel = (pathId) => humanizeToken(pathId) || 'Path';
+const formatLevelLabel = (caseLevel, tier) =>
+  caseLevel ? getCaseLevelLabel(caseLevel) : formatTierLabel(tier);
 
 const STATUS_BADGE_VARIANTS = {
   submitted: 'bg-green-100 text-green-700',
@@ -986,7 +988,7 @@ export default function AdminDashboardPage() {
                       {recipe.moduleTitle || recipe.label || recipe.id}
                     </div>
                     <div className="text-xs text-gray-500 mt-1">
-                      {formatPathLabel(recipe.pathId)} · {formatTierLabel(recipe.tier)} · {recipe.auditArea || 'area'}
+                      {formatPathLabel(recipe.pathId)} · {formatLevelLabel(recipe.caseLevel, recipe.tier)} · {recipe.auditArea || 'area'}
                     </div>
                     <div className="text-xs text-gray-400 mt-1">v{recipe.recipeVersion || 1}</div>
                   </div>

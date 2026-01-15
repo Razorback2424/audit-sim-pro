@@ -1145,11 +1145,270 @@ body { color: ${t.ink}; font-family: "Times New Roman", Times, serif; }
   return { html, css, pdfOptions: { format: 'Letter' } };
 };
 
+const renderApLeadSheetV1 = ({ data = {}, theme = {} }) => {
+  const pick = (keys, fallback = '') => {
+    for (const key of keys) {
+      if (Object.prototype.hasOwnProperty.call(data, key)) {
+        const value = data[key];
+        if (value !== null && value !== undefined && String(value).trim() !== '') {
+          return value;
+        }
+      }
+    }
+    return fallback;
+  };
+
+  const parseAmount = (value) => {
+    if (value === null || value === undefined || value === '') return null;
+    if (typeof value === 'number' && Number.isFinite(value)) return value;
+    const cleaned = String(value).replace(/[^0-9.-]/g, '');
+    const num = Number(cleaned);
+    return Number.isFinite(num) ? num : null;
+  };
+
+  const formatMoneyValue = (value, currency) => {
+    if (value === null || value === undefined || value === '') {
+      return '';
+    }
+    const parsed = parseAmount(value);
+    if (parsed === null) return escapeHtml(value);
+    return escapeHtml(money(parsed, currency));
+  };
+
+  const lines = Array.isArray(data.lines) ? data.lines : [];
+  const totals = data.totals || data.total || {};
+  const currency = pick(['currency', 'curr'], 'USD');
+
+  const totalPrior =
+    parseAmount(totals.priorAmount ?? totals.prior_amount) ??
+    lines.reduce((sum, line) => sum + (parseAmount(line?.priorAmount ?? line?.prior_amount) || 0), 0);
+  const totalUnadj =
+    parseAmount(totals.unadjAmount ?? totals.unadj_amount) ??
+    lines.reduce((sum, line) => sum + (parseAmount(line?.unadjAmount ?? line?.unadj_amount) || 0), 0);
+  const totalAje =
+    parseAmount(totals.ajeAmount ?? totals.aje_amount) ??
+    lines.reduce((sum, line) => sum + (parseAmount(line?.ajeAmount ?? line?.aje_amount) || 0), 0);
+  const totalRje =
+    parseAmount(totals.rjeAmount ?? totals.rje_amount) ??
+    lines.reduce((sum, line) => sum + (parseAmount(line?.rjeAmount ?? line?.rje_amount) || 0), 0);
+  const totalFinal =
+    parseAmount(totals.finalAmount ?? totals.final_amount) ??
+    lines.reduce((sum, line) => sum + (parseAmount(line?.finalAmount ?? line?.final_amount) || 0), 0);
+
+  const workpaperTitle = pick(['workpaperTitle', 'workpaper_title'], '');
+  const clientName = pick(['clientName', 'client_name'], '');
+  const periodEnding = pick(['periodEnding', 'period_ending'], '');
+  const trialBalanceName = pick(['trialBalanceName', 'trial_balance_name'], '');
+  const priorDate = pick(['priorDate', 'prior_date'], '');
+  const currentDate = pick(['currentDate', 'current_date'], '');
+  const groupCode = pick(['groupCode', 'group_code'], '');
+  const groupName = pick(['groupName', 'group_name'], '');
+  const subgroupName = pick(['subgroupName', 'subgroup_name'], '');
+  const footerNote = pick(['footerNote', 'footer_note'], '');
+
+  const groupRow = `<tr class="group-row">
+          <td colspan="14">Group : ${escapeHtml(groupCode)}&nbsp;&nbsp;&nbsp;${escapeHtml(groupName)}</td>
+        </tr>`;
+  const subgroupRow = `<tr class="subgroup-row">
+        <td colspan="14">Subgroup : ${escapeHtml(subgroupName)}</td>
+      </tr>`;
+
+  const rowsHtml = lines
+    .map((line) => {
+      const account = escapeHtml(line?.account ?? line?.acct ?? line?.accountNumber ?? '');
+      const description = escapeHtml(line?.description ?? line?.desc ?? '');
+      const priorAmount = formatMoneyValue(line?.priorAmount ?? line?.prior_amount, currency);
+      const priorTick = escapeHtml(line?.priorTick ?? line?.prior_tick ?? '');
+      const unadjAmount = formatMoneyValue(line?.unadjAmount ?? line?.unadj_amount, currency);
+      const unadjTick = escapeHtml(line?.unadjTick ?? line?.unadj_tick ?? '');
+      const ajeRef = escapeHtml(line?.ajeRef ?? line?.aje_ref ?? '');
+      const ajeAmount = formatMoneyValue(line?.ajeAmount ?? line?.aje_amount, currency);
+      const ajeTick = escapeHtml(line?.ajeTick ?? line?.aje_tick ?? '');
+      const rjeRef = escapeHtml(line?.rjeRef ?? line?.rje_ref ?? '');
+      const rjeAmount = formatMoneyValue(line?.rjeAmount ?? line?.rje_amount, currency);
+      const rjeTick = escapeHtml(line?.rjeTick ?? line?.rje_tick ?? '');
+      const finalAmount = formatMoneyValue(line?.finalAmount ?? line?.final_amount, currency);
+      const finalTick = escapeHtml(line?.finalTick ?? line?.final_tick ?? '');
+
+      return `
+        <tr>
+          <td>${account}</td>
+          <td>${description}</td>
+          <td class="num">${priorAmount}</td>
+          <td class="tick">${priorTick}</td>
+          <td class="num">${unadjAmount}</td>
+          <td class="tick">${unadjTick}</td>
+          <td class="tick">${ajeRef}</td>
+          <td class="num">${ajeAmount}</td>
+          <td class="tick">${ajeTick}</td>
+          <td class="tick">${rjeRef}</td>
+          <td class="num">${rjeAmount}</td>
+          <td class="tick">${rjeTick}</td>
+          <td class="num">${finalAmount}</td>
+          <td class="tick">${finalTick}</td>
+        </tr>`;
+    })
+    .join('');
+
+  const footerHtml = footerNote
+    ? `<div class="footer-note">${escapeHtml(footerNote)}</div>`
+    : '';
+
+  const html = `
+    <div class="page">
+      <table class="meta" aria-label="Engagement metadata">
+        <tr>
+          <td class="label">Client:</td>
+          <td>${escapeHtml(clientName)}</td>
+        </tr>
+        <tr>
+          <td class="label">Period Ending:</td>
+          <td>${escapeHtml(periodEnding)}</td>
+        </tr>
+        <tr>
+          <td class="label">Trial Balance:</td>
+          <td>${escapeHtml(trialBalanceName)}</td>
+        </tr>
+        <tr>
+          <td class="label">Workpaper:</td>
+          <td>${escapeHtml(workpaperTitle)}</td>
+        </tr>
+      </table>
+
+      <table class="sheet" aria-label="Accounts payable leadsheet">
+        <colgroup>
+          <col class="c1" /><col class="c2" /><col class="c3" /><col class="c4" />
+          <col class="c5" /><col class="c6" /><col class="c7" /><col class="c8" />
+          <col class="c9" /><col class="c10" /><col class="c11" /><col class="c12" />
+          <col class="c13" /><col class="c14" />
+        </colgroup>
+        <thead>
+          <tr class="hdr">
+            <th rowspan="2">Account</th>
+            <th rowspan="2">Description</th>
+            <th colspan="2" class="center">1st PP-FINAL</th>
+            <th colspan="2" class="center">UNADJ</th>
+            <th rowspan="2" class="center">JE Ref #</th>
+            <th colspan="2" class="center">AJE</th>
+            <th rowspan="2" class="center">JE Ref #</th>
+            <th colspan="2" class="center">RJE</th>
+            <th colspan="2" class="center">FINAL</th>
+          </tr>
+          <tr class="hdr">
+            <th class="center">${escapeHtml(priorDate)}</th>
+            <th class="center muted"></th>
+            <th class="center">${escapeHtml(currentDate)}</th>
+            <th class="center muted"></th>
+            <th class="center">${escapeHtml(currentDate)}</th>
+            <th class="center muted"></th>
+            <th class="center">${escapeHtml(currentDate)}</th>
+            <th class="center muted"></th>
+            <th class="center">${escapeHtml(currentDate)}</th>
+            <th class="center muted"></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${groupRow}
+          ${subgroupRow}
+          ${rowsHtml}
+          <tr class="total-row">
+            <td>Total ${escapeHtml(groupCode)}</td>
+            <td>${escapeHtml(groupName)}</td>
+            <td class="num">${escapeHtml(money(totalPrior, currency))}</td>
+            <td class="tick"></td>
+            <td class="num">${escapeHtml(money(totalUnadj, currency))}</td>
+            <td class="tick"></td>
+            <td class="tick"></td>
+            <td class="num">${escapeHtml(money(totalAje, currency))}</td>
+            <td class="tick"></td>
+            <td class="tick"></td>
+            <td class="num">${escapeHtml(money(totalRje, currency))}</td>
+            <td class="tick"></td>
+            <td class="num">${escapeHtml(money(totalFinal, currency))}</td>
+            <td class="tick"></td>
+          </tr>
+        </tbody>
+      </table>
+
+      ${footerHtml}
+    </div>
+  `;
+
+  const t = {
+    navy: '#000080',
+    gray: '#c0c0c0',
+    grid: '#000000',
+    text: '#111111',
+    ...theme,
+  };
+
+  const css = `
+@page { size: Letter landscape; margin: 0.6in; }
+html, body { margin: 0; padding: 0; }
+body { color: ${t.text}; font-family: Arial, Helvetica, sans-serif; font-size: 10pt; line-height: 1.25; }
+
+.page { width: 100%; }
+
+.meta { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+.meta td { padding: 2px 6px; vertical-align: top; }
+.meta .label { width: 130px; font-weight: 700; white-space: nowrap; }
+
+.sheet {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  border: 1px solid ${t.grid};
+}
+
+.sheet col.c1 { width: 9.71%; }
+.sheet col.c2 { width: 16.98%; }
+.sheet col.c3 { width: 10.38%; }
+.sheet col.c4 { width: 3.04%; }
+.sheet col.c5 { width: 10.38%; }
+.sheet col.c6 { width: 2.44%; }
+.sheet col.c7 { width: 4.30%; }
+.sheet col.c8 { width: 10.38%; }
+.sheet col.c9 { width: 2.44%; }
+.sheet col.c10 { width: 4.30%; }
+.sheet col.c11 { width: 10.38%; }
+.sheet col.c12 { width: 2.44%; }
+.sheet col.c13 { width: 10.38%; }
+.sheet col.c14 { width: 2.44%; }
+
+.sheet th, .sheet td {
+  border: 1px solid ${t.grid};
+  padding: 4px 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hdr th { background: ${t.navy}; color: #ffffff; font-weight: 700; text-align: left; }
+.hdr .center { text-align: center; }
+.hdr .right { text-align: right; }
+
+.group-row td { background: ${t.navy}; color: #ffffff; font-weight: 700; }
+.subgroup-row td { background: ${t.gray}; color: #000000; font-weight: 700; }
+
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.tick { text-align: center; padding: 4px 0; }
+
+.total-row td { font-weight: 700; border-top: 1px solid ${t.grid}; border-bottom: 3px double ${t.grid}; }
+
+.muted { color: #444444; }
+
+.footer-note { margin-top: 10px; color: #444444; }
+`;
+
+  return { html, css, pdfOptions: { format: 'Letter', landscape: true } };
+};
+
 const TEMPLATE_REGISTRY = {
   'invoice.endeavorr.v1': renderEndeavorrInvoiceV1,
   'invoice.glamit.v1': renderGlamitInvoiceV1,
   'invoice.promotador.v1': renderPromotadorInvoiceV1,
   'refdoc.ap-aging.v1': renderApAgingSummaryV1,
+  'refdoc.ap-leadsheet.v1': renderApLeadSheetV1,
 };
 
 const resolveTemplateIds = () => {

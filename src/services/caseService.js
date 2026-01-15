@@ -714,6 +714,11 @@ const sanitizeCaseWriteData = (rawData = {}, { isCreate = false } = {}) => {
   sanitized.auditItems = sanitizedItems;
   delete sanitized.disbursements;
   sanitized.referenceDocuments = normalizeReferenceDocuments(sanitized.referenceDocuments);
+  if (sanitized.workpaper && typeof sanitized.workpaper === 'object') {
+    sanitized.workpaper = { ...sanitized.workpaper };
+  } else if ('workpaper' in sanitized) {
+    delete sanitized.workpaper;
+  }
 
   if (typeof sanitized.publicVisible !== 'boolean') {
     sanitized.publicVisible = true;
