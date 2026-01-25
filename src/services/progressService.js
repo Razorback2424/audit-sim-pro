@@ -230,9 +230,7 @@ export const saveProgress = async ({
       }
 
       if (patch.hasSuccessfulAttempt === undefined) {
-        const inferredSuccess =
-          state === 'submitted' || patch.percentComplete >= 100 || patch.step === 'results';
-        patch.hasSuccessfulAttempt = serverHasSuccess || inferredSuccess;
+        patch.hasSuccessfulAttempt = serverHasSuccess;
       } else if (!forceOverwrite && serverHasSuccess) {
         patch.hasSuccessfulAttempt = true;
       }
@@ -240,13 +238,21 @@ export const saveProgress = async ({
       if (shouldClearActiveAttempt) {
         patch.activeAttempt = deleteField();
       } else if (patch.activeAttempt === undefined && isRecord(patch.draft)) {
+        const existingStartedAt = serverData?.activeAttempt?.startedAt;
         patch.activeAttempt = {
           draft: patch.draft,
+          startedAt: existingStartedAt || serverTimestamp(),
           updatedAt: serverTimestamp(),
         };
       } else if (!shouldClearActiveAttempt && isRecord(patch.activeAttempt) && !patch.activeAttempt.updatedAt) {
         patch.activeAttempt = {
           ...patch.activeAttempt,
+          updatedAt: serverTimestamp(),
+        };
+      } else if (!shouldClearActiveAttempt && isRecord(patch.activeAttempt) && !patch.activeAttempt.startedAt) {
+        patch.activeAttempt = {
+          ...patch.activeAttempt,
+          startedAt: serverData?.activeAttempt?.startedAt || serverTimestamp(),
           updatedAt: serverTimestamp(),
         };
       }

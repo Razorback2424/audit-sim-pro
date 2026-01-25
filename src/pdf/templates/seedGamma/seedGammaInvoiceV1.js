@@ -24,9 +24,9 @@ const formatTaxPercent = (rate) => {
   return rounded.toFixed(2);
 };
 
-function GlamitInvoice({ data }) {
+function SeedGammaInvoice({ data }) {
   const {
-    brandName = 'GLAMIT',
+    brandName = 'SEED GAMMA',
     invoiceNumber = '',
     invoiceDate = '',
     dueDate = '',
@@ -160,12 +160,12 @@ function GlamitInvoice({ data }) {
   );
 }
 
-export const glamitInvoiceV1 = {
-  id: 'invoice.glamit.v1',
+export const seedGammaInvoiceV1 = {
+  id: 'invoice.seed.gamma.v1',
   page: {
     pdfOptions: { format: 'Letter' },
   },
-  Component: GlamitInvoice,
+  Component: SeedGammaInvoice,
   css: ({ theme, layout }) => {
     const t = {
       ink: '#111',

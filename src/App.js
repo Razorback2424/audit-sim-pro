@@ -17,6 +17,7 @@ import AdminCaseOverviewPage from './pages/AdminCaseOverviewPage';
 import AdminCaseManagementPage from './pages/AdminCaseManagementPage';
 import AdminCaseDataAuditPage from './pages/AdminCaseDataAuditPage';
 import AdminCaseProgressPage from './pages/AdminCaseProgressPage';
+import AdminDebugDocsPage from './pages/AdminDebugDocsPage';
 import RecipeFormPage from './pages/RecipeFormPage';
 import LandingPage from './pages/LandingPage';
 import TraineeDashboardPage from './pages/TraineeDashboardPage';
@@ -72,6 +73,7 @@ export default function App() {
             <Route path="/admin/case-overview/:caseId" element={<AdminCaseOverviewRoute />} />
             <Route path="/admin/cases" element={<AdminCaseManagementPage />} />
             <Route path="/admin/case-data-audit" element={<AdminCaseDataAuditPage />} />
+            <Route path="/admin/debug-docs" element={<AdminDebugDocsPage />} />
             <Route path="/admin/user-management" element={<AdminUserManagementPage />} />
             <Route path="/admin/case-submissions/:caseId" element={<AdminCaseSubmissionsRoute />} />
             <Route path="/admin/case-progress/:caseId" element={<AdminCaseProgressRoute />} />

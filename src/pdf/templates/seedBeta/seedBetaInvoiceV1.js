@@ -49,9 +49,9 @@ const formatTaxPercent = (rate) => {
   return rounded.toFixed(2);
 };
 
-function EndeavorrInvoice({ data }) {
+function SeedBetaInvoice({ data }) {
   const {
-    brandName = 'ENDEAVORR',
+    brandName = 'SEED BETA',
     invoiceNumber = '',
     invoiceDate = '',
     issuedTo = {},
@@ -179,12 +179,12 @@ function EndeavorrInvoice({ data }) {
   );
 }
 
-export const endeavorrInvoiceV1 = {
-  id: 'invoice.endeavorr.v1',
+export const seedBetaInvoiceV1 = {
+  id: 'invoice.seed.beta.v1',
   page: {
     pdfOptions: { format: 'Letter' },
   },
-  Component: EndeavorrInvoice,
+  Component: SeedBetaInvoice,
   css: ({ theme, layout }) => {
     const t = {
       ink: '#111',

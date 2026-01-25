@@ -7,16 +7,18 @@ import { saveSubmission } from '../services/submissionService';
 import { fetchProgressForCases, saveProgress, subscribeProgressForCases } from '../services/progressService';
 import { fetchRecipeProgress, saveRecipeProgress } from '../services/recipeProgressService';
 import { generateAttemptFromRecipe } from '../services/attemptService';
-import { Send, Loader2, ExternalLink, Download, BookOpen } from 'lucide-react';
+import { Send, Loader2, ExternalLink, Download } from 'lucide-react';
 import ResultsAnalysis from '../components/trainee/ResultsAnalysis';
 import AuditItemCardFactory from '../components/trainee/AuditItemCardFactory';
 import OutstandingCheckTestingModule from '../components/trainee/OutstandingCheckTestingModule';
 import InstructionView from '../components/InstructionView';
 import { getCaseLevelLabel, normalizeCaseLevel } from '../models/caseConstants';
+import { computeDisbursementAttemptSummary } from '../utils/attemptSummary';
 
 const FLOW_STEPS = Object.freeze({
   INSTRUCTION: 'instruction',
   CA_CHECK: 'ca_check',
+  CA_COMPLETENESS: 'ca_completeness',
   SELECTION: 'selection',
   TESTING: 'testing',
   RESULTS: 'results',
@@ -31,7 +33,8 @@ const DEFAULT_STEP_SEQUENCE = [
 
 const STEP_LABELS = {
   [FLOW_STEPS.INSTRUCTION]: 'Instruction',
-  [FLOW_STEPS.CA_CHECK]: 'C&A Tie-Out',
+  [FLOW_STEPS.CA_CHECK]: 'AP Aging C&A',
+  [FLOW_STEPS.CA_COMPLETENESS]: 'Disbursement Listing C&A',
   [FLOW_STEPS.SELECTION]: 'Select Disbursements',
   [FLOW_STEPS.TESTING]: 'Classify Results',
   [FLOW_STEPS.RESULTS]: 'Review Outcome',
@@ -40,6 +43,8 @@ const STEP_LABELS = {
 const STEP_DESCRIPTIONS = {
   [FLOW_STEPS.INSTRUCTION]: 'Review the materials and successfully answer the knowledge check questions to access the simulation.',
   [FLOW_STEPS.CA_CHECK]: 'Confirm the AP aging ties to the ledger before selecting items.',
+  [FLOW_STEPS.CA_COMPLETENESS]:
+    'Validate the January disbursement listing before you select items to test.',
   [FLOW_STEPS.SELECTION]: 'Choose which disbursements you will test.',
   [FLOW_STEPS.TESTING]: 'Allocate the amounts across each classification and review documents.',
   [FLOW_STEPS.RESULTS]: 'See a recap of your responses.',
@@ -52,7 +57,161 @@ const CLASSIFICATION_FIELDS = [
   { key: 'improperlyExcluded', label: 'Improperly Excluded' },
 ];
 
+const CLASSIFICATION_KEYS = Object.freeze(CLASSIFICATION_FIELDS.map(({ key }) => key));
+const CLASSIFICATION_LABELS = Object.freeze(
+  CLASSIFICATION_FIELDS.reduce((acc, field) => {
+    acc[field.key] = field.label;
+    return acc;
+  }, {})
+);
+
 const hasExplicitDecision = (allocation) => allocation?.isException === true || allocation?.isException === false;
+
+const normalizeText = (val) => (typeof val === 'string' ? val.trim().toLowerCase() : '');
+
+const parseClassificationNumber = (value) => {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string') return 0;
+  const cleaned = value.replace(/[^0-9.-]/g, '');
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const normalizeExpectedClassificationKey = (raw) => {
+  if (!raw) return '';
+  const text = normalizeText(raw);
+  if (text.includes('missing') || text.includes('unrecorded')) return 'improperlyExcluded';
+  if (text.includes('improperly') && text.includes('excluded')) return 'improperlyExcluded';
+  if (text.includes('improperly') && text.includes('included')) return 'improperlyIncluded';
+  if (text.includes('properly') && text.includes('excluded')) return 'properlyExcluded';
+  if (text.includes('properly') && text.includes('included')) return 'properlyIncluded';
+  if (CLASSIFICATION_KEYS.includes(text)) return text;
+  return '';
+};
+
+const extractBreakdown = (source) => {
+  return CLASSIFICATION_KEYS.map((key) => ({ key, amount: parseClassificationNumber(source?.[key]) }))
+    .filter(({ amount }) => Math.abs(amount) > 0.0001)
+    .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+};
+
+const getPrimaryClassificationKey = (allocation) => {
+  if (!allocation || typeof allocation !== 'object') return '';
+  const explicitKey = typeof allocation.singleClassification === 'string' ? allocation.singleClassification : '';
+  if (CLASSIFICATION_KEYS.includes(explicitKey)) return explicitKey;
+  const breakdown = extractBreakdown(allocation?.splitValues && typeof allocation.splitValues === 'object'
+    ? allocation.splitValues
+    : allocation);
+  if (breakdown.length > 0) return breakdown[0].key;
+  if (allocation.isException === true) return 'improperlyIncluded';
+  if (allocation.isException === false) return 'properlyIncluded';
+  return '';
+};
+
+const getExpectedClassificationKey = (item) => {
+  const explicitKey = typeof item?.answerKeySingleClassification === 'string' ? item.answerKeySingleClassification : '';
+  if (CLASSIFICATION_KEYS.includes(explicitKey)) return explicitKey;
+  const answerKey = item?.answerKey && typeof item.answerKey === 'object' ? item.answerKey : null;
+  const breakdown = answerKey ? extractBreakdown(answerKey) : [];
+  if (breakdown.length > 0) return breakdown[0].key;
+  return normalizeExpectedClassificationKey(item?.expectedClassification);
+};
+
+const formatDisbursementLabel = (item, formatter) => {
+  if (!item) return 'This item';
+  const name = (item.payee || item.vendor || item.paymentId || 'This item').trim();
+  const amount = Number(item.amount);
+  const formattedAmount = Number.isFinite(amount) ? formatter.format(amount) : '';
+  return formattedAmount ? `${name} (${formattedAmount})` : name;
+};
+
+const extractDecisionFromAllocation = (allocation) => {
+  if (!allocation || typeof allocation !== 'object') {
+    return { primaryKey: '' };
+  }
+
+  const explicitKey = typeof allocation.singleClassification === 'string' ? allocation.singleClassification : '';
+  if (CLASSIFICATION_KEYS.includes(explicitKey)) {
+    return { primaryKey: explicitKey };
+  }
+
+  const breakdown = extractBreakdown(allocation);
+  if (breakdown.length > 0) {
+    return { primaryKey: breakdown[0].key };
+  }
+
+  if (allocation.isException === true) return { primaryKey: 'improperlyIncluded' };
+  if (allocation.isException === false) return { primaryKey: 'properlyIncluded' };
+  return { primaryKey: '' };
+};
+
+const extractCorrectDecision = (item) => {
+  const explicitKey = typeof item?.answerKeySingleClassification === 'string' ? item.answerKeySingleClassification : '';
+  if (CLASSIFICATION_KEYS.includes(explicitKey)) {
+    return { primaryKey: explicitKey };
+  }
+
+  const answerKey = item?.answerKey && typeof item.answerKey === 'object' ? item.answerKey : null;
+  const breakdown = answerKey ? extractBreakdown(answerKey) : [];
+  if (breakdown.length > 0) {
+    return { primaryKey: breakdown[0].key };
+  }
+
+  const expectedKey = normalizeExpectedClassificationKey(item?.expectedClassification);
+  if (expectedKey) {
+    return { primaryKey: expectedKey };
+  }
+
+  return { primaryKey: '' };
+};
+
+const isClassificationCorrect = (item, allocation) => {
+  if (!item || !allocation) return false;
+  const isTrap = !!item.shouldFlag;
+  const studentDecision = extractDecisionFromAllocation(allocation);
+  const correctDecision = extractCorrectDecision(item);
+
+  if (isTrap) {
+    if (allocation.isException !== true) return false;
+    if (correctDecision.primaryKey) {
+      return normalizeText(studentDecision.primaryKey) === normalizeText(correctDecision.primaryKey);
+    }
+    return true;
+  }
+
+  if (allocation.isException === true) return false;
+  if (correctDecision.primaryKey) {
+    return normalizeText(studentDecision.primaryKey) === normalizeText(correctDecision.primaryKey);
+  }
+  return true;
+};
+
+const normalizeGateFailures = (raw) => {
+  const base = {
+    instruction: false,
+    tieOut: false,
+    completeness: false,
+    selection: false,
+  };
+  if (!raw || typeof raw !== 'object') return base;
+  return {
+    instruction: Boolean(raw.instruction),
+    tieOut: Boolean(raw.tieOut),
+    completeness: Boolean(raw.completeness),
+    selection: Boolean(raw.selection),
+  };
+};
+
+const isSameGateFailures = (current, next) => {
+  if (!current || !next) return false;
+  return (
+    Boolean(current.instruction) === Boolean(next.instruction) &&
+    Boolean(current.tieOut) === Boolean(next.tieOut) &&
+    Boolean(current.completeness) === Boolean(next.completeness) &&
+    Boolean(current.selection) === Boolean(next.selection)
+  );
+};
 
 const isInvoiceReferenceDoc = (doc) => {
   if (!doc || typeof doc !== 'object') return false;
@@ -83,9 +242,26 @@ const isInlinePreviewable = (contentType, fileNameOrPath) => {
   return false;
 };
 
+const mergeReferenceDocuments = (baseDocs, overrideDocs) => {
+  const merged = [];
+  const seen = new Set();
+  const addDoc = (doc) => {
+    if (!doc) return;
+    const key = String(doc.fileName || doc.id || '').toLowerCase();
+    const resolvedKey = key || String(doc.id || doc.storagePath || doc.downloadURL || '');
+    if (!resolvedKey || seen.has(resolvedKey)) return;
+    seen.add(resolvedKey);
+    merged.push(doc);
+  };
+  (overrideDocs || []).forEach(addDoc);
+  (baseDocs || []).forEach(addDoc);
+  return merged;
+};
+
 const computePercentComplete = (step, selectedCount, classifiedCount) => {
   if (step === FLOW_STEPS.INSTRUCTION) return 0;
   if (step === FLOW_STEPS.CA_CHECK) return 10;
+  if (step === FLOW_STEPS.CA_COMPLETENESS) return 12;
   if (step === FLOW_STEPS.RESULTS) return 100;
   if (selectedCount <= 0) return 0;
   if (step === FLOW_STEPS.SELECTION) return 25;
@@ -113,8 +289,6 @@ const CLASSIFICATION_META_FIELDS = [
   'isException',
   'mode',
   'singleClassification',
-  'workpaperNote',
-  'notes',
   'assertion',
   'reason',
 ];
@@ -138,6 +312,14 @@ const isSameClassificationMap = (currentMap, nextMap) => {
       return currentValue === nextValue;
     });
   });
+};
+
+const coerceToMillis = (value) => {
+  if (!value) return null;
+  if (typeof value.toMillis === 'function') return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'number') return value;
+  return null;
 };
 
 const collectSupportingDocuments = (disbursement) => {
@@ -232,16 +414,34 @@ export default function TraineeCaseViewPage({ params }) {
   const [saveStatus, setSaveStatus] = useState('saved');
   const [furthestStepIndex, setFurthestStepIndex] = useState(0);
   const [levelGate, setLevelGate] = useState({ locked: false, message: '' });
+  const [modulePassed, setModulePassed] = useState(null);
   const [tieOutSelectionId, setTieOutSelectionId] = useState('');
   const [tieOutAssessmentFeedback, setTieOutAssessmentFeedback] = useState('');
   const [tieOutActionSelectionId, setTieOutActionSelectionId] = useState('');
   const [tieOutActionFeedback, setTieOutActionFeedback] = useState('');
   const [tieOutAssessmentPassed, setTieOutAssessmentPassed] = useState(false);
+  const [tieOutAssessmentOutcome, setTieOutAssessmentOutcome] = useState('');
   const [tieOutNeedsAction, setTieOutNeedsAction] = useState(false);
   const [tieOutPassed, setTieOutPassed] = useState(false);
   const [tieOutGateResult, setTieOutGateResult] = useState(null);
+  const [completenessSelectionId, setCompletenessSelectionId] = useState('');
+  const [completenessAssessmentFeedback, setCompletenessAssessmentFeedback] = useState('');
+  const [completenessActionSelectionId, setCompletenessActionSelectionId] = useState('');
+  const [completenessActionFeedback, setCompletenessActionFeedback] = useState('');
+  const [completenessAssessmentPassed, setCompletenessAssessmentPassed] = useState(false);
+  const [completenessAssessmentOutcome, setCompletenessAssessmentOutcome] = useState('');
+  const [completenessNeedsAction, setCompletenessNeedsAction] = useState(false);
+  const [completenessPassed, setCompletenessPassed] = useState(false);
+  const [completenessGateResult, setCompletenessGateResult] = useState(null);
   const [selectionGateResult, setSelectionGateResult] = useState(null);
+  const [gateFailures, setGateFailures] = useState({
+    instruction: false,
+    tieOut: false,
+    completeness: false,
+    selection: false,
+  });
   const [tieOutDocViews, setTieOutDocViews] = useState({});
+  const [completenessDocViews, setCompletenessDocViews] = useState({});
   const [apAgingPreviewUrl, setApAgingPreviewUrl] = useState('');
   const [apAgingPreviewLoading, setApAgingPreviewLoading] = useState(false);
   const [apAgingPreviewError, setApAgingPreviewError] = useState('');
@@ -277,10 +477,18 @@ export default function TraineeCaseViewPage({ params }) {
       normalized.unshift(FLOW_STEPS.INSTRUCTION);
     }
     const tieOutEnabled = Boolean(caseData?.workpaper?.layoutConfig?.tieOutGate?.enabled);
+    const completenessEnabled = Boolean(caseData?.workpaper?.layoutConfig?.completenessGate?.enabled);
     if (tieOutEnabled && !normalized.includes(FLOW_STEPS.CA_CHECK)) {
       const instructionIndex = normalized.indexOf(FLOW_STEPS.INSTRUCTION);
       const insertIndex = instructionIndex >= 0 ? instructionIndex + 1 : 0;
       normalized.splice(insertIndex, 0, FLOW_STEPS.CA_CHECK);
+    }
+    if (completenessEnabled && !normalized.includes(FLOW_STEPS.CA_COMPLETENESS)) {
+      const tieOutIndex = normalized.indexOf(FLOW_STEPS.CA_CHECK);
+      const instructionIndex = normalized.indexOf(FLOW_STEPS.INSTRUCTION);
+      const insertIndex =
+        tieOutIndex >= 0 ? tieOutIndex + 1 : instructionIndex >= 0 ? instructionIndex + 1 : 0;
+      normalized.splice(insertIndex, 0, FLOW_STEPS.CA_COMPLETENESS);
     }
     if (!normalized.includes(FLOW_STEPS.RESULTS)) {
       normalized.push(FLOW_STEPS.RESULTS);
@@ -299,6 +507,10 @@ export default function TraineeCaseViewPage({ params }) {
     const gate = workpaperConfig?.tieOutGate;
     return gate && gate.enabled ? gate : null;
   }, [workpaperConfig]);
+  const completenessGateConfig = useMemo(() => {
+    const gate = workpaperConfig?.completenessGate;
+    return gate && gate.enabled ? gate : null;
+  }, [workpaperConfig]);
   const selectionScopeConfig = useMemo(
     () => workpaperConfig?.selectionScope || null,
     [workpaperConfig]
@@ -311,6 +523,9 @@ export default function TraineeCaseViewPage({ params }) {
   const selectionRef = useRef(selectedDisbursements);
   const classificationRef = useRef(classificationAmounts);
   const tieOutGateResultRef = useRef(tieOutGateResult);
+  const completenessGateResultRef = useRef(completenessGateResult);
+  const gateFailuresRef = useRef(gateFailures);
+  const attemptStartedAtRef = useRef(null);
   const selectedIdsRef = useRef([]);
   const classifiedCountRef = useRef(0);
   const isLockedRef = useRef(false);
@@ -328,22 +543,56 @@ export default function TraineeCaseViewPage({ params }) {
       setTieOutActionSelectionId('');
       setTieOutActionFeedback('');
       setTieOutAssessmentPassed(false);
+      setTieOutAssessmentOutcome('');
       setTieOutNeedsAction(false);
-      setSelectionGateResult(null);
       setTieOutDocViews({});
-      return;
+    } else {
+      setTieOutPassed(false);
+      setTieOutGateResult(null);
+      setTieOutSelectionId('');
+      setTieOutAssessmentFeedback('');
+      setTieOutActionSelectionId('');
+      setTieOutActionFeedback('');
+      setTieOutAssessmentPassed(false);
+      setTieOutAssessmentOutcome('');
+      setTieOutNeedsAction(false);
+      setTieOutDocViews({});
     }
-    setTieOutPassed(false);
-    setTieOutGateResult(null);
-    setTieOutSelectionId('');
-    setTieOutAssessmentFeedback('');
-    setTieOutActionSelectionId('');
-    setTieOutActionFeedback('');
-    setTieOutAssessmentPassed(false);
-    setTieOutNeedsAction(false);
+
+    if (!completenessGateConfig) {
+      setCompletenessPassed(true);
+      setCompletenessGateResult(null);
+      setCompletenessSelectionId('');
+      setCompletenessAssessmentFeedback('');
+      setCompletenessActionSelectionId('');
+      setCompletenessActionFeedback('');
+      setCompletenessAssessmentPassed(false);
+      setCompletenessAssessmentOutcome('');
+      setCompletenessNeedsAction(false);
+      setCompletenessDocViews({});
+    } else {
+      setCompletenessPassed(false);
+      setCompletenessGateResult(null);
+      setCompletenessSelectionId('');
+      setCompletenessAssessmentFeedback('');
+      setCompletenessActionSelectionId('');
+      setCompletenessActionFeedback('');
+      setCompletenessAssessmentPassed(false);
+      setCompletenessAssessmentOutcome('');
+      setCompletenessNeedsAction(false);
+      setCompletenessDocViews({});
+    }
+
     setSelectionGateResult(null);
-    setTieOutDocViews({});
-  }, [caseId, selectionScopeConfig, tieOutGateConfig]);
+    setGateFailures({
+      instruction: false,
+      tieOut: false,
+      completeness: false,
+      selection: false,
+    });
+    attemptStartedAtRef.current = null;
+    setModulePassed(null);
+  }, [caseId, selectionScopeConfig, tieOutGateConfig, completenessGateConfig]);
 
   const createEmptyAllocation = useCallback(() => {
     const template = {};
@@ -379,8 +628,26 @@ export default function TraineeCaseViewPage({ params }) {
       setTieOutActionSelectionId('');
       setTieOutActionFeedback('');
       setTieOutAssessmentPassed(false);
+      setTieOutAssessmentOutcome('');
       setTieOutNeedsAction(false);
+      setCompletenessPassed(!completenessGateConfig);
+      setCompletenessGateResult(null);
+      setCompletenessSelectionId('');
+      setCompletenessAssessmentFeedback('');
+      setCompletenessActionSelectionId('');
+      setCompletenessActionFeedback('');
+      setCompletenessAssessmentPassed(false);
+      setCompletenessAssessmentOutcome('');
+      setCompletenessNeedsAction(false);
       setSelectionGateResult(null);
+      setGateFailures({
+        instruction: false,
+        tieOut: false,
+        completeness: false,
+        selection: false,
+      });
+      attemptStartedAtRef.current = null;
+      setModulePassed(null);
       lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null, inlineNotSupported: false };
 
       let didReset = false;
@@ -401,6 +668,13 @@ export default function TraineeCaseViewPage({ params }) {
               selectedPaymentIds: [],
               classificationDraft: {},
               tieOutGate: null,
+              completenessGate: null,
+              gateFailures: {
+                instruction: false,
+                tieOut: false,
+                completeness: false,
+                selection: false,
+              },
               fixedAssetDraft: {},
               cashLinkMap: {},
               cashAdjustments: [],
@@ -434,11 +708,20 @@ export default function TraineeCaseViewPage({ params }) {
         }
       }
     },
-    [caseId, userId, gateScope, setQuery, showModal, tieOutGateConfig, firstPostInstructionStep]
+    [
+      caseId,
+      userId,
+      gateScope,
+      setQuery,
+      showModal,
+      tieOutGateConfig,
+      completenessGateConfig,
+      firstPostInstructionStep,
+    ]
   );
 
   const startRetakeAttempt = useCallback(
-    async ({ clearRetakeQuery } = {}) => {
+    async ({ clearRetakeQuery, startAtStep } = {}) => {
       if (!caseData?.moduleId || !userId) return false;
       if (retakeResettingRef.current) return false;
 
@@ -450,6 +733,30 @@ export default function TraineeCaseViewPage({ params }) {
           uid: userId,
           retakeAttempt: true,
         });
+        if (startAtStep) {
+          const percentComplete = computePercentComplete(startAtStep, 0, 0);
+          await saveProgress({
+            appId,
+            uid: userId,
+            caseId: newCaseId,
+            patch: {
+              percentComplete,
+              state: deriveStateFromProgress(startAtStep, percentComplete),
+              step: startAtStep,
+              draft: {
+                selectedPaymentIds: [],
+                classificationDraft: {},
+                tieOutGate: null,
+                gateFailures: {
+                  instruction: false,
+                  tieOut: false,
+                  completeness: false,
+                  selection: false,
+                },
+              },
+            },
+          });
+        }
         navigate(`/cases/${newCaseId}`);
         return true;
       } catch (err) {
@@ -475,12 +782,13 @@ export default function TraineeCaseViewPage({ params }) {
   );
 
   const requestRetake = useCallback(() => {
-    if (caseData?.moduleId) {
-      startRetakeAttempt();
-      return;
-    }
     resetForRetake();
-  }, [caseData, resetForRetake, startRetakeAttempt]);
+  }, [resetForRetake]);
+
+  const generateNewCase = useCallback(() => {
+    if (!caseData?.moduleId) return;
+    startRetakeAttempt({ startAtStep: firstPostInstructionStep });
+  }, [caseData?.moduleId, firstPostInstructionStep, startRetakeAttempt]);
 
   const parseAmount = useCallback((value) => {
     if (value === '' || value === null || value === undefined) return 0;
@@ -505,15 +813,6 @@ export default function TraineeCaseViewPage({ params }) {
         if (singleClassification !== 'improperlyIncluded' && singleClassification !== 'improperlyExcluded') {
           return false;
         }
-      }
-      if (allocation?.isException === true) {
-        const noteText =
-          typeof allocation.workpaperNote === 'string'
-            ? allocation.workpaperNote
-            : typeof allocation.notes === 'string'
-            ? allocation.notes
-            : '';
-        if (noteText.trim().length === 0) return false;
       }
       let sum = 0;
       let singleValue = 0;
@@ -542,6 +841,9 @@ export default function TraineeCaseViewPage({ params }) {
   );
 
   const isProgressComplete = useCallback((progress) => {
+    if (typeof progress?.hasSuccessfulAttempt === 'boolean') {
+      return progress.hasSuccessfulAttempt;
+    }
     const state = typeof progress?.state === 'string' ? progress.state.toLowerCase() : '';
     const pct = Number(progress?.percentComplete || 0);
     const step = typeof progress?.step === 'string' ? progress.step.toLowerCase() : '';
@@ -571,6 +873,14 @@ export default function TraineeCaseViewPage({ params }) {
   useEffect(() => {
     tieOutGateResultRef.current = tieOutGateResult;
   }, [tieOutGateResult]);
+
+  useEffect(() => {
+    completenessGateResultRef.current = completenessGateResult;
+  }, [completenessGateResult]);
+
+  useEffect(() => {
+    gateFailuresRef.current = gateFailures;
+  }, [gateFailures]);
 
   useEffect(() => {
     isLockedRef.current = isLocked;
@@ -702,6 +1012,11 @@ export default function TraineeCaseViewPage({ params }) {
         const entry = progressMap.get(caseId);
         if (!entry) return;
 
+        const startedAtMs = coerceToMillis(entry.activeAttempt?.startedAt);
+        if (startedAtMs && !attemptStartedAtRef.current) {
+          attemptStartedAtRef.current = startedAtMs;
+        }
+
         const entryUpdatedAtMs = entry?.updatedAt?.toMillis ? entry.updatedAt.toMillis() : 0;
         const localChangeMs = lastLocalChangeRef.current || 0;
         const isEntryStale = localChangeMs > 0 && entryUpdatedAtMs > 0 && entryUpdatedAtMs < localChangeMs - 2000;
@@ -753,13 +1068,36 @@ export default function TraineeCaseViewPage({ params }) {
             setTieOutGateResult(tieOutDraft);
             setTieOutPassed(true);
             setTieOutAssessmentPassed(true);
+            setTieOutAssessmentOutcome(tieOutDraft?.assessment?.outcome || '');
             setTieOutNeedsAction(false);
+          }
+        }
+        const completenessDraft = entry.draft?.completenessGate;
+        if (!recentlyChanged && completenessGateConfig && completenessDraft?.passed) {
+          const currentCompleteness = completenessGateResultRef.current;
+          if (!currentCompleteness || !currentCompleteness.passed) {
+            setCompletenessGateResult(completenessDraft);
+            setCompletenessPassed(true);
+            setCompletenessAssessmentPassed(true);
+            setCompletenessAssessmentOutcome(completenessDraft?.assessment?.outcome || '');
+            setCompletenessNeedsAction(false);
+          }
+        }
+
+        const gateFailuresRaw = entry.draft?.gateFailures;
+        if (!recentlyChanged && gateFailuresRaw && typeof gateFailuresRaw === 'object') {
+          const gateFailuresDraft = normalizeGateFailures(gateFailuresRaw);
+          if (!isSameGateFailures(gateFailuresRef.current, gateFailuresDraft)) {
+            setGateFailures(gateFailuresDraft);
           }
         }
 
         const shouldLock = entry.state === 'submitted' || nextStep === FLOW_STEPS.RESULTS;
         if (isLockedRef.current !== shouldLock) {
           setIsLocked(shouldLock);
+        }
+        if (shouldLock) {
+          setModulePassed(Boolean(entry?.hasSuccessfulAttempt));
         }
       },
       (error) => {
@@ -777,6 +1115,7 @@ export default function TraineeCaseViewPage({ params }) {
     workflowSteps,
     firstPostInstructionStep,
     tieOutGateConfig,
+    completenessGateConfig,
   ]);
 
   useEffect(() => {
@@ -901,7 +1240,7 @@ export default function TraineeCaseViewPage({ params }) {
     return allReferenceDocuments.filter((doc) => nameSet.has(String(doc.fileName || '').toLowerCase()));
   }, [allReferenceDocuments, tieOutGateConfig]);
 
-  const correctedReferenceDocuments = useMemo(() => {
+  const tieOutCorrectedReferenceDocuments = useMemo(() => {
     const targetNames = Array.isArray(tieOutGateConfig?.correctedReferenceDocNames)
       ? tieOutGateConfig.correctedReferenceDocNames
       : [];
@@ -910,13 +1249,53 @@ export default function TraineeCaseViewPage({ params }) {
     return allReferenceDocuments.filter((doc) => nameSet.has(String(doc.fileName || '').toLowerCase()));
   }, [allReferenceDocuments, tieOutGateConfig]);
 
+  const completenessReferenceDocuments = useMemo(() => {
+    const targetNames = Array.isArray(completenessGateConfig?.referenceDocNames)
+      ? completenessGateConfig.referenceDocNames
+      : [];
+    if (targetNames.length === 0) return [];
+    const nameSet = new Set(targetNames.map((name) => String(name).toLowerCase()));
+    return allReferenceDocuments.filter((doc) => nameSet.has(String(doc.fileName || '').toLowerCase()));
+  }, [allReferenceDocuments, completenessGateConfig]);
+
+  const completenessCorrectedReferenceDocuments = useMemo(() => {
+    const targetNames = Array.isArray(completenessGateConfig?.correctedReferenceDocNames)
+      ? completenessGateConfig.correctedReferenceDocNames
+      : [];
+    if (targetNames.length === 0) return [];
+    const nameSet = new Set(targetNames.map((name) => String(name).toLowerCase()));
+    return allReferenceDocuments.filter((doc) => nameSet.has(String(doc.fileName || '').toLowerCase()));
+  }, [allReferenceDocuments, completenessGateConfig]);
+
   const referenceDocuments = useMemo(() => {
-    if (!tieOutGateConfig) return allReferenceDocuments;
-    if (!tieOutPassed) {
+    if (!tieOutGateConfig && !completenessGateConfig) return allReferenceDocuments;
+    if (tieOutGateConfig && !tieOutPassed) {
       return tieOutReferenceDocuments.length > 0 ? tieOutReferenceDocuments : allReferenceDocuments;
     }
-    return correctedReferenceDocuments.length > 0 ? correctedReferenceDocuments : allReferenceDocuments;
-  }, [allReferenceDocuments, correctedReferenceDocuments, tieOutGateConfig, tieOutPassed, tieOutReferenceDocuments]);
+    if (completenessGateConfig && !completenessPassed) {
+      return completenessReferenceDocuments.length > 0 ? completenessReferenceDocuments : allReferenceDocuments;
+    }
+    const correctedDocs = completenessGateConfig
+      ? completenessCorrectedReferenceDocuments
+      : tieOutCorrectedReferenceDocuments;
+    if (correctedDocs.length === 0) return allReferenceDocuments;
+    const includeAll =
+      completenessGateConfig?.includeAllReferenceDocs || tieOutGateConfig?.includeAllReferenceDocs;
+    if (!includeAll) {
+      return correctedDocs;
+    }
+    return mergeReferenceDocuments(allReferenceDocuments, correctedDocs);
+  }, [
+    allReferenceDocuments,
+    completenessCorrectedReferenceDocuments,
+    completenessGateConfig,
+    completenessPassed,
+    completenessReferenceDocuments,
+    tieOutCorrectedReferenceDocuments,
+    tieOutGateConfig,
+    tieOutPassed,
+    tieOutReferenceDocuments,
+  ]);
 
   const apAgingDoc = useMemo(() => {
     return referenceDocuments.find((doc) => {
@@ -976,7 +1355,7 @@ export default function TraineeCaseViewPage({ params }) {
     return () => {
       cancelled = true;
     };
-  }, [apAgingDoc, storage]);
+  }, [apAgingDoc]);
 
   const hasPendingGeneration = useMemo(() => {
     const docs = Array.isArray(caseData?.referenceDocuments) ? caseData.referenceDocuments : [];
@@ -1063,8 +1442,25 @@ export default function TraineeCaseViewPage({ params }) {
     if (!tieOutGateConfig) return true;
     if (!tieOutGateConfig.requireOpenedDocs) return true;
     if (tieOutReferenceDocuments.length === 0) return true;
-    return tieOutReferenceDocuments.every((doc) => openedReferenceDocs.has(getReferenceKey(doc)));
-  }, [openedReferenceDocs, tieOutGateConfig, tieOutReferenceDocuments]);
+    return tieOutReferenceDocuments.every((doc) => {
+      const referenceKey = getReferenceKey(doc);
+      if (referenceKey && openedReferenceDocs.has(referenceKey)) return true;
+      const view = tieOutDocViews[doc.id];
+      return Boolean(view?.url || doc.downloadURL);
+    });
+  }, [openedReferenceDocs, tieOutGateConfig, tieOutReferenceDocuments, tieOutDocViews]);
+
+  const completenessDocsOpened = useMemo(() => {
+    if (!completenessGateConfig) return true;
+    if (!completenessGateConfig.requireOpenedDocs) return true;
+    if (completenessReferenceDocuments.length === 0) return true;
+    return completenessReferenceDocuments.every((doc) => {
+      const referenceKey = getReferenceKey(doc);
+      if (referenceKey && openedReferenceDocs.has(referenceKey)) return true;
+      const view = completenessDocViews[doc.id];
+      return Boolean(view?.url || doc.downloadURL);
+    });
+  }, [openedReferenceDocs, completenessGateConfig, completenessReferenceDocuments, completenessDocViews]);
 
   useEffect(() => {
     if (!tieOutGateConfig) {
@@ -1152,7 +1548,95 @@ export default function TraineeCaseViewPage({ params }) {
     return () => {
       cancelled = true;
     };
-  }, [storage, tieOutGateConfig, tieOutReferenceDocuments]);
+  }, [tieOutGateConfig, tieOutReferenceDocuments]);
+
+  useEffect(() => {
+    if (!completenessGateConfig) {
+      setCompletenessDocViews({});
+      return;
+    }
+    const docs = completenessReferenceDocuments.length > 0 ? completenessReferenceDocuments : [];
+    if (docs.length === 0) {
+      setCompletenessDocViews({});
+      return;
+    }
+
+    let cancelled = false;
+    const initialViews = {};
+    docs.forEach((doc) => {
+      initialViews[doc.id] = {
+        url: doc.downloadURL || '',
+        loading: Boolean(!doc.downloadURL && doc.storagePath),
+        error: '',
+      };
+    });
+    setCompletenessDocViews(initialViews);
+
+    if (!storage?.app) {
+      setCompletenessDocViews((prev) => {
+        const next = { ...prev };
+        docs.forEach((doc) => {
+          if (!next[doc.id]?.url) {
+            next[doc.id] = {
+              ...next[doc.id],
+              loading: false,
+              error: 'Preview unavailable in this environment.',
+            };
+          }
+        });
+        return next;
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    Promise.all(
+      docs.map(async (doc) => {
+        if (doc.downloadURL || !doc.storagePath) {
+          return { id: doc.id, url: doc.downloadURL || '', error: '' };
+        }
+        try {
+          const url = await getDownloadURL(storageRef(storage, doc.storagePath));
+          return { id: doc.id, url, error: '' };
+        } catch (error) {
+          const message =
+            error?.code === 'storage/object-not-found'
+              ? 'Document is missing from storage.'
+              : 'Unable to load document preview.';
+          return { id: doc.id, url: '', error: message };
+        }
+      })
+    ).then((results) => {
+      if (cancelled) return;
+      setCompletenessDocViews((prev) => {
+        const next = { ...prev };
+        results.forEach((result) => {
+          next[result.id] = {
+            url: result.url,
+            loading: false,
+            error: result.error,
+          };
+        });
+        return next;
+      });
+      setOpenedReferenceDocs((prev) => {
+        const next = new Set(prev);
+        docs.forEach((doc) => {
+          const view = results.find((item) => item.id === doc.id);
+          if (view?.url) {
+            const key = getReferenceKey(doc);
+            if (key) next.add(key);
+          }
+        });
+        return next;
+      });
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [completenessGateConfig, completenessReferenceDocuments]);
 
   const classifiedCount = useMemo(() => {
     return selectedDisbursementDetails.filter((disbursement) =>
@@ -1210,27 +1694,6 @@ export default function TraineeCaseViewPage({ params }) {
   const selectedEvidenceItems = useMemo(() => {
     return allEvidenceItems.filter((item) => selectedIds.includes(item.paymentId));
   }, [allEvidenceItems, selectedIds]);
-
-  const isSurlCase = useMemo(() => {
-    const identifier = `${caseData?.moduleCode || ''} ${caseData?.title || ''} ${caseData?.caseName || ''}`.toLowerCase();
-    return identifier.includes('surl') || identifier.includes('unrecorded');
-  }, [caseData?.moduleCode, caseData?.title, caseData?.caseName]);
-
-  const apAgingReferenceIds = useMemo(() => {
-    return referenceDocuments
-      .map((doc) => {
-        const label = `${doc?.fileName || ''} ${doc?.title || ''}`.toLowerCase();
-        if (!label.includes('ap aging')) return null;
-        return doc?.id || doc?.storagePath || doc?.downloadURL || doc?.fileName || null;
-      })
-      .filter(Boolean);
-  }, [referenceDocuments]);
-
-  const apAgingOpened = useMemo(() => {
-    return apAgingReferenceIds.some((id) => openedReferenceDocs.has(id));
-  }, [apAgingReferenceIds, openedReferenceDocs]);
-
-  const mustOpenReference = false;
 
   const handleSelectPayment = useCallback(
     (paymentId) => {
@@ -1459,6 +1922,9 @@ export default function TraineeCaseViewPage({ params }) {
       if (!userId || !caseId) return;
       const intendedStep = stepOverride || activeStepRef.current;
       setSaveStatus('saving');
+      if (!attemptStartedAtRef.current) {
+        attemptStartedAtRef.current = Date.now();
+      }
 
       if (progressSaveTimeoutRef.current) {
         clearTimeout(progressSaveTimeoutRef.current);
@@ -1473,6 +1939,7 @@ export default function TraineeCaseViewPage({ params }) {
         const snapshot = classificationRef.current || {};
         const nextDraft = {};
         const tieOutGateSnapshot = tieOutGateResultRef.current;
+        const completenessGateSnapshot = completenessGateResultRef.current;
         selectedPaymentIds.forEach((id) => {
           if (snapshot[id]) nextDraft[id] = snapshot[id];
         });
@@ -1484,7 +1951,9 @@ export default function TraineeCaseViewPage({ params }) {
           draft: {
             selectedPaymentIds: selectedPaymentIds,
             classificationDraft: nextDraft,
+            gateFailures: gateFailuresRef.current,
             ...(tieOutGateSnapshot?.passed ? { tieOutGate: tieOutGateSnapshot } : {}),
+            ...(completenessGateSnapshot?.passed ? { completenessGate: completenessGateSnapshot } : {}),
           },
         };
 
@@ -1504,6 +1973,21 @@ export default function TraineeCaseViewPage({ params }) {
     enqueueProgressSave();
   }, [caseData, userId, isLocked, activeStep, enqueueProgressSave, isRetakeResetting]);
 
+  const markGateFailure = useCallback(
+    (gateKey) => {
+      setGateFailures((prev) => {
+        if (!Object.prototype.hasOwnProperty.call(prev, gateKey)) return prev;
+        if (prev[gateKey]) return prev;
+        const next = { ...prev, [gateKey]: true };
+        gateFailuresRef.current = next;
+        return next;
+      });
+      lastLocalChangeRef.current = Date.now();
+      enqueueProgressSave();
+    },
+    [enqueueProgressSave]
+  );
+
   const handleEnterSimulation = useCallback(() => {
     if (isLocked) return;
     if (!gatePassed && recipeGateId && userId) {
@@ -1511,6 +1995,9 @@ export default function TraineeCaseViewPage({ params }) {
       saveRecipeProgress({ appId, uid: userId, recipeId: recipeGateId, passedVersion: recipeVersion }).catch((error) => {
         console.error('Failed to save recipe progress:', error);
       });
+    }
+    if (!attemptStartedAtRef.current) {
+      attemptStartedAtRef.current = Date.now();
     }
     lastLocalChangeRef.current = Date.now();
     enqueueProgressSave(firstPostInstructionStep);
@@ -1540,7 +2027,11 @@ export default function TraineeCaseViewPage({ params }) {
   const handleSelectionChange = (paymentIdRaw) => {
     if (isLocked) return;
     if (tieOutGateConfig && !tieOutPassed) {
-      showModal('Complete the C&A tie-out step before making selections.', 'Tie-Out Required');
+      showModal('Complete the AP Aging C&A step before making selections.', 'C&A Required');
+      return;
+    }
+    if (completenessGateConfig && !completenessPassed) {
+      showModal('Complete the Disbursement Listing C&A step before making selections.', 'C&A Required');
       return;
     }
     const paymentId = normalizePaymentId(paymentIdRaw);
@@ -1554,9 +2045,7 @@ export default function TraineeCaseViewPage({ params }) {
         currentWork &&
           (currentWork.singleClassification ||
             currentWork.isException === true ||
-            currentWork.isException === false ||
-            (typeof currentWork.workpaperNote === 'string' && currentWork.workpaperNote.trim().length > 0) ||
-            (typeof currentWork.notes === 'string' && currentWork.notes.trim().length > 0))
+            currentWork.isException === false)
       );
 
       if (hasWork) {
@@ -1608,15 +2097,19 @@ export default function TraineeCaseViewPage({ params }) {
       return;
     }
     if (!selected.correct) {
+      markGateFailure('tieOut');
       setTieOutAssessmentFeedback(selected.feedback || 'Re-check the totals and try again.');
       return;
     }
 
     const outcome = selected.outcome || '';
     setTieOutAssessmentPassed(true);
+    setTieOutAssessmentOutcome(outcome);
     setTieOutAssessmentFeedback(selected.feedback || '');
 
-    if (outcome === 'match') {
+    const actionMode = tieOutGateConfig.actionMode === 'always' ? 'always' : 'mismatch';
+    const requiresAction = actionMode === 'always' || outcome !== 'match';
+    if (outcome === 'match' && !requiresAction) {
       const result = {
         passed: true,
         assessment: {
@@ -1651,17 +2144,19 @@ export default function TraineeCaseViewPage({ params }) {
       return;
     }
     if (!selected.correct) {
+      markGateFailure('tieOut');
       setTieOutActionFeedback(selected.feedback || tieOutGateConfig.failureMessage || 'Try again.');
       return;
     }
 
+    const outcome = tieOutAssessmentOutcome || 'mismatch';
     const result = {
       passed: true,
       assessment: {
         selectedOptionId: tieOutSelectionId,
         selectedOptionText:
           (tieOutGateConfig.assessmentOptions || []).find((opt) => opt.id === tieOutSelectionId)?.text || '',
-        outcome: 'mismatch',
+        outcome,
       },
       action: {
         selectedOptionId: selected.id,
@@ -1677,6 +2172,96 @@ export default function TraineeCaseViewPage({ params }) {
     setTieOutActionFeedback(selected.feedback || tieOutGateConfig.successMessage || 'Correct.');
   };
 
+  const handleCompletenessAssessmentSubmit = () => {
+    if (!completenessGateConfig) return;
+    const options = Array.isArray(completenessGateConfig.assessmentOptions)
+      ? completenessGateConfig.assessmentOptions
+      : [];
+    const selected = options.find((option) => option.id === completenessSelectionId);
+    if (!selected) {
+      setCompletenessAssessmentFeedback('Select a response before continuing.');
+      return;
+    }
+    if (!completenessDocsOpened) {
+      setCompletenessAssessmentFeedback('Review both documents before answering.');
+      return;
+    }
+    if (!selected.correct) {
+      markGateFailure('completeness');
+      setCompletenessAssessmentFeedback(selected.feedback || 'Re-check the population and try again.');
+      return;
+    }
+
+    const outcome = selected.outcome || '';
+    setCompletenessAssessmentPassed(true);
+    setCompletenessAssessmentOutcome(outcome);
+    setCompletenessAssessmentFeedback(selected.feedback || '');
+
+    const actionMode = completenessGateConfig.actionMode === 'always' ? 'always' : 'mismatch';
+    const requiresAction = actionMode === 'always' || outcome !== 'match';
+    if (outcome === 'match' && !requiresAction) {
+      const result = {
+        passed: true,
+        assessment: {
+          selectedOptionId: selected.id,
+          selectedOptionText: selected.text,
+          outcome,
+        },
+        action: null,
+        skillTag: completenessGateConfig.skillTag || '',
+      };
+      setCompletenessPassed(true);
+      setCompletenessGateResult(result);
+      completenessGateResultRef.current = result;
+      lastLocalChangeRef.current = Date.now();
+      enqueueProgressSave();
+      return;
+    }
+
+    setCompletenessNeedsAction(true);
+  };
+
+  const handleCompletenessActionSubmit = () => {
+    if (!completenessGateConfig) return;
+    const options = Array.isArray(completenessGateConfig.actionOptions)
+      ? completenessGateConfig.actionOptions
+      : Array.isArray(completenessGateConfig.options)
+      ? completenessGateConfig.options
+      : [];
+    const selected = options.find((option) => option.id === completenessActionSelectionId);
+    if (!selected) {
+      setCompletenessActionFeedback('Select a response before continuing.');
+      return;
+    }
+    if (!selected.correct) {
+      markGateFailure('completeness');
+      setCompletenessActionFeedback(selected.feedback || completenessGateConfig.failureMessage || 'Try again.');
+      return;
+    }
+
+    const outcome = completenessAssessmentOutcome || 'mismatch';
+    const result = {
+      passed: true,
+      assessment: {
+        selectedOptionId: completenessSelectionId,
+        selectedOptionText:
+          (completenessGateConfig.assessmentOptions || []).find((opt) => opt.id === completenessSelectionId)?.text || '',
+        outcome,
+      },
+      action: {
+        selectedOptionId: selected.id,
+        selectedOptionText: selected.text,
+      },
+      skillTag: completenessGateConfig.skillTag || '',
+    };
+    setCompletenessPassed(true);
+    setCompletenessGateResult(result);
+    completenessGateResultRef.current = result;
+    lastLocalChangeRef.current = Date.now();
+    enqueueProgressSave();
+    setCompletenessActionFeedback(selected.feedback || completenessGateConfig.successMessage || 'Correct.');
+  };
+
   const handleAllocationChange = (paymentId, fieldKey, value) => {
     if (isLocked) return;
     const normalizedId = normalizePaymentId(paymentId);
@@ -1685,7 +2270,7 @@ export default function TraineeCaseViewPage({ params }) {
 
     let finalValue;
     // Keep raw value for these specific, non-numeric fields
-    if (['mode', 'singleClassification', 'notes', 'workpaperNote'].includes(fieldKey)) {
+    if (['mode', 'singleClassification'].includes(fieldKey)) {
       finalValue = value;
     } else {
       // Sanitize all other fields (assumed to be amounts)
@@ -1722,7 +2307,11 @@ export default function TraineeCaseViewPage({ params }) {
   const goToTestingStep = () => {
     if (isLocked) return;
     if (tieOutGateConfig && !tieOutPassed) {
-      showModal('Complete the C&A tie-out check before selecting items to test.', 'Tie-Out Required');
+      showModal('Complete the AP Aging C&A check before selecting items to test.', 'C&A Required');
+      return;
+    }
+    if (completenessGateConfig && !completenessPassed) {
+      showModal('Complete the Disbursement Listing C&A check before selecting items to test.', 'C&A Required');
       return;
     }
     if (selectedIds.length === 0) {
@@ -1731,6 +2320,7 @@ export default function TraineeCaseViewPage({ params }) {
     }
     if (selectionScopeConfig) {
       if (missingRequiredIds.length > 0) {
+        markGateFailure('selection');
         showModal(
           `Selection missing one or more disbursements above ${currencyFormatter.format(scopeThreshold)}.`,
           'Selection Gate'
@@ -1790,12 +2380,6 @@ export default function TraineeCaseViewPage({ params }) {
       entry.singleClassification = allocation.singleClassification || '';
       entry.assertion = allocation.assertion || '';
       entry.reason = allocation.reason || '';
-      entry.workpaperNote =
-        typeof allocation.workpaperNote === 'string'
-          ? allocation.workpaperNote
-          : typeof allocation.notes === 'string'
-          ? allocation.notes
-          : '';
       allocationPayload[disbursement.paymentId] = entry;
     });
 
@@ -1828,6 +2412,31 @@ export default function TraineeCaseViewPage({ params }) {
         downloadURL: doc.downloadURL,
       }))
     );
+    const attemptSummary = computeDisbursementAttemptSummary({
+      disbursements: disbursementList,
+      studentAnswers: allocationPayload,
+    });
+    const startedAtMs = attemptStartedAtRef.current;
+    const timeToCompleteSeconds =
+      startedAtMs ? Math.max(0, Math.round((Date.now() - startedAtMs) / 1000)) : null;
+    const requiredDocsOpened =
+      (!tieOutGateConfig || tieOutDocsOpened) && (!completenessGateConfig || completenessDocsOpened);
+    const gateFailuresSnapshot = gateFailuresRef.current;
+    const gatesFirstAttempt =
+      !gateFailuresSnapshot.instruction &&
+      !gateFailuresSnapshot.tieOut &&
+      !gateFailuresSnapshot.completeness &&
+      !gateFailuresSnapshot.selection;
+    const instructionGatePassed = gateRequired ? gatePassed : true;
+    const tieOutGatePassed = !tieOutGateConfig || tieOutGateResult?.passed;
+    const completenessGatePassed = !completenessGateConfig || completenessGateResult?.passed;
+    const selectionGatePassed = !selectionScopeConfig || selectionGateResult?.requiredMet;
+    const gatesPassed = instructionGatePassed && tieOutGatePassed && completenessGatePassed && selectionGatePassed;
+    const allClassificationsCorrect = selectedDisbursementDetails.every((disbursement) =>
+      isClassificationCorrect(disbursement, allocationPayload[disbursement.paymentId])
+    );
+    const hasSuccessfulAttempt = gatesFirstAttempt && gatesPassed && allClassificationsCorrect;
+    setModulePassed(hasSuccessfulAttempt);
 
     try {
       if (progressSaveTimeoutRef.current) {
@@ -1843,7 +2452,13 @@ export default function TraineeCaseViewPage({ params }) {
         expectedClassifications: expectedPayload,
         surlGateResults: {
           tieOut: tieOutGateResult,
+          completeness: completenessGateResult,
           selection: selectionGateResult,
+        },
+        attemptSummary: {
+          ...attemptSummary,
+          requiredDocsOpened,
+          timeToCompleteSeconds,
         },
         submittedAt: Timestamp.now(),
       });
@@ -1859,9 +2474,11 @@ export default function TraineeCaseViewPage({ params }) {
           draft: {
             selectedPaymentIds: selectedIds,
             classificationDraft: classificationAmounts,
+            gateFailures: gateFailuresRef.current,
           },
-          hasSuccessfulAttempt: true,
+          hasSuccessfulAttempt,
         },
+        clearActiveAttempt: true,
       });
 
       setIsLocked(true);
@@ -1976,13 +2593,13 @@ export default function TraineeCaseViewPage({ params }) {
   const stepIndex = workflowSteps.indexOf(activeStep);
 
   const renderStepper = () => (
-    <ol className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between rounded-xl border border-slate-200 bg-gradient-to-r from-slate-50 via-white to-slate-50 px-4 py-4 shadow-sm">
+    <ol className="flex flex-col gap-3 md:flex-row md:items-stretch md:justify-between rounded-xl border border-slate-200 bg-gradient-to-r from-slate-50 via-white to-slate-50 px-4 py-4 shadow-sm">
       {workflowSteps.map((stepKey, idx) => {
         const isCompleted = furthestStepIndex > idx;
         const isActive = stepIndex === idx;
         const canNavigate = idx <= furthestStepIndex;
         return (
-          <li key={stepKey} className="flex items-center space-x-3">
+          <li key={stepKey} className="flex items-center space-x-3 md:flex-1">
             <button
               type="button"
               onClick={() => {
@@ -1996,7 +2613,7 @@ export default function TraineeCaseViewPage({ params }) {
               disabled={!canNavigate}
             >
               <span
-                className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-semibold ${
+                className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${
                   isActive
                     ? 'bg-blue-600 text-white'
                     : isCompleted
@@ -2170,10 +2787,24 @@ export default function TraineeCaseViewPage({ params }) {
   };
 
   const renderReferenceDownloadsBanner = () => {
-    if (referenceDocuments.length === 0) {
+    const apAgingBannerMessage = apAgingDoc
+      ? 'AP Aging is embedded at the bottom of this screen. Refer to it as you classify.'
+      : 'Use these documents to complete the audit procedures. Download and keep them open while you classify.';
+    const filteredDocuments = referenceDocuments.filter((doc) => {
+      const templateId =
+        typeof doc?.generationSpec?.templateId === 'string'
+          ? doc.generationSpec.templateId.toLowerCase()
+          : '';
+      const fileName = String(doc?.fileName || '').toLowerCase();
+      if (templateId === 'refdoc.ap-aging.v1' || templateId === 'refdoc.ap-leadsheet.v1') return false;
+      if (fileName.includes('ap aging') || fileName.includes('ap lead schedule')) return false;
+      return true;
+    });
+
+    if (filteredDocuments.length === 0) {
       return (
         <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
-          Reference materials will appear here when provided by your instructor.
+          {apAgingDoc ? apAgingBannerMessage : 'Reference materials will appear here when provided by your instructor.'}
         </div>
       );
     }
@@ -2181,8 +2812,7 @@ export default function TraineeCaseViewPage({ params }) {
     const bannerClasses = 'border-blue-200 bg-blue-50';
     const titleClasses = 'text-blue-700';
     const bodyClasses = 'text-blue-900';
-    const bannerMessage =
-      'Use these documents to complete the audit procedures. Download and keep them open while you classify.';
+    const bannerMessage = apAgingBannerMessage;
 
     return (
       <div className={`rounded-xl border px-4 py-3 shadow-sm ${bannerClasses}`}>
@@ -2192,13 +2822,13 @@ export default function TraineeCaseViewPage({ params }) {
             <p className={`text-sm ${bodyClasses}`}>{bannerMessage}</p>
           </div>
           <div className="flex w-full flex-wrap gap-3 sm:w-auto">
-            {referenceDocuments.map((doc) => {
+            {filteredDocuments.map((doc) => {
               const referenceKey = getReferenceKey(doc);
               const isOpened = referenceKey ? openedReferenceDocs.has(referenceKey) : false;
               const hasLink = Boolean(doc.storagePath || doc.downloadURL);
               const isPending = doc.pending || (!hasLink && (doc.generationSpec || doc.generationSpecId));
               return (
-                <Button
+              <Button
                   key={doc.id}
                   variant="secondary"
                   className={`text-xs px-4 py-2 border ${
@@ -2257,13 +2887,16 @@ export default function TraineeCaseViewPage({ params }) {
               : 'Review the materials and successfully answer the knowledge check questions to access the simulation.'}
           </p>
         </div>
-          <InstructionView
-            instructionData={caseData.instruction}
-            ctaLabel="Enter the Simulation"
-            className="w-full max-w-[1400px]"
-            gateRequired={gateRequired}
-            onStartSimulation={handleEnterSimulation}
-          />
+        <InstructionView
+          instructionData={caseData.instruction}
+          ctaLabel="Enter the Simulation"
+          className="w-full"
+          gateRequired={gateRequired}
+          onStartSimulation={handleEnterSimulation}
+          onGateAttempt={({ correct }) => {
+            if (!correct) markGateFailure('instruction');
+          }}
+        />
       </div>
     );
   };
@@ -2274,15 +2907,25 @@ export default function TraineeCaseViewPage({ params }) {
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6 space-y-4">
         <div>
           <h2 className="text-2xl font-semibold text-slate-900">
-            Step {getStepNumber(FLOW_STEPS.CA_CHECK) || 2} — C&amp;A Tie-Out
+            Step {getStepNumber(FLOW_STEPS.CA_CHECK) || 2} — AP Aging C&amp;A
           </h2>
           <p className="text-sm text-slate-600">
             This case does not include a tie-out gate. Continue to selection.
           </p>
         </div>
           <div className="flex justify-end">
-            <Button onClick={() => updateActiveStep(FLOW_STEPS.SELECTION)}>
-              Continue to Selection
+            <Button
+              onClick={() =>
+                updateActiveStep(
+                  completenessGateConfig && !completenessPassed
+                    ? FLOW_STEPS.CA_COMPLETENESS
+                    : FLOW_STEPS.SELECTION
+                )
+              }
+            >
+              {completenessGateConfig && !completenessPassed
+                ? 'Continue to Disbursement Listing C&A'
+                : 'Continue to Selection'}
             </Button>
           </div>
         </div>
@@ -2303,23 +2946,38 @@ export default function TraineeCaseViewPage({ params }) {
       ? tieOutGateConfig.options
       : [];
     const tieOutFeedback = tieOutAssessmentFeedback;
+    const stepTitle = tieOutGateConfig?.stepTitle || 'AP Aging C&A';
+    const stepDescription =
+      tieOutGateConfig?.description ||
+      'Review the AP aging and the ledger, then determine whether the totals tie before you select items to test.';
+    const evidenceTitle = tieOutGateConfig?.evidenceTitle || 'AP Aging Evidence';
+    const evidenceDescription =
+      tieOutGateConfig?.evidenceDescription || 'Review the AP aging and the AP ledger in parallel.';
+    const passedMessage =
+      tieOutGateConfig?.passedMessage || 'Tie-out cleared. Use the corrected population for your selections.';
+    const nextStepKey =
+      completenessGateConfig && !completenessPassed ? FLOW_STEPS.CA_COMPLETENESS : FLOW_STEPS.SELECTION;
+    const nextStepLabel =
+      nextStepKey === FLOW_STEPS.CA_COMPLETENESS
+        ? 'Continue to Disbursement Listing C&A'
+        : 'Continue to Selection';
 
     return (
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6 space-y-4">
         <div>
           <h2 className="text-2xl font-semibold text-slate-900">
-            Step {getStepNumber(FLOW_STEPS.CA_CHECK) || 2} — C&amp;A Tie-Out
+            Step {getStepNumber(FLOW_STEPS.CA_CHECK) || 2} — {stepTitle}
           </h2>
           <p className="text-sm text-slate-600">
-            Review the AP aging and the ledger, then determine whether the totals tie before you select items to test.
+            {stepDescription}
           </p>
         </div>
 
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-4">
           <div>
-            <h3 className="text-base font-semibold text-amber-900">Tie-Out Evidence</h3>
+            <h3 className="text-base font-semibold text-amber-900">{evidenceTitle}</h3>
             <p className="text-sm text-amber-800">
-              Review the AP aging and the AP ledger in parallel.
+              {evidenceDescription}
             </p>
           </div>
 
@@ -2397,6 +3055,7 @@ export default function TraineeCaseViewPage({ params }) {
                             setTieOutActionSelectionId('');
                             setTieOutActionFeedback('');
                             setTieOutAssessmentPassed(false);
+                            setTieOutAssessmentOutcome('');
                             setTieOutNeedsAction(false);
                           }}
                           className="mt-1"
@@ -2455,7 +3114,212 @@ export default function TraineeCaseViewPage({ params }) {
           ) : (
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="text-sm text-emerald-700 font-semibold">
-                Tie-out cleared. Use the corrected population for your selections.
+                {passedMessage}
+              </div>
+              <Button onClick={() => updateActiveStep(nextStepKey)}>
+                {nextStepLabel}
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderCompletenessStep = () => {
+    if (!completenessGateConfig) {
+      return (
+        <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6 space-y-4">
+          <div>
+          <h2 className="text-2xl font-semibold text-slate-900">
+            Step {getStepNumber(FLOW_STEPS.CA_COMPLETENESS) || 2} — Disbursement Listing C&amp;A
+          </h2>
+            <p className="text-sm text-slate-600">
+              This case does not include a completeness gate. Continue to selection.
+            </p>
+          </div>
+          <div className="flex justify-end">
+            <Button onClick={() => updateActiveStep(FLOW_STEPS.SELECTION)}>
+              Continue to Selection
+            </Button>
+          </div>
+        </div>
+      );
+    }
+
+    const completenessDocs =
+      completenessReferenceDocuments.length > 0 ? completenessReferenceDocuments : referenceDocuments;
+    const assessmentOptions = Array.isArray(completenessGateConfig?.assessmentOptions)
+      ? completenessGateConfig.assessmentOptions
+      : [];
+    const actionOptions = Array.isArray(completenessGateConfig?.actionOptions)
+      ? completenessGateConfig.actionOptions
+      : Array.isArray(completenessGateConfig?.options)
+      ? completenessGateConfig.options
+      : [];
+    const completenessFeedback = completenessAssessmentFeedback;
+    const stepTitle = completenessGateConfig?.stepTitle || 'Disbursement Listing C&A';
+    const stepDescription =
+      completenessGateConfig?.description ||
+      'Validate the January disbursement listing before selecting items to test.';
+    const evidenceTitle = completenessGateConfig?.evidenceTitle || 'Disbursement Listing Evidence';
+    const evidenceDescription =
+      completenessGateConfig?.evidenceDescription ||
+      'Compare the disbursement listing to the bank statement.';
+    const passedMessage =
+      completenessGateConfig?.passedMessage ||
+      'Disbursement listing check cleared. Use the corrected population for your selections.';
+
+    return (
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6 space-y-4">
+        <div>
+          <h2 className="text-2xl font-semibold text-slate-900">
+            Step {getStepNumber(FLOW_STEPS.CA_COMPLETENESS) || 2} — {stepTitle}
+          </h2>
+          <p className="text-sm text-slate-600">{stepDescription}</p>
+        </div>
+
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 space-y-4">
+          <div>
+            <h3 className="text-base font-semibold text-amber-900">{evidenceTitle}</h3>
+            <p className="text-sm text-amber-800">{evidenceDescription}</p>
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            {completenessDocs.map((doc) => {
+              const view = completenessDocViews[doc.id] || {};
+              const previewUrl = view.url || doc.downloadURL || '';
+              const previewError = view.error || '';
+              const previewLoading = view.loading || false;
+              const hasLink = Boolean(doc.storagePath || doc.downloadURL);
+              const isPending = doc.pending || (!hasLink && (doc.generationSpec || doc.generationSpecId));
+              const canPreview = isInlinePreviewable(doc.contentType, doc.fileName || previewUrl);
+              return (
+                <div key={doc.id} className="bg-white border border-amber-200 rounded-lg overflow-hidden shadow-sm">
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-amber-200 bg-amber-50">
+                    <div className="text-xs font-semibold text-amber-900 truncate">{doc.fileName || 'Reference'}</div>
+                    <Button
+                      variant="secondary"
+                      className="text-xs px-2 py-1"
+                      onClick={() => handleDownloadReferenceDoc(doc)}
+                      isLoading={downloadingReferenceId === doc.id}
+                      disabled={!hasLink || (downloadingReferenceId && downloadingReferenceId !== doc.id)}
+                    >
+                      <ExternalLink size={12} className="inline mr-1" /> Open
+                    </Button>
+                  </div>
+                  <div className="bg-white">
+                    {previewLoading ? (
+                      <div className="flex flex-col items-center justify-center text-amber-700 h-[320px]">
+                        <Loader2 size={24} className="animate-spin mb-2" />
+                        <p className="text-xs">Loading document…</p>
+                      </div>
+                    ) : isPending ? (
+                      <div className="flex flex-col items-center justify-center text-amber-800 h-[320px]">
+                        <p className="text-xs font-semibold">Document is generating…</p>
+                        <p className="text-[11px] text-amber-700">This will appear once processing finishes.</p>
+                      </div>
+                    ) : previewError ? (
+                      <div className="px-4 py-6 text-xs text-amber-800">{previewError}</div>
+                    ) : canPreview && previewUrl ? (
+                      <iframe
+                        title={doc.fileName || 'Reference document'}
+                        src={previewUrl}
+                        className="w-full h-[320px] md:h-[360px] xl:h-[380px]"
+                      />
+                    ) : (
+                      <div className="px-4 py-6 text-xs text-amber-800">
+                        Preview not available. Use “Open” to view this document.
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {!completenessPassed ? (
+            <div className="space-y-3">
+              {!completenessAssessmentPassed ? (
+                <>
+                  <p className="text-sm font-semibold text-amber-900">
+                    {completenessGateConfig?.assessmentQuestion ||
+                      'Does the January disbursement listing appear complete?'}
+                  </p>
+                  <div className="space-y-2">
+                    {assessmentOptions.map((option) => (
+                      <label key={option.id} className="flex items-start gap-3 text-sm text-amber-900">
+                        <input
+                          type="radio"
+                          name="completeness-assessment"
+                          value={option.id}
+                          checked={completenessSelectionId === option.id}
+                          onChange={() => {
+                            setCompletenessSelectionId(option.id);
+                            setCompletenessAssessmentFeedback('');
+                            setCompletenessActionSelectionId('');
+                            setCompletenessActionFeedback('');
+                            setCompletenessAssessmentPassed(false);
+                            setCompletenessAssessmentOutcome('');
+                            setCompletenessNeedsAction(false);
+                          }}
+                          className="mt-1"
+                        />
+                        <span>{option.text}</span>
+                      </label>
+                    ))}
+                  </div>
+                  {completenessFeedback ? (
+                    <div className="text-sm text-amber-800">{completenessFeedback}</div>
+                  ) : null}
+                  <div className="flex items-center gap-3">
+                    <Button variant="secondary" onClick={handleCompletenessAssessmentSubmit}>
+                      Submit C&A Assessment
+                    </Button>
+                    {!completenessDocsOpened ? (
+                      <span className="text-xs text-amber-700">Review both documents before answering.</span>
+                    ) : null}
+                  </div>
+                </>
+              ) : completenessNeedsAction ? (
+                <>
+                  <p className="text-sm font-semibold text-amber-900">
+                    {completenessGateConfig?.actionQuestion ||
+                      'You indicated the population is incomplete. What is the best next step?'}
+                  </p>
+                  <div className="space-y-2">
+                    {actionOptions.map((option) => (
+                      <label key={option.id} className="flex items-start gap-3 text-sm text-amber-900">
+                        <input
+                          type="radio"
+                          name="completeness-action"
+                          value={option.id}
+                          checked={completenessActionSelectionId === option.id}
+                          onChange={() => {
+                            setCompletenessActionSelectionId(option.id);
+                            setCompletenessActionFeedback('');
+                          }}
+                          className="mt-1"
+                        />
+                        <span>{option.text}</span>
+                      </label>
+                    ))}
+                  </div>
+                  {completenessActionFeedback ? (
+                    <div className="text-sm text-amber-800">{completenessActionFeedback}</div>
+                  ) : null}
+                  <div className="flex items-center gap-3">
+                    <Button variant="secondary" onClick={handleCompletenessActionSubmit}>
+                      Submit Next Step
+                    </Button>
+                  </div>
+                </>
+              ) : null}
+            </div>
+          ) : (
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="text-sm text-emerald-700 font-semibold">
+                {passedMessage}
               </div>
               <Button onClick={() => updateActiveStep(FLOW_STEPS.SELECTION)}>
                 Continue to Selection
@@ -2503,10 +3367,23 @@ export default function TraineeCaseViewPage({ params }) {
 
       {tieOutGateConfig && !tieOutPassed ? (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <span>Complete the C&amp;A tie-out step before selecting disbursements.</span>
+          <span>Complete the AP Aging C&amp;A step before selecting disbursements.</span>
           <Button variant="secondary" onClick={() => updateActiveStep(FLOW_STEPS.CA_CHECK)}>
-            Return to Tie-Out
+            Return to AP Aging C&amp;A
           </Button>
+        </div>
+      ) : null}
+      {completenessGateConfig && tieOutPassed && !completenessPassed ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <span>Complete the Disbursement Listing C&amp;A step before selecting disbursements.</span>
+          <Button variant="secondary" onClick={() => updateActiveStep(FLOW_STEPS.CA_COMPLETENESS)}>
+            Return to Disbursement Listing C&amp;A
+          </Button>
+        </div>
+      ) : null}
+      {selectionScopeConfig?.lockOnPass && selectionGateResult?.requiredMet ? (
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
+          Selection locked after passing the scope gate. Continue to testing to classify your selections.
         </div>
       ) : null}
 
@@ -2525,7 +3402,10 @@ export default function TraineeCaseViewPage({ params }) {
           {disbursementList.map((d, index) => {
             const paymentId = d.paymentId;
             const checkboxId = paymentId ? `cb-${paymentId}` : `cb-missing-${index + 1}`;
-            const selectionLocked = tieOutGateConfig && !tieOutPassed;
+            const selectionLocked =
+              (tieOutGateConfig && !tieOutPassed) ||
+              (completenessGateConfig && !completenessPassed) ||
+              (selectionScopeConfig?.lockOnPass && selectionGateResult?.requiredMet);
             const disabled = isLocked || hasPendingGeneration || !paymentId || selectionLocked;
             return (
               <div
@@ -2578,7 +3458,8 @@ export default function TraineeCaseViewPage({ params }) {
             selectedIds.length === 0 ||
             isLocked ||
             hasPendingGeneration ||
-            (tieOutGateConfig && !tieOutPassed)
+            (tieOutGateConfig && !tieOutPassed) ||
+            (completenessGateConfig && !completenessPassed)
           }
         >
           Continue to Classification
@@ -2606,21 +3487,6 @@ export default function TraineeCaseViewPage({ params }) {
             </div>
 
             <div className="flex items-center gap-3 sm:pt-1">
-              <Button
-                variant="ghost"
-                className="text-sm text-blue-700 hover:bg-blue-50"
-                onClick={() =>
-                  showModal(
-                    <div className="whitespace-pre-wrap text-sm text-slate-700">
-                      {caseData?.instructions || caseData?.description || 'No specific instructions provided.'}
-                    </div>,
-                    'Case Instructions'
-                  )
-                }
-              >
-                <BookOpen size={16} className="mr-2 inline" /> View Scenario
-              </Button>
-
               <div className="text-xs font-medium uppercase tracking-wide text-slate-400">
                 {saveStatus === 'saving' ? (
                   <span className="text-blue-600 animate-pulse">Saving...</span>
@@ -2750,7 +3616,6 @@ export default function TraineeCaseViewPage({ params }) {
                                   }}
                                   onClassificationChange={(id, val) => handleAllocationChange(id, 'singleClassification', val)}
                                   onSplitAmountChange={(id, key, val) => handleAllocationChange(id, key, val)}
-                                  onNoteChange={(id, val) => handleAllocationChange(id, 'workpaperNote', val)}
                                   onRationaleChange={handleRationaleChange}
                                   canMakeDecision={canMakeDecision}
                                   isLocked={isLocked}
@@ -2822,9 +3687,82 @@ export default function TraineeCaseViewPage({ params }) {
 
   const renderResultsStep = () => {
     const resultsDisbursements = caseWithKeys?.disbursements || disbursementList;
+    const completionSummary = computeDisbursementAttemptSummary({
+      disbursements: resultsDisbursements,
+      studentAnswers: classificationAmounts,
+    });
+    const requiredSelectionIds = new Set(
+      Array.isArray(selectionGateResult?.requiredIds) ? selectionGateResult.requiredIds : []
+    );
+    const criticalIssueDetails = [];
+    resultsDisbursements.forEach((item) => {
+      if (!item?.shouldFlag || criticalIssueDetails.length >= 3) return;
+      if (requiredSelectionIds.size > 0 && !requiredSelectionIds.has(item.paymentId)) return;
+      const allocation = classificationAmounts[item.paymentId] || null;
+      const expectedKey = getExpectedClassificationKey(item);
+      const expectedLabel = CLASSIFICATION_LABELS[expectedKey] || 'Exception';
+      const studentKey = getPrimaryClassificationKey(allocation);
+      const studentLabel = CLASSIFICATION_LABELS[studentKey] || 'Pass';
+      if (!allocation?.isException) {
+        criticalIssueDetails.push(`Missed exception: ${formatDisbursementLabel(item, currencyFormatter)}.`);
+        return;
+      }
+      if (expectedKey && studentKey && expectedKey !== studentKey) {
+        criticalIssueDetails.push(
+          `Wrong classification: ${formatDisbursementLabel(item, currencyFormatter)} should be ${expectedLabel} (you marked ${studentLabel}).`
+        );
+      }
+    });
+    const gateFailuresList = Object.entries(gateFailures)
+      .filter(([, value]) => value)
+      .map(([key]) => {
+        if (key === 'instruction') return 'Instruction gate missed';
+        if (key === 'tieOut') return 'AP aging tie-out gate missed';
+        if (key === 'completeness') return 'Completeness gate missed';
+        if (key === 'selection') return 'Selection gate missed';
+        return 'Gate missed';
+      });
+    const criticalIssues = criticalIssueDetails.length;
+    const falsePositives = Number(completionSummary.falsePositivesCount || 0);
+    const reasons = [
+      ...gateFailuresList,
+      ...(criticalIssues > 0
+        ? [`${criticalIssues} critical ${criticalIssues === 1 ? 'issue' : 'issues'} in testing`]
+        : []),
+      ...(falsePositives > 0
+        ? [`${falsePositives} false ${falsePositives === 1 ? 'positive' : 'positives'}`]
+        : []),
+    ];
     return (
       <div className="space-y-6">
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
+          {modulePassed === false ? (
+            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              <div className="font-semibold">Module not complete yet — this case is complete.</div>
+              <div className="mt-1">
+                You finished this case, but module completion requires a clean run with no critical misses.
+              </div>
+              <div className="mt-2 font-semibold">What needs improvement:</div>
+              <div className="mt-1">
+                {criticalIssueDetails.length > 0 ? (
+                  <div className="space-y-1">
+                    {criticalIssueDetails.map((detail) => (
+                      <div key={detail}>{detail}</div>
+                    ))}
+                  </div>
+                ) : reasons.length > 0 ? (
+                  reasons.join(' • ')
+                ) : (
+                  'Review the results below and try a new case to demonstrate mastery.'
+                )}
+              </div>
+              {caseData?.moduleId ? (
+                <div className="mt-3">
+                  <Button onClick={generateNewCase}>Start a new case with fresh documents</Button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
           <div className="mb-6">
             <h1 className="text-2xl font-bold text-slate-900">Audit Completion Report</h1>
             <p className="text-slate-600">Review your performance against the Virtual Senior&apos;s expectations.</p>
@@ -2833,9 +3771,14 @@ export default function TraineeCaseViewPage({ params }) {
           <ResultsAnalysis 
             disbursements={resultsDisbursements} 
             studentAnswers={classificationAmounts} 
-            gateResults={{ tieOut: tieOutGateResult, selection: selectionGateResult }}
+            gateResults={{
+              tieOut: tieOutGateResult,
+              completeness: completenessGateResult,
+              selection: selectionGateResult,
+            }}
             referenceDocuments={referenceDocuments}
             onRequestRetake={requestRetake}
+            onGenerateNewCase={caseData?.moduleId ? generateNewCase : undefined}
             onReturnToDashboard={() => navigate('/trainee')}
           />
         </div>
@@ -2854,6 +3797,8 @@ export default function TraineeCaseViewPage({ params }) {
     stepContent = renderInstructionStep();
   } else if (activeStep === FLOW_STEPS.CA_CHECK) {
     stepContent = renderCaCheckStep();
+  } else if (activeStep === FLOW_STEPS.CA_COMPLETENESS) {
+    stepContent = renderCompletenessStep();
   } else if (activeStep === FLOW_STEPS.SELECTION) {
     stepContent = renderSelectionStep();
   } else if (activeStep === FLOW_STEPS.TESTING) {
@@ -2863,8 +3808,8 @@ export default function TraineeCaseViewPage({ params }) {
   }
 
   return (
-    <div className="p-6 bg-gray-50 min-h-screen">
-      <div className="w-full max-w-[1400px] mx-auto space-y-6">
+    <div className="bg-gray-50 min-h-screen px-4 py-6 sm:px-6 lg:px-8">
+      <div className="w-full max-w-[1600px] 2xl:max-w-[1800px] mx-auto space-y-6">
         {renderStepper()}
         {stepContent}
       </div>

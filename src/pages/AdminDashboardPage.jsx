@@ -237,6 +237,7 @@ export default function AdminDashboardPage() {
     setSearchInput((query?.search ?? '').trim());
   }, [query?.search]);
 
+
   useEffect(() => {
     const normalized = debouncedSearch ? debouncedSearch : undefined;
     const current = (query?.search ?? '').trim() || undefined;
@@ -288,6 +289,7 @@ export default function AdminDashboardPage() {
     const valid = CASE_SORT_CHOICES.find((option) => option.value === query.sort);
     return valid ? valid.value : DEFAULT_CASE_SORT;
   }, [query?.sort]);
+
 
   const currentPage = useMemo(() => {
     const parsed = Number.parseInt(query?.page ?? '', 10);

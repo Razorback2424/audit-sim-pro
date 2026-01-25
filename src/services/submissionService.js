@@ -28,9 +28,43 @@ export const saveSubmission = async (userId, caseId, data) => {
     status,
     ...attemptData
   } = data || {};
+  let attemptIndex = Number(attemptData.attemptIndex);
+  if (!Number.isFinite(attemptIndex) || attemptIndex <= 0) {
+    try {
+      const snap = await getDoc(ref);
+      const snapData = snap && typeof snap.data === 'function' ? snap.data() : null;
+      const existingAttempts = Array.isArray(snapData?.attempts) ? snapData.attempts : [];
+      attemptIndex = existingAttempts.length + 1;
+    } catch (error) {
+      attemptIndex = 1;
+    }
+  }
+  const attemptTypeRaw = typeof attemptData.attemptType === 'string' ? attemptData.attemptType.trim() : '';
+  const attemptType = attemptTypeRaw || (attemptIndex === 1 ? 'baseline' : 'practice');
+  const attemptSummary =
+    attemptData.attemptSummary && typeof attemptData.attemptSummary === 'object'
+      ? { ...attemptData.attemptSummary }
+      : null;
+  if (attemptSummary) {
+    if (!Number.isFinite(Number(attemptSummary.attemptIndex))) {
+      attemptSummary.attemptIndex = attemptIndex;
+    }
+    if (!attemptSummary.attemptType) {
+      attemptSummary.attemptType = attemptType;
+    }
+    if (typeof attemptSummary.isBaseline !== 'boolean') {
+      attemptSummary.isBaseline = attemptIndex === 1;
+    }
+  }
+  const normalizedAttemptData = {
+    ...attemptData,
+    attemptIndex,
+    attemptType,
+    ...(attemptSummary ? { attemptSummary } : {}),
+  };
   const docPayload = {
     submittedAt: serverTimestamp(), // This sets the last update time for the document itself.
-    attempts: arrayUnion(attemptData),
+    attempts: arrayUnion(normalizedAttemptData),
   };
 
   if (status) docPayload.status = status;
@@ -110,6 +144,7 @@ const normalizeAttemptList = (docData) => {
       selectedPaymentIds: Array.isArray(attempt.selectedPaymentIds) ? attempt.selectedPaymentIds : docData.selectedPaymentIds || [],
       disbursementClassifications: attempt.disbursementClassifications || docData.disbursementClassifications || {},
       expectedClassifications: attempt.expectedClassifications || docData.expectedClassifications || {},
+      attemptSummary: attempt.attemptSummary || null,
     }));
   }
 
@@ -121,6 +156,7 @@ const normalizeAttemptList = (docData) => {
       disbursementClassifications: docData.disbursementClassifications || {},
       expectedClassifications: docData.expectedClassifications || {},
       overallGrade: docData.overallGrade,
+      attemptSummary: docData.attemptSummary || null,
     },
   ];
 };

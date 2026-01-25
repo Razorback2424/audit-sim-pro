@@ -158,6 +158,15 @@ export function createCaseFormSubmitHandler({
       }
 
       const outstandingIssues = [];
+      if (isOutstandingCheckTesting) {
+        const cutoffWindowDaysRaw = cashContext?.cutoffWindowDays;
+        const cutoffWindowDays = Number(cutoffWindowDaysRaw);
+        if (!Number.isFinite(cutoffWindowDays) || cutoffWindowDays <= 0) {
+          logValidationFail('cash-otc-cutoff-window-missing', { cutoffWindowDays: cutoffWindowDaysRaw });
+          showModal('For Outstanding Check Testing, provide the cutoff window (days) in Cash Context.', 'Validation Error');
+          return;
+        }
+      }
       cashOutstandingItems.forEach((item, idx) => {
         const missing = [];
         if (!item.reference) missing.push(isOutstandingCheckTesting ? 'Check #' : 'Reference #');

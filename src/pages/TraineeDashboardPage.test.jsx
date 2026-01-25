@@ -14,7 +14,7 @@ jest.mock('../services/recipeService', () => ({
 }));
 
 jest.mock('../services/recipeProgressService', () => ({
-  fetchRecipeProgress: jest.fn().mockResolvedValue({ recipeId: 'case.surl.promotador.v1', passedVersion: 0 })
+  fetchRecipeProgress: jest.fn().mockResolvedValue({ recipeId: 'case.surl.seed.alpha.v1', passedVersion: 0 })
 }));
 
 jest.mock('../services/attemptService', () => ({

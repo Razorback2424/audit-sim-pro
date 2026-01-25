@@ -118,7 +118,7 @@ beforeEach(() => {
   fetchUsersWithProfiles.mockResolvedValue([]);
   listCaseRecipes.mockReturnValue([
     {
-      id: 'case.surl.promotador.v1',
+      id: 'case.surl.seed.alpha.v1',
       label: 'SURL Cutoff (Generated)',
       moduleTitle: 'Basic SURL',
       pathId: 'general',

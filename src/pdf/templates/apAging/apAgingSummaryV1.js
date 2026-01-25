@@ -24,15 +24,15 @@ function ApAgingSummary({ data }) {
 
       <table className="agingTable" role="table" aria-label="AP aging summary">
         <colgroup>
-          <col />
-          <col />
-          <col />
-          <col />
-          <col />
-          <col />
-          <col />
-          <col />
-          <col />
+          <col className="col-vendor" />
+          <col className="col-invoice" />
+          <col className="col-invoice-date" />
+          <col className="col-due-date" />
+          <col className="col-amount" />
+          <col className="col-current" />
+          <col className="col-30" />
+          <col className="col-60" />
+          <col className="col-90" />
         </colgroup>
         <thead>
           <tr>
@@ -128,6 +128,16 @@ body { color: ${t.ink}; font-family: "Times New Roman", Times, serif; }
   font-size: 12px;
 }
 
+.agingTable .col-vendor { width: 26%; }
+.agingTable .col-invoice { width: 12%; }
+.agingTable .col-invoice-date { width: 11%; }
+.agingTable .col-due-date { width: 11%; }
+.agingTable .col-amount { width: 12%; }
+.agingTable .col-current { width: 7%; }
+.agingTable .col-30 { width: 7%; }
+.agingTable .col-60 { width: 7%; }
+.agingTable .col-90 { width: 7%; }
+
 .agingTable th,
 .agingTable td {
   border: 1px solid ${t.grid};
@@ -142,6 +152,7 @@ body { color: ${t.ink}; font-family: "Times New Roman", Times, serif; }
 }
 
 .agingTable .num { text-align: right; }
+.agingTable td:first-child { white-space: normal; }
 .agingTable tfoot td { font-weight: 700; }
 .agingTable tfoot .totalLabel { text-align: right; }
 `;

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Users, AlertTriangle, ClipboardList, FolderKanban } from 'lucide-react';
+import { Users, AlertTriangle, ClipboardList, FolderKanban, FileText } from 'lucide-react';
 import { Button } from '../../AppCore';
 
 const ACTIONS = [
@@ -30,6 +30,13 @@ const ACTIONS = [
     description: 'Monitor trainee work across cases.',
     icon: ClipboardList,
     path: '/admin#cases',
+  },
+  {
+    key: 'debug-docs',
+    label: 'Manage debug docs',
+    description: 'Generate and review standalone reference docs.',
+    icon: FileText,
+    path: '/admin/debug-docs',
   },
 ];
 

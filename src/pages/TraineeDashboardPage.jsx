@@ -16,8 +16,14 @@ const PAGE_SIZE = 20;
 
 const TIER_ORDER = Object.freeze(['foundations', 'core', 'advanced']);
 const TIER_LABELS = Object.freeze({
-  foundations: 'Basics',
+  foundations: 'Foundations',
   core: 'Core',
+  advanced: 'Expert',
+});
+const MODULE_TIER_ORDER = Object.freeze(['basic', 'intermediate', 'advanced']);
+const MODULE_TIER_LABELS = Object.freeze({
+  basic: 'Basics',
+  intermediate: 'Intermediate',
   advanced: 'Advanced',
 });
 const MODULE_LABELS = Object.freeze({
@@ -28,7 +34,7 @@ const MODULE_LABELS = Object.freeze({
 const JOURNEY_STEPS = Object.freeze([
   { key: 'foundations', label: 'Foundations' },
   { key: 'core', label: 'Core' },
-  { key: 'advanced', label: 'Advanced' },
+  { key: 'advanced', label: 'Expert' },
 ]);
 
 const mapCaseLevelToTier = (caseLevel) => {
@@ -54,6 +60,19 @@ const normalizeTier = (value) => {
 };
 
 const formatTier = (tier) => TIER_LABELS[normalizeTier(tier)] || TIER_LABELS[DEFAULT_TIER];
+
+const normalizeModuleTier = (caseData) => {
+  const level = typeof caseData?.caseLevel === 'string' ? caseData.caseLevel.trim().toLowerCase() : '';
+  if (level === 'basic') return 'basic';
+  if (level === 'intermediate') return 'intermediate';
+  if (level === 'advanced') return 'advanced';
+  const tier = normalizeTier(caseData?.tier);
+  if (tier === 'core') return 'intermediate';
+  if (tier === 'advanced') return 'advanced';
+  return 'basic';
+};
+
+const formatModuleTier = (tier) => MODULE_TIER_LABELS[tier] || MODULE_TIER_LABELS.basic;
 
 const getPathId = (caseData) =>
   (typeof caseData?.pathId === 'string' && caseData.pathId.trim()) ||
@@ -628,7 +647,6 @@ export default function TraineeDashboardPage() {
   const currentPathLabel = currentFocusCase
     ? getPathLabel(currentPathId, currentFocusCase?.pathTitle)
     : getPathLabel(currentPathId, '');
-  const currentTierLabel = formatTier(currentTier);
   const moduleLabelFromOptions =
     moduleOptions.find((option) => option.value === selectedModuleId)?.label ||
     moduleOptions[0]?.label ||
@@ -638,9 +656,6 @@ export default function TraineeDashboardPage() {
       ? moduleLabelFromOptions
       : getModuleLabel(currentFocusCase)
     : moduleLabelFromOptions;
-
-  const currentPathStats = getTierStatsForPath(currentPathId);
-  const currentTierStats = currentPathStats[currentTier] || { done: 0, total: 0 };
 
   const shouldShowFocusSkills = heroSkills.length > 0 && Boolean(heroCase);
 
@@ -673,15 +688,147 @@ export default function TraineeDashboardPage() {
     return 'upcoming';
   };
 
-  const getNextTierGateMessage = () => {
-    if (!currentFocusCase) return '';
-    const nextTier = currentTier === 'foundations' ? 'core' : currentTier === 'core' ? 'advanced' : null;
-    if (!nextTier) return '';
-    const nextTierLabel = formatTier(nextTier);
-    const isLocked = !isTierUnlocked(currentPathId, nextTier);
-    if (!isLocked) return '';
-    return `${nextTierLabel} locked until ${formatTier(currentTier)} is complete.`;
-  };
+  const moduleJourney = useMemo(() => {
+    const currentModuleId = (currentFocusCase?.auditArea || '').toLowerCase();
+    return Object.entries(MODULE_LABELS).map(([moduleId, label]) => {
+      const moduleCases = primaryCases.filter(
+        (caseData) => (caseData?.auditArea || '').toLowerCase() === moduleId
+      );
+      const tierStats = {
+        basic: { done: 0, total: 0 },
+        intermediate: { done: 0, total: 0 },
+        advanced: { done: 0, total: 0 },
+      };
+      moduleCases.forEach((caseData) => {
+        const tierKey = normalizeModuleTier(caseData);
+        tierStats[tierKey].total += 1;
+        if (isModuleCompleted(caseData.progress)) {
+          tierStats[tierKey].done += 1;
+        }
+      });
+
+      const basicsAssigned = tierStats.basic.total > 0;
+      const intermediateAssigned = tierStats.intermediate.total > 0;
+      const advancedAssigned = tierStats.advanced.total > 0;
+      const totalCases = Object.values(tierStats).reduce((sum, entry) => sum + entry.total, 0);
+      const basicsComplete = basicsAssigned && tierStats.basic.done >= tierStats.basic.total;
+      const intermediateComplete =
+        intermediateAssigned && tierStats.intermediate.done >= tierStats.intermediate.total;
+      const advancedComplete = advancedAssigned && tierStats.advanced.done >= tierStats.advanced.total;
+      const intermediateUnlocked = basicsComplete;
+      const advancedUnlocked = intermediateComplete;
+      const tierUnlocked = {
+        basic: true,
+        intermediate: intermediateUnlocked,
+        advanced: advancedUnlocked,
+      };
+
+      const currentTierKey =
+        MODULE_TIER_ORDER.find((tierKey) => {
+          const stats = tierStats[tierKey];
+          if (!tierUnlocked[tierKey]) return false;
+          return stats.total > 0 && stats.done < stats.total;
+        }) || '';
+
+      const moduleCompleted = advancedAssigned && advancedComplete;
+      const lockedByPrereq =
+        (intermediateAssigned && !basicsComplete) ||
+        (advancedAssigned && !intermediateComplete);
+      const lockedMessage = lockedByPrereq
+        ? intermediateAssigned && !basicsComplete
+          ? 'Complete Basics to unlock Intermediate.'
+          : advancedAssigned && !intermediateComplete
+          ? 'Complete Intermediate to unlock Advanced.'
+          : ''
+        : '';
+      const statusType = lockedByPrereq
+        ? 'locked'
+        : moduleCompleted
+        ? 'completed'
+        : totalCases === 0
+        ? 'waiting'
+        : currentTierKey
+        ? 'in_progress'
+        : 'ready';
+
+      const completedTierIndex = (() => {
+        if (advancedComplete) return 2;
+        if (intermediateComplete) return 1;
+        if (basicsComplete) return 0;
+        return -1;
+      })();
+      const nextTierKey =
+        currentTierKey
+          ? ''
+          : completedTierIndex < MODULE_TIER_ORDER.length - 1
+          ? MODULE_TIER_ORDER[completedTierIndex + 1]
+          : '';
+      const tierChipLabel = moduleCompleted
+        ? `${MODULE_TIER_LABELS.advanced} (completed)`
+        : currentTierKey
+        ? `Current: ${formatModuleTier(currentTierKey)}`
+        : nextTierKey
+        ? `Next: ${formatModuleTier(nextTierKey)}`
+        : `Next: ${MODULE_TIER_LABELS.basic}`;
+
+      const tierStates = {
+        basic: !tierUnlocked.basic
+          ? 'locked'
+          : basicsComplete
+          ? 'completed'
+          : currentTierKey === 'basic'
+          ? 'current'
+          : nextTierKey === 'basic'
+          ? 'next'
+          : 'upcoming',
+        intermediate: !tierUnlocked.intermediate
+          ? 'locked'
+          : intermediateComplete
+          ? 'completed'
+          : currentTierKey === 'intermediate'
+          ? 'current'
+          : nextTierKey === 'intermediate'
+          ? 'next'
+          : 'upcoming',
+        advanced: !tierUnlocked.advanced
+          ? 'locked'
+          : advancedComplete
+          ? 'completed'
+          : currentTierKey === 'advanced'
+          ? 'current'
+          : nextTierKey === 'advanced'
+          ? 'next'
+          : 'upcoming',
+      };
+
+      const tierProgressPercent = Math.round(
+        ((completedTierIndex + 1) / MODULE_TIER_ORDER.length) * 100
+      );
+      const completedTierCount = Math.max(completedTierIndex + 1, 0);
+
+      const currentTierStats = currentTierKey ? tierStats[currentTierKey] : null;
+      const lastCompletedTierKey =
+        completedTierIndex >= 0 ? MODULE_TIER_ORDER[completedTierIndex] : '';
+      const lastCompletedTierStats = lastCompletedTierKey ? tierStats[lastCompletedTierKey] : null;
+
+      return {
+        moduleId,
+        label,
+        statusType,
+        lockedMessage,
+        tierChipLabel,
+        tierStates,
+        tierProgressPercent,
+        completedTierCount,
+        totalCases,
+        currentTierKey,
+        currentTierStats,
+        lastCompletedTierKey,
+        lastCompletedTierStats,
+        isActiveModule: currentModuleId === moduleId,
+      };
+    });
+  }, [currentFocusCase, primaryCases]);
 
   const handleChooseDifferent = () => {
     const options = eligibleModules.filter((caseData) => caseData.id !== heroCase?.id);
@@ -836,17 +983,16 @@ export default function TraineeDashboardPage() {
     ? formatRelativeDate(lastEditedMs ? new Date(lastEditedMs) : null, now)
     : '';
   const estimatedTime = heroCase ? formatMinutes(heroCase?.estimatedMinutes) : '';
-  const focusGateMessage = getNextTierGateMessage();
   const heroActionLabel = heroMode === 'resume' ? 'Resume' : 'Start Case';
   const heroHierarchyLabel = heroCase
-    ? `${getPathLabel(getPathId(heroCase), heroCase?.pathTitle)} -> ${getModuleLabel(heroCase)} -> ${getSkillLabel(heroCase)} -> ${formatCaseLevel(heroCase?.caseLevel)}`
+    ? `${getPathLabel(getPathId(heroCase), heroCase?.pathTitle)} / ${getModuleLabel(heroCase)} · ${formatCaseLevel(heroCase?.caseLevel)}`
     : '';
   const availableModule = availableModules[0] || null;
   const availableLevelLabel = availableModule
     ? resolveCaseLevelLabel(availableModule, codedRecipeById)
     : '';
   const availableHierarchyLabel = availableModule
-    ? `${getPathLabel(getPathId(availableModule), availableModule?.pathTitle)} -> ${getModuleLabel(availableModule)} -> ${getSkillLabel(availableModule)} -> ${availableLevelLabel}`
+    ? `${getPathLabel(getPathId(availableModule), availableModule?.pathTitle)} / ${getModuleLabel(availableModule)} · ${availableLevelLabel}`
     : '';
 
   const handleStartModule = async (moduleId) => {
@@ -923,25 +1069,28 @@ export default function TraineeDashboardPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
+      <main className="mx-auto w-full max-w-[1400px] px-6 py-8 space-y-6 sm:px-8 lg:px-10">
         {error ? (
           <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-md p-4">
             {error}
           </div>
         ) : null}
 
-        <div className="bg-white rounded-lg border border-gray-100 p-6">
-          <div className="flex flex-col items-center gap-4 sm:flex-row sm:justify-center">
+        <div className="bg-white rounded-lg border border-gray-100 p-4">
+          <div className="text-xs uppercase tracking-[0.2em] text-gray-400 mb-3 text-center sm:text-left">
+            Program Path
+          </div>
+          <div className="flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
             {JOURNEY_STEPS.map((step, index) => {
               const state = getJourneyStepState(step.key);
               return (
                 <div key={step.key} className="flex items-center">
                   <div className="flex items-center gap-2">
                     {state === 'completed' ? (
-                      <CheckCircle2 size={22} className="text-emerald-600" />
+                      <CheckCircle2 size={20} className="text-emerald-600" />
                     ) : (
                       <span
-                        className={`h-5 w-5 rounded-full border-2 ${
+                        className={`h-4 w-4 rounded-full border-2 ${
                           state === 'active'
                             ? 'border-blue-600 bg-blue-100'
                             : 'border-gray-300 bg-white'
@@ -950,7 +1099,7 @@ export default function TraineeDashboardPage() {
                       />
                     )}
                     <span
-                      className={`text-base font-semibold ${
+                      className={`text-sm font-semibold ${
                         state === 'active'
                           ? 'text-blue-700'
                           : state === 'completed'
@@ -962,8 +1111,147 @@ export default function TraineeDashboardPage() {
                     </span>
                   </div>
                   {index < JOURNEY_STEPS.length - 1 ? (
-                    <div className="mx-4 h-px w-16 bg-gray-200" aria-hidden="true" />
+                    <div className="mx-3 h-px w-12 bg-gray-200" aria-hidden="true" />
                   ) : null}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="bg-white rounded-lg border border-gray-100 p-6 space-y-4">
+          <div className="flex flex-col gap-1">
+            <div className="text-xs uppercase tracking-[0.2em] text-gray-400">Module Journey</div>
+            <div className="text-sm text-gray-600">
+              Track your progress inside each module.
+            </div>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {moduleJourney.map((module) => {
+              const statusTone =
+                module.statusType === 'completed'
+                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                  : module.statusType === 'in_progress'
+                  ? 'bg-blue-50 text-blue-700 border-blue-200'
+                  : module.statusType === 'waiting'
+                  ? 'bg-amber-50 text-amber-700 border-amber-200'
+                  : module.statusType === 'ready'
+                  ? 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                  : 'bg-slate-50 text-slate-500 border-slate-200';
+              const tierTone =
+                module.statusType === 'completed'
+                  ? 'bg-emerald-100 text-emerald-700'
+                  : module.statusType === 'waiting'
+                  ? 'bg-amber-100 text-amber-700'
+                  : module.statusType === 'locked'
+                  ? 'bg-slate-100 text-slate-500'
+                  : module.statusType === 'ready'
+                  ? 'bg-indigo-100 text-indigo-700'
+                  : 'bg-blue-100 text-blue-700';
+              const statusLabel =
+                module.statusType === 'completed'
+                  ? 'Completed'
+                  : module.statusType === 'waiting'
+                  ? 'Waiting for assignment'
+                  : module.statusType === 'locked'
+                  ? 'Locked'
+                  : module.statusType === 'ready'
+                  ? 'Ready for next tier'
+                  : 'In progress';
+              const progressTone =
+                module.statusType === 'completed'
+                  ? 'bg-emerald-500'
+                  : module.statusType === 'ready'
+                  ? 'bg-indigo-500'
+                  : module.statusType === 'waiting' || module.statusType === 'locked'
+                  ? 'bg-slate-300'
+                  : 'bg-blue-500';
+              const assignedTierLabel = module.currentTierStats
+                ? formatModuleTier(module.currentTierKey)
+                : module.lastCompletedTierKey
+                ? formatModuleTier(module.lastCompletedTierKey)
+                : '';
+              const assignedTierStats = module.currentTierStats || module.lastCompletedTierStats;
+              return (
+                <div
+                  key={module.moduleId}
+                  className={`rounded-xl border p-4 space-y-3 ${
+                    module.isActiveModule ? 'border-blue-200 shadow-sm' : 'border-gray-200'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-base font-semibold text-gray-900">{module.label}</div>
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-semibold ${statusTone}`}>
+                          {statusLabel}
+                        </span>
+                        <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${tierTone}`}>
+                          {module.tierChipLabel}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="h-1.5 w-full rounded-full bg-slate-100 overflow-hidden">
+                    <div
+                      className={`h-full ${progressTone}`}
+                      style={{ width: `${module.tierProgressPercent}%` }}
+                    />
+                  </div>
+                  <div className="text-xs text-gray-500">
+                    Tier progress: {module.completedTierCount}/{MODULE_TIER_ORDER.length} tiers complete
+                  </div>
+                  {assignedTierStats ? (
+                    <div className="text-xs text-gray-500">
+                      {assignedTierLabel} cases: {assignedTierStats.done}/{assignedTierStats.total} complete
+                    </div>
+                  ) : module.totalCases === 0 ? (
+                    <div className="text-xs text-gray-500">No cases assigned yet</div>
+                  ) : null}
+                  {module.statusType === 'locked' && module.lockedMessage ? (
+                    <div className="text-xs text-slate-500">{module.lockedMessage}</div>
+                  ) : null}
+
+                  <div className="flex items-center justify-between text-xs text-gray-500">
+                    {MODULE_TIER_ORDER.map((tierKey) => {
+                      const state = module.tierStates[tierKey];
+                      const dotClass =
+                        state === 'completed'
+                          ? 'bg-emerald-500'
+                          : state === 'current'
+                          ? 'bg-blue-500'
+                          : state === 'next'
+                          ? 'bg-blue-200'
+                          : 'bg-slate-300';
+                      const textClass =
+                        state === 'completed'
+                          ? 'text-emerald-700'
+                          : state === 'current'
+                          ? 'text-blue-700'
+                          : state === 'next'
+                          ? 'text-blue-600'
+                          : 'text-slate-400';
+                      const suffix =
+                        state === 'completed'
+                          ? '✓'
+                          : state === 'current'
+                          ? 'Current'
+                          : state === 'next'
+                          ? 'Next'
+                          : state === 'locked'
+                          ? 'Locked'
+                          : '';
+                      return (
+                        <div key={`${module.moduleId}-${tierKey}`} className="flex items-center gap-2">
+                          <span className={`h-2 w-2 rounded-full ${dotClass}`} />
+                          <span className={`font-semibold ${textClass}`}>
+                            {MODULE_TIER_LABELS[tierKey]}{suffix ? ` ${suffix}` : ''}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               );
             })}
@@ -1061,7 +1349,7 @@ export default function TraineeDashboardPage() {
         {heroHierarchyLabel || moduleOptions.length > 0 ? (
           <div className="flex items-center justify-between text-sm text-gray-500">
             <div>
-              Current Module: {heroHierarchyLabel || `${currentPathLabel} → ${currentModuleLabel}`}
+              Current Module: {heroHierarchyLabel || `${currentPathLabel} / ${currentModuleLabel}`}
             </div>
             <button
               type="button"
@@ -1070,19 +1358,6 @@ export default function TraineeDashboardPage() {
             >
               Change Module
             </button>
-          </div>
-        ) : null}
-
-        {heroCase ? (
-          <div className="bg-white rounded-lg border border-gray-100 p-5 space-y-3">
-            <div className="text-sm font-semibold text-gray-800">Tier progress</div>
-            {currentTierStats.total > 0 ? (
-              <div className="text-sm text-gray-600">
-                {currentPathLabel} · {currentTierLabel} — {currentTierStats.done}/{currentTierStats.total} modules
-                complete
-              </div>
-            ) : null}
-            {focusGateMessage ? <div className="text-sm text-gray-500">{focusGateMessage}</div> : null}
           </div>
         ) : null}
 

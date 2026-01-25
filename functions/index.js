@@ -1,5 +1,5 @@
 // functions/index.js
-const functions = require('firebase-functions');
+const functions = require('firebase-functions/v1');
 const { onDocumentWritten } = require('firebase-functions/v2/firestore');
 const admin = require('firebase-admin');
 const { getTemplateRenderer } = require('./pdfTemplates');
@@ -47,6 +47,260 @@ const ensureSafeFileName = (fileName = '') => {
   const trimmed = String(fileName || '').trim() || 'document.pdf';
   const withoutPaths = trimmed.replace(/[/\\]/g, '-');
   return withoutPaths.replace(/[^\w.\-()\s]/g, '').replace(/\s+/g, ' ').trim();
+};
+
+const buildDebugDataForTemplate = (templateId) => {
+  switch (templateId) {
+    case 'invoice.seed.alpha.v1':
+      return {
+        brandName: 'SEED ALPHA',
+        invoiceNumber: 'INV-ALPHA-001',
+        invoiceDate: '20X3-01-15',
+        issuedTo: {
+          name: 'Team Up Promotional Products, LLC',
+          line1: '2150 Riverfront Ave',
+          line2: 'Denver, CO 80202',
+        },
+        shippingInfo: {
+          dateValue: '20X3-01-12',
+          terms: 'FOB Destination',
+        },
+        items: [
+          { description: 'Marketing print run', qty: 2, unitPrice: 1250 },
+          { description: 'Booth collateral set', qty: 1, unitPrice: 860 },
+          { description: 'Rush design fee', qty: 1, unitPrice: 275 },
+        ],
+        taxRate: 0.06,
+        shipping: 75,
+      };
+    case 'invoice.seed.beta.v1':
+      return {
+        brandName: 'SEED BETA',
+        invoiceNumber: 'INV-BETA-204',
+        invoiceDate: '20X3-01-18',
+        issuedTo: {
+          name: 'Team Up Promotional Products, LLC',
+          line1: '2150 Riverfront Ave',
+          line2: 'Denver, CO 80202',
+          line3: 'Accounts Payable',
+        },
+        shippingInfo: {
+          dateValue: '20X3-01-16',
+          terms: 'Net 30',
+        },
+        items: [
+          { description: 'Vendor onboarding kit', qty: 3, unitPrice: 540 },
+          { description: 'Trade show banners', qty: 2, unitPrice: 980 },
+        ],
+        taxRate: 0.05,
+        shipping: 40,
+      };
+    case 'invoice.seed.gamma.v1':
+      return {
+        brandName: 'SEED GAMMA',
+        invoiceNumber: 'INV-GAMMA-778',
+        invoiceDate: '20X3-01-22',
+        issuedTo: {
+          name: 'Team Up Promotional Products, LLC',
+          line1: '2150 Riverfront Ave',
+          line2: 'Denver, CO 80202',
+        },
+        shippingInfo: {
+          dateValue: '20X3-01-20',
+          terms: 'Net 15',
+        },
+        items: [
+          { description: 'Seasonal promo kits', qty: 4, unitPrice: 315 },
+          { description: 'Creative consulting', qty: 6, unitPrice: 140 },
+        ],
+        taxRate: 0.045,
+        shipping: 65,
+      };
+    case 'refdoc.bank-statement.v1':
+      return {
+        bankName: 'Cascade National Bank',
+        accountName: 'Team Up Promotional Products, LLC',
+        accountAddressLine1: '2150 Riverfront Ave',
+        accountAddressLine2: 'Denver, CO 80202',
+        accountNumber: '*** 4812',
+        periodLabel: 'January 20X3',
+        openingBalance: 98120.55,
+        rows: [
+          { date: '20X3-01-03', description: 'Remote Deposit - Checks', amount: 15250 },
+          { date: '20X3-01-06', description: 'ACH MetroNet Business Internet', amount: -1733.35 },
+          { date: '20X3-01-10', description: 'Check 10451 PayPilot Payroll Services', amount: -17405 },
+          { date: '20X3-01-12', description: 'Check 10452 SummitDrinkware Supply', amount: -9445.25 },
+          { date: '20X3-01-18', description: 'ACH InkRiver Print & Pack', amount: -6733.35 },
+          { date: '20X3-01-23', description: 'Remote Deposit - Customer Payment', amount: 8100 },
+        ],
+        canceledChecks: [
+          {
+            checkNumber: '10451',
+            date: '20X3-01-10',
+            payee: 'PayPilot Payroll Services',
+            amountNumeric: '17,405.00',
+            amountWords: 'Seventeen Thousand Four Hundred Five and 00/100',
+            payer: { name: 'Team Up Promotional Products, LLC', addressLine: '2150 Riverfront Ave, Denver, CO 80202' },
+            bank: { name: 'Cascade National Bank', subName: 'Member FDIC' },
+            memo: 'Payroll',
+            signatureName: 'K. Ramirez',
+            micr: {
+              routingSymbol: 'T',
+              routingNumber: '102000021',
+              accountSymbol: 'A',
+              accountNumber: '0004812001',
+              checkNumber: '10451',
+            },
+          },
+        ],
+      };
+    case 'refdoc.check-copy.v1':
+      return {
+        payer: { name: 'Team Up Promotional Products, LLC', addressLine: '2150 Riverfront Ave, Denver, CO 80202' },
+        checkNumber: '10482',
+        date: '20X3-01-10',
+        payee: 'PayPilot Payroll Services',
+        amountNumeric: '17,405.00',
+        amountWords: 'Seventeen Thousand Four Hundred Five and 00/100',
+        bank: { name: 'Cascade National Bank', subName: 'Member FDIC' },
+        memo: 'Payroll',
+        signatureName: 'K. Ramirez',
+        micr: {
+          routingSymbol: 'T',
+          routingNumber: '102000021',
+          accountSymbol: 'A',
+          accountNumber: '0004812001',
+          checkNumber: '10482',
+        },
+      };
+    case 'refdoc.ap-aging.v1':
+      return {
+        companyName: 'Team Up Promotional Products, LLC',
+        asOfDate: '20X3-01-31',
+        rows: [
+          {
+            vendor: 'SummitDrinkware Supply',
+            invoiceNumber: 'SD-2041',
+            invoiceDate: '20X2-12-28',
+            dueDate: '20X3-01-27',
+            amount: 9445.25,
+            buckets: { current: 0, days30: 9445.25, days60: 0, days90Plus: 0 },
+          },
+          {
+            vendor: 'LogoForge Plastics',
+            invoiceNumber: 'LF-1887',
+            invoiceDate: '20X3-01-09',
+            dueDate: '20X3-02-08',
+            amount: 5812.71,
+            buckets: { current: 5812.71, days30: 0, days60: 0, days90Plus: 0 },
+          },
+        ],
+      };
+    case 'refdoc.ap-leadsheet.v1':
+      return {
+        workpaperTitle: 'AP Lead Sheet',
+        clientName: 'Team Up Promotional Products, LLC',
+        periodEnding: '20X2-12-31',
+        trialBalanceName: 'AP Trade',
+        priorDate: '20X1-12-31',
+        currentDate: '20X2-12-31',
+        groupCode: 'L02',
+        groupName: 'Accounts Payable',
+        subgroupName: 'Trade Payables',
+        lines: [
+          {
+            account: '2100',
+            description: 'Accounts Payable - Trade',
+            priorAmount: 80500,
+            unadjAmount: 82150,
+            ajeAmount: -4500,
+            rjeAmount: 0,
+            finalAmount: 77650,
+          },
+        ],
+        footerNote: 'Prepared for internal audit training only.',
+      };
+    case 'refdoc.disbursement-listing.v1':
+      return {
+        companyName: 'Team Up Promotional Products, LLC',
+        periodLabel: 'January 20X3',
+        reportTitle: 'January Disbursements Listing',
+        rows: [
+          {
+            paymentDate: '20X3-01-10',
+            checkNumber: '10451',
+            paymentId: 'P-10451',
+            payee: 'PayPilot Payroll Services',
+            paymentType: 'Check',
+            amount: 17405,
+          },
+          {
+            paymentDate: '20X3-01-12',
+            checkNumber: '10452',
+            paymentId: 'P-10452',
+            payee: 'SummitDrinkware Supply',
+            paymentType: 'Check',
+            amount: 9445.25,
+          },
+        ],
+      };
+    case 'refdoc.payroll-register.v1':
+      return {
+        reportTitle: 'Payroll Register',
+        payPeriod: '20X3-01-01 to 20X3-01-15',
+        reportScopeLabel: 'Hourly + Salaried',
+        payDate: '20X3-01-20',
+        companyCode: 'TU-01',
+        companyNameLine1: 'Team Up Promotional Products, LLC',
+        companyNameLine2: 'Payroll Department',
+        pageNumber: '1',
+        pageCount: '1',
+        totalHours: '412.5',
+        totalEmployees: '18',
+        totals: [
+          { label: 'Gross Pay', amount: '$82,450.00' },
+          { label: 'Taxes', amount: '$19,875.00' },
+          { label: 'Net Pay', amount: '$62,575.00' },
+        ],
+        footerNote: 'Confidential payroll report.',
+      };
+    case 'refdoc.remittance-bundle.v1':
+      return {
+        companyName: 'Team Up Promotional Products, LLC',
+        vendor: 'SummitDrinkware Supply',
+        paymentId: 'P-10452',
+        paymentDate: '20X3-01-12',
+        invoices: [
+          {
+            invoiceNumber: 'SD-2041',
+            invoiceDate: '20X2-12-28',
+            serviceDate: '20X2-12-27',
+            amount: 9445.25,
+            isRecorded: true,
+          },
+          {
+            invoiceNumber: 'SD-2042',
+            invoiceDate: '20X3-01-05',
+            serviceDate: '20X3-01-04',
+            amount: 3120,
+            isRecorded: false,
+          },
+        ],
+      };
+    case 'refdoc.accrual-estimate.v1':
+      return {
+        companyName: 'Team Up Promotional Products, LLC',
+        vendor: 'SummitDrinkware Supply',
+        paymentId: 'P-10452',
+        periodEnding: '20X2-12-31',
+        memoDate: '20X3-01-04',
+        estimateAmount: 4500,
+        settlementTotal: 9445.25,
+        note: 'Estimate reversed once January invoice was received.',
+      };
+    default:
+      return {};
+  }
 };
 
 const normalizeStoragePath = (rawPath, bucketName) => {
@@ -149,7 +403,7 @@ const collectInvoiceStoragePaths = (caseData, bucketName) => {
   return Array.from(paths);
 };
 
-const renderPdfFromHtml = async (html, pdfOptions = {}) => {
+const loadChromium = async () => {
   let chromium;
   let executablePath;
   let chromiumArgs = [];
@@ -170,6 +424,11 @@ const renderPdfFromHtml = async (html, pdfOptions = {}) => {
   } catch (err) {
     throw new Error('Playwright Chromium is not available in the functions runtime.');
   }
+  return { chromium, executablePath, chromiumArgs, chromiumHeadless };
+};
+
+const renderPdfFromHtml = async (html, pdfOptions = {}) => {
+  const { chromium, executablePath, chromiumArgs, chromiumHeadless } = await loadChromium();
   const browser = await chromium.launch({
     executablePath,
     args: chromiumArgs,
@@ -182,6 +441,44 @@ const renderPdfFromHtml = async (html, pdfOptions = {}) => {
     await page.evaluate(() => (document.fonts ? document.fonts.ready : Promise.resolve()));
     const defaultPdfOptions = { printBackground: true, preferCSSPageSize: true };
     return await page.pdf({ ...defaultPdfOptions, ...pdfOptions });
+  } finally {
+    await browser.close();
+  }
+};
+
+const renderPngFromPdfBuffer = async (pdfBuffer, options = {}) => {
+  if (!pdfBuffer || typeof pdfBuffer.toString !== 'function') {
+    throw new Error('Missing PDF buffer for PNG conversion.');
+  }
+  const width = Number(options.width) || 1200;
+  const height = Number(options.height) || 700;
+  const { chromium, executablePath, chromiumArgs, chromiumHeadless } = await loadChromium();
+  const browser = await chromium.launch({
+    executablePath,
+    args: chromiumArgs,
+    headless: chromiumHeadless,
+  });
+  try {
+    const page = await browser.newPage({ viewport: { width, height } });
+    const base64Pdf = pdfBuffer.toString('base64');
+    const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      html, body { margin: 0; padding: 0; width: 100%; height: 100%; background: #fff; }
+      #pdf { width: 100%; height: 100%; border: none; }
+    </style>
+  </head>
+  <body>
+    <embed id="pdf" type="application/pdf" src="data:application/pdf;base64,${base64Pdf}#toolbar=0&navpanes=0&scrollbar=0" />
+  </body>
+</html>`;
+    await page.setContent(html, { waitUntil: 'networkidle' });
+    await page.waitForTimeout(500);
+    const embed = await page.$('#pdf');
+    if (!embed) throw new Error('PDF embed failed to load.');
+    return await embed.screenshot({ type: 'png' });
   } finally {
     await browser.close();
   }
@@ -590,6 +887,7 @@ exports.queueCaseDocGeneration = functions.https.onCall(async (data, context) =>
   const appId = data?.appId;
   const caseId = data?.caseId;
   const plan = data?.plan ?? null;
+  const phaseId = data?.phaseId ?? null;
 
   if (!appId || typeof appId !== 'string') {
     throw new functions.https.HttpsError('invalid-argument', 'appId is required.');
@@ -599,6 +897,9 @@ exports.queueCaseDocGeneration = functions.https.onCall(async (data, context) =>
   }
   if (plan !== null && typeof plan !== 'object') {
     throw new functions.https.HttpsError('invalid-argument', 'plan must be an object when provided.');
+  }
+  if (phaseId !== null && phaseId !== undefined && typeof phaseId !== 'string') {
+    throw new functions.https.HttpsError('invalid-argument', 'phaseId must be a string when provided.');
   }
 
   const firestore = admin.firestore();
@@ -688,6 +989,7 @@ exports.queueCaseDocGeneration = functions.https.onCall(async (data, context) =>
     plan: resolvedPlan,
     planSource,
     caseMissing: Boolean(caseMissing),
+    phaseId: phaseId ? String(phaseId).trim() : null,
     status: 'queued',
     requestedBy: context.auth.uid,
     orgId: requesterOrgId || null,
@@ -714,6 +1016,92 @@ exports.queueCaseDocGeneration = functions.https.onCall(async (data, context) =>
 
   return { jobId: jobRef.id, status: payload.status };
 });
+
+exports.generateDebugRefdoc = functions
+  .runWith({ memory: '512MB', timeoutSeconds: 60 })
+  .https.onCall(async (data, context) => {
+  try {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
+    }
+
+    const appId = data?.appId;
+    const templateId = data?.templateId;
+
+    if (!appId || typeof appId !== 'string') {
+      throw new functions.https.HttpsError('invalid-argument', 'appId is required.');
+    }
+    if (!templateId || typeof templateId !== 'string') {
+      throw new functions.https.HttpsError('invalid-argument', 'templateId is required.');
+    }
+
+    const firestore = admin.firestore();
+    const { resolvedRole } = await resolveRequesterIdentity({
+      context,
+      appId,
+      firestore,
+      logLabel: 'generateDebugRefdoc',
+    });
+
+    if (resolvedRole !== 'admin') {
+      throw new functions.https.HttpsError('permission-denied', 'Admin access required.');
+    }
+
+    let renderer;
+    try {
+      renderer = getTemplateRenderer(templateId);
+    } catch (err) {
+      throw new functions.https.HttpsError('not-found', err?.message || `Unknown templateId: ${templateId}`);
+    }
+
+    const debugData = buildDebugDataForTemplate(templateId);
+    const { html, css, pdfOptions } = renderer({ data: debugData, theme: {}, layout: {} });
+
+    const fullHtml = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>${css}</style>
+</head>
+<body>${html}</body>
+</html>`;
+
+    const buffer = await renderPdfFromHtml(fullHtml, pdfOptions || {});
+    const safeTemplate = String(templateId).replace(/[^\w.\-]/g, '_');
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const fileName = `${safeTemplate}-${timestamp}.pdf`;
+    const storagePath = `artifacts/${appId}/debug/reference/${safeTemplate}/${fileName}`;
+    const bucket = admin.storage().bucket();
+    const file = bucket.file(storagePath);
+
+    await file.save(buffer, {
+      contentType: 'application/pdf',
+      resumable: false,
+      metadata: {
+        contentType: 'application/pdf',
+        customMetadata: {
+          templateId: String(templateId),
+          debug: 'true',
+        },
+      },
+    });
+
+    return {
+      templateId,
+      storagePath,
+      fileName,
+      createdAt: new Date().toISOString(),
+    };
+  } catch (err) {
+    console.error('[generateDebugRefdoc] Failed to generate debug refdoc', err);
+    if (err instanceof functions.https.HttpsError) {
+      throw err;
+    }
+    const message = err?.message || 'Failed to generate debug reference document.';
+    throw new functions.https.HttpsError('internal', message);
+  }
+  });
 
 exports.deleteRetakeAttempt = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
@@ -870,25 +1258,73 @@ exports.processCaseDocGenerationJob = onDocumentWritten(
       return null;
     }
 
-    const specs = Array.isArray(plan.referenceDocumentSpecs) ? plan.referenceDocumentSpecs : [];
+    const allSpecs = Array.isArray(plan.referenceDocumentSpecs) ? plan.referenceDocumentSpecs : [];
+    const phases = Array.isArray(plan.phases) ? plan.phases : [];
+    const phaseOrder = phases.map((phase) => String(phase?.id || phase || '').trim()).filter(Boolean);
+    const requestedPhaseId = String(job?.phaseId || '').trim();
+    let specs = allSpecs;
+    if (requestedPhaseId) {
+      const phaseSpecs = allSpecs.filter((spec) => String(spec?.phaseId || '').trim() === requestedPhaseId);
+      if (phaseSpecs.length > 0) {
+        specs = phaseSpecs;
+      }
+    }
     const results = [];
     const errors = [];
+    const bucket = admin.storage().bucket();
+    const CHECK_COPY_TEMPLATE_ID = 'refdoc.check-copy.v1';
+    const BANK_STATEMENT_TEMPLATE_ID = 'refdoc.bank-statement.v1';
+    const checkImageMap = new Map();
+    const normalizeCheckNumber = (value) => String(value || '').trim();
+    const extractCheckNumber = (spec, generationSpec) => {
+      const data = generationSpec?.data || {};
+      const direct = normalizeCheckNumber(data.checkNumber || data?.micr?.checkNumber);
+      if (direct) return direct;
+      const name = String(spec?.fileName || '').match(/(\d{3,})/);
+      return name ? name[1] : '';
+    };
+    const applyCheckImagesToBankStatementData = (data, map) => {
+      if (!data || typeof data !== 'object' || map.size === 0) return data;
+      const attach = (entry) => {
+        if (!entry || typeof entry !== 'object') return entry;
+        const key = normalizeCheckNumber(entry.checkNumber);
+        const match = key ? map.get(key) : null;
+        if (!match || !match.imageUrl) return entry;
+        return { ...entry, imageUrl: match.imageUrl };
+      };
+      const next = { ...data };
+      if (Array.isArray(next.canceledCheckPages)) {
+        next.canceledCheckPages = next.canceledCheckPages.map((page) => ({
+          ...page,
+          checks: Array.isArray(page?.checks) ? page.checks.map(attach) : page?.checks,
+        }));
+      }
+      if (Array.isArray(next.checkPages)) {
+        next.checkPages = next.checkPages.map((page) => ({
+          ...page,
+          checks: Array.isArray(page?.checks) ? page.checks.map(attach) : page?.checks,
+        }));
+      }
+      if (Array.isArray(next.canceledChecks)) {
+        next.canceledChecks = next.canceledChecks.map(attach);
+      }
+      return next;
+    };
+    const generatePdfDoc = async (spec, renderDataOverride = null) => {
+      const generationSpec = spec?.generationSpec || {};
+      const templateId = generationSpec.templateId;
+      if (!templateId) {
+        throw new Error('Missing templateId.');
+      }
+      const renderer = getTemplateRenderer(templateId);
+      const renderData = renderDataOverride ?? (generationSpec.data || {});
+      const { html, css, pdfOptions } = renderer({
+        data: renderData,
+        theme: generationSpec.theme || {},
+        layout: generationSpec.layout || {},
+      });
 
-    for (const spec of specs) {
-      try {
-        const generationSpec = spec?.generationSpec || {};
-        const templateId = generationSpec.templateId;
-        if (!templateId) {
-          throw new Error('Missing templateId.');
-        }
-        const renderer = getTemplateRenderer(templateId);
-        const { html, css, pdfOptions } = renderer({
-          data: generationSpec.data || {},
-          theme: generationSpec.theme || {},
-          layout: generationSpec.layout || {},
-        });
-
-        const fullHtml = `<!doctype html>
+      const fullHtml = `<!doctype html>
 <html>
 <head>
   <meta charset="utf-8" />
@@ -898,27 +1334,27 @@ exports.processCaseDocGenerationJob = onDocumentWritten(
 <body>${html}</body>
 </html>`;
 
-        const buffer = await renderPdfFromHtml(fullHtml, pdfOptions || {});
-        const fileBaseName = ensureSafeFileName(spec.fileName || `${templateId}.pdf`);
-        const safeName = fileBaseName.toLowerCase().endsWith('.pdf')
-          ? fileBaseName
-          : `${fileBaseName}.pdf`;
-        const storagePath = `artifacts/${appId}/case_reference/${caseId}/${safeName}`;
-        const bucket = admin.storage().bucket();
-        const file = bucket.file(storagePath);
+      const buffer = await renderPdfFromHtml(fullHtml, pdfOptions || {});
+      const fileBaseName = ensureSafeFileName(spec.fileName || `${templateId}.pdf`);
+      const safeName = fileBaseName.toLowerCase().endsWith('.pdf')
+        ? fileBaseName
+        : `${fileBaseName}.pdf`;
+      const storagePath = `artifacts/${appId}/case_reference/${caseId}/${safeName}`;
+      const file = bucket.file(storagePath);
 
-        await file.save(buffer, {
+      await file.save(buffer, {
+        contentType: 'application/pdf',
+        resumable: false,
+        metadata: {
           contentType: 'application/pdf',
-          resumable: false,
-          metadata: {
-            contentType: 'application/pdf',
-            customMetadata: {
-              caseId: String(caseId),
-              templateId: String(templateId),
-            },
+          customMetadata: {
+            caseId: String(caseId),
+            templateId: String(templateId),
           },
-        });
+        },
+      });
 
+      if (!spec?.internalOnly) {
         results.push({
           fileName: spec.fileName || safeName,
           storagePath,
@@ -927,6 +1363,62 @@ exports.processCaseDocGenerationJob = onDocumentWritten(
           generationSpecId: spec.id || null,
           linkToPaymentId: spec.linkToPaymentId || generationSpec.linkToPaymentId || null,
         });
+      }
+
+      return { buffer, safeName, generationSpec };
+    };
+
+    const checkCopySpecs = specs.filter(
+      (spec) => spec?.generationSpec?.templateId === CHECK_COPY_TEMPLATE_ID
+    );
+    const otherSpecs = specs.filter(
+      (spec) => spec?.generationSpec?.templateId !== CHECK_COPY_TEMPLATE_ID
+    );
+
+    for (const spec of checkCopySpecs) {
+      try {
+        const { buffer, safeName, generationSpec } = await generatePdfDoc(spec);
+        const pngBuffer = await renderPngFromPdfBuffer(buffer, { width: 1200, height: 700 });
+        const pngName = safeName.replace(/\.pdf$/i, '.png');
+        const pngStoragePath = `artifacts/${appId}/case_reference/${caseId}/${pngName}`;
+        const pngFile = bucket.file(pngStoragePath);
+        await pngFile.save(pngBuffer, {
+          contentType: 'image/png',
+          resumable: false,
+          metadata: {
+            contentType: 'image/png',
+            customMetadata: {
+              caseId: String(caseId),
+              templateId: String(CHECK_COPY_TEMPLATE_ID),
+            },
+          },
+        });
+        const [signedUrl] = await pngFile.getSignedUrl({
+          action: 'read',
+          expires: Date.now() + 15 * 60 * 1000,
+        });
+        const checkNumber = extractCheckNumber(spec, generationSpec);
+        if (checkNumber) {
+          checkImageMap.set(checkNumber, { imageUrl: signedUrl });
+        }
+      } catch (err) {
+        errors.push({
+          fileName: spec?.fileName || null,
+          templateId: spec?.generationSpec?.templateId || null,
+          error: err?.message || 'Generation failed',
+        });
+      }
+    }
+
+    for (const spec of otherSpecs) {
+      try {
+        const generationSpec = spec?.generationSpec || {};
+        const templateId = generationSpec.templateId;
+        const renderData =
+          templateId === BANK_STATEMENT_TEMPLATE_ID
+            ? applyCheckImagesToBankStatementData(generationSpec.data || {}, checkImageMap)
+            : null;
+        await generatePdfDoc(spec, renderData);
       } catch (err) {
         errors.push({
           fileName: spec?.fileName || null,
@@ -1068,6 +1560,49 @@ exports.processCaseDocGenerationJob = onDocumentWritten(
       },
       { merge: true }
     );
+
+    if (requestedPhaseId && phaseOrder.length > 0 && status !== 'error') {
+      const currentIndex = phaseOrder.indexOf(requestedPhaseId);
+      const nextPhaseId = currentIndex >= 0 ? phaseOrder[currentIndex + 1] : '';
+      const hasNextSpecs = nextPhaseId
+        ? allSpecs.some((spec) => String(spec?.phaseId || '').trim() === nextPhaseId)
+        : false;
+      if (nextPhaseId && hasNextSpecs) {
+        const nextJobRef = firestore
+          .collection(`artifacts/${appId}/private/data/case_generation_jobs`)
+          .doc();
+        const nextPayload = {
+          jobId: nextJobRef.id,
+          caseId,
+          appId,
+          plan,
+          planSource: 'phase-chain',
+          caseMissing: Boolean(job?.caseMissing),
+          phaseId: nextPhaseId,
+          status: 'queued',
+          requestedBy: job?.requestedBy || null,
+          orgId: job?.orgId || null,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+        await nextJobRef.set(nextPayload, { merge: true });
+        try {
+          await planRef.set(
+            {
+              lastJob: {
+                jobId: nextJobRef.id,
+                status: 'queued',
+                phaseId: nextPhaseId,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              },
+            },
+            { merge: true }
+          );
+        } catch (err) {
+          console.warn('[caseGeneration] Failed to write next phase status', err);
+        }
+      }
+    }
 
     return null;
   }

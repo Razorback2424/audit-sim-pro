@@ -82,6 +82,45 @@ export const initialInstruction = () => ({
   },
 });
 
+export const initialCompletenessGate = () => ({
+  enabled: false,
+  stepTitle: '',
+  description: '',
+  evidenceTitle: '',
+  evidenceDescription: '',
+  assessmentQuestion: '',
+  assessmentOptions: [
+    {
+      id: 'assess_yes',
+      text: '',
+      correct: false,
+      outcome: 'match',
+      feedback: '',
+    },
+    {
+      id: 'assess_no',
+      text: '',
+      correct: true,
+      outcome: 'mismatch',
+      feedback: '',
+    },
+  ],
+  actionMode: 'mismatch',
+  actionQuestion: '',
+  actionOptions: [
+    { id: 'opt1', text: '', correct: false, feedback: '' },
+    { id: 'opt2', text: '', correct: true, feedback: '' },
+  ],
+  successMessage: '',
+  failureMessage: '',
+  passedMessage: '',
+  skillTag: '',
+  requireOpenedDocs: false,
+  includeAllReferenceDocs: false,
+  referenceDocNames: [],
+  correctedReferenceDocNames: [],
+});
+
 export const initialMapping = () => ({
   _tempId: getUUID(),
   disbursementTempId: '',

@@ -1,7 +1,14 @@
-import { surlPromotadorCutoffV1 } from './recipes/surlPromotadorCutoffV1';
+import { surlSeedAlphaCutoffV1 } from './recipes/surlSeedAlphaCutoffV1';
 import { surlIntermediateCutoffV1 } from './recipes/surlIntermediateCutoffV1';
+import { surlAdvancedCutoffV1 } from './recipes/surlAdvancedCutoffV1';
+import { outstandingCheckTestingBasicV1 } from './recipes/outstandingCheckTestingBasicV1';
 
-const RECIPES = [surlPromotadorCutoffV1, surlIntermediateCutoffV1];
+const RECIPES = [
+  surlSeedAlphaCutoffV1,
+  surlIntermediateCutoffV1,
+  surlAdvancedCutoffV1,
+  outstandingCheckTestingBasicV1,
+];
 
 export const listCaseRecipes = () =>
   RECIPES.map((recipe) => ({

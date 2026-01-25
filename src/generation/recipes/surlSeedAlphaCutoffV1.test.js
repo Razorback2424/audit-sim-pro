@@ -1,4 +1,4 @@
-import { surlPromotadorCutoffV1 } from './surlPromotadorCutoffV1';
+import { surlSeedAlphaCutoffV1 } from './surlSeedAlphaCutoffV1';
 
 const parsePseudoDate = (value) => {
   if (!value) return null;
@@ -33,9 +33,9 @@ const buildLookup = (list, keyFn) => {
   return map;
 };
 
-describe('surlPromotadorCutoffV1 recipe validator', () => {
+describe('surlSeedAlphaCutoffV1 recipe validator', () => {
   test('generates coherent disbursements, invoices, and AP aging', () => {
-    const result = surlPromotadorCutoffV1.build();
+    const result = surlSeedAlphaCutoffV1.build();
     const disbursements = Array.isArray(result.disbursements) ? result.disbursements : [];
     const referenceDocs = Array.isArray(result.referenceDocuments) ? result.referenceDocuments : [];
 

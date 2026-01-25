@@ -108,7 +108,7 @@ export default function CaseBasicsStep({ basics }) {
               id="moduleId"
               value={moduleId}
               onChange={(e) => setModuleId(e.target.value)}
-              placeholder="e.g. case.surl.promotador.v1"
+              placeholder="e.g. case.surl.seed.alpha.v1"
               className="mt-2"
             />
             <p className="mt-1 text-xs text-gray-500">Stable ID used to group attempts across versions.</p>

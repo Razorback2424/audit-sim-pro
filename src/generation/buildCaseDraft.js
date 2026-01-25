@@ -50,6 +50,7 @@ export const buildCaseDraftFromRecipe = ({ recipeId, overrides = {} }) => {
     cashCutoffItems: result.cashCutoffItems || null,
     cashRegisterItems: result.cashRegisterItems || null,
     cashReconciliationMap: result.cashReconciliationMap || null,
+    cashArtifacts: result.cashArtifacts || null,
     faSummary: result.faSummary || null,
     faRisk: result.faRisk || null,
     faAdditions: result.faAdditions || null,

@@ -24,9 +24,9 @@ const formatTaxPercent = (rate) => {
   return rounded.toFixed(2);
 };
 
-function PromotadorInvoice({ data }) {
+function SeedAlphaInvoice({ data }) {
   const {
-    brandName = 'PROMOTADOR',
+    brandName = 'SEED ALPHA',
     invoiceNumber = '',
     invoiceDate = '',
     issuedTo = {},
@@ -146,12 +146,12 @@ function PromotadorInvoice({ data }) {
   );
 }
 
-export const promotadorInvoiceV1 = {
-  id: 'invoice.promotador.v1',
+export const seedAlphaInvoiceV1 = {
+  id: 'invoice.seed.alpha.v1',
   page: {
     pdfOptions: { format: 'Letter' },
   },
-  Component: PromotadorInvoice,
+  Component: SeedAlphaInvoice,
   css: ({ theme, layout }) => {
     const t = {
       ink: '#111',

@@ -21,6 +21,7 @@ const InstructionView = ({
   ctaLabel = 'Begin Simulation',
   gateRequired = true,
   className = '',
+  onGateAttempt,
 }) => {
   const [selectedOptionId, setSelectedOptionId] = useState('');
   const [feedback, setFeedback] = useState(null);
@@ -74,9 +75,11 @@ const InstructionView = ({
           gateCheck.success_message ||
           'Clear for takeoff. Enter the cockpit.',
       });
+      onGateAttempt?.({ correct: true, selectedOptionId });
       onStartSimulation?.();
     } else {
       setFeedback({ type: 'error', message: failureMessage });
+      onGateAttempt?.({ correct: false, selectedOptionId });
     }
   };
 

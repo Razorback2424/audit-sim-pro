@@ -25,8 +25,8 @@ const buildDisbursement = ({ paymentId, payee, amount, paymentDate, answerKeyCla
   };
 };
 
-export const surlPromotadorCutoffV1 = {
-  id: 'case.surl.promotador.v1',
+export const surlSeedAlphaCutoffV1 = {
+  id: 'case.surl.seed.alpha.v1',
   version: 1,
   label: 'SURL Cutoff (Generated)',
   description: 'Unrecorded liability trap with post-close disbursements and service-date cutoff.',
@@ -77,9 +77,9 @@ export const surlPromotadorCutoffV1 = {
       return next;
     };
     const invoiceTemplateIds = [
-      'invoice.promotador.v1',
-      'invoice.endeavorr.v1',
-      'invoice.glamit.v1',
+      'invoice.seed.alpha.v1',
+      'invoice.seed.beta.v1',
+      'invoice.seed.gamma.v1',
     ];
     const invoiceTemplateByVendor = new Map();
     const taxRateOptions = [0.045, 0.05, 0.0725, 0.0825];
@@ -91,7 +91,7 @@ export const surlPromotadorCutoffV1 = {
       if (invoiceTemplateByVendor.has(normalized)) {
         return invoiceTemplateByVendor.get(normalized);
       }
-      const fallback = invoiceTemplateIds[0] || 'invoice.promotador.v1';
+      const fallback = invoiceTemplateIds[0] || 'invoice.seed.alpha.v1';
       const index = invoiceTemplateIds.length > 0
         ? hashSeed(normalized || fallback) % invoiceTemplateIds.length
         : 0;
@@ -1055,7 +1055,7 @@ export const surlPromotadorCutoffV1 = {
         ? invoice.shipping
         : computeShippingForSubtotal(subtotal);
       const shippingTerms =
-        templateId === 'invoice.endeavorr.v1' ? 'Shipping Point' : 'FOB Shipping Point';
+        templateId === 'invoice.seed.beta.v1' ? 'Shipping Point' : 'FOB Shipping Point';
       const serviceInvoice = isServiceInvoice(invoice.vendor);
       const dateLabel = serviceInvoice ? 'Service Date' : '';
       const dateValue = serviceInvoice

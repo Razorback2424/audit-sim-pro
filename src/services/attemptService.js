@@ -25,6 +25,9 @@ const resolveWorkflow = ({ recipeDetails, draft }) => {
     if (fallbackSteps.includes('ca_check') && !candidateSteps.includes('ca_check')) {
       return fallback;
     }
+    if (fallbackSteps.includes('ca_completeness') && !candidateSteps.includes('ca_completeness')) {
+      return fallback;
+    }
     return candidate;
   }
 
@@ -96,6 +99,12 @@ export const generateAttemptFromRecipe = async ({ moduleId, uid, retakeAttempt =
     generationConfig: recipeDetails?.generationConfig || {},
     retakeAttempt: Boolean(retakeAttempt),
     createdBy: uid,
+    cashContext: draft.cashContext || null,
+    cashOutstandingItems: draft.cashOutstandingItems || [],
+    cashCutoffItems: draft.cashCutoffItems || [],
+    cashRegisterItems: draft.cashRegisterItems || [],
+    cashReconciliationMap: draft.cashReconciliationMap || [],
+    cashArtifacts: draft.cashArtifacts || [],
   };
 
   const caseId = await createCase(casePayload);
@@ -103,7 +112,18 @@ export const generateAttemptFromRecipe = async ({ moduleId, uid, retakeAttempt =
   if (draft.generationPlan) {
     try {
       await saveCaseGenerationPlan({ caseId, plan: draft.generationPlan });
-      await queueCaseGenerationJob({ caseId, plan: draft.generationPlan, appId });
+      const phaseList = Array.isArray(draft.generationPlan?.phases)
+        ? draft.generationPlan.phases
+        : [];
+      const initialPhaseId = phaseList.length > 0
+        ? String(phaseList[0]?.id || phaseList[0] || '').trim()
+        : '';
+      await queueCaseGenerationJob({
+        caseId,
+        plan: draft.generationPlan,
+        appId,
+        phaseId: initialPhaseId || null,
+      });
     } catch (error) {
       console.warn('[attemptService] Generation job failed', error);
     }

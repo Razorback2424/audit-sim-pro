@@ -45,16 +45,16 @@ const buildDisbursement = ({
   };
 };
 
-export const surlIntermediateCutoffV1 = {
-  id: 'case.surl.intermediate.v1',
+export const surlAdvancedCutoffV1 = {
+  id: 'case.surl.advanced.v1',
   version: 1,
-  label: 'SURL Intermediate Cutoff (Generated)',
-  description: 'Intermediate SURL with tie-out gate, scoped selection, and allocation trap.',
+  label: 'SURL Advanced Cutoff (Generated)',
+  description: 'Advanced SURL with tie-out gate, scoped selection, and allocation trap.',
   moduleTitle: 'SURL',
   pathId: 'foundations',
   pathTitle: 'Foundations',
-  tier: 'foundations',
-  caseLevel: 'intermediate',
+  tier: 'advanced',
+  caseLevel: 'advanced',
   auditArea: AUDIT_AREAS.PAYABLES,
   primarySkill: 'SURL',
   build: ({ overrides } = {}) => {
@@ -66,7 +66,7 @@ export const surlIntermediateCutoffV1 = {
     const resolvedCaseLevel =
       typeof overrides?.caseLevel === 'string' && overrides.caseLevel.trim()
         ? overrides.caseLevel.trim()
-        : 'intermediate';
+        : 'advanced';
     const hashSeed = (value) => {
       let hash = 2166136261;
       const str = String(value);
@@ -106,6 +106,73 @@ export const surlIntermediateCutoffV1 = {
     const taxRateByVendor = new Map();
     const normalizeVendor = (value) => String(value || '').trim().toLowerCase();
     const roundMoney = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+    const formatMoneyNumber = (value) =>
+      Number(value || 0).toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+    const numberToWords = (value) => {
+      const num = Number(value || 0);
+      if (!Number.isFinite(num)) return '';
+      if (num === 0) return 'Zero';
+
+      const ones = [
+        '',
+        'One',
+        'Two',
+        'Three',
+        'Four',
+        'Five',
+        'Six',
+        'Seven',
+        'Eight',
+        'Nine',
+        'Ten',
+        'Eleven',
+        'Twelve',
+        'Thirteen',
+        'Fourteen',
+        'Fifteen',
+        'Sixteen',
+        'Seventeen',
+        'Eighteen',
+        'Nineteen',
+      ];
+      const tens = ['', '', 'Twenty', 'Thirty', 'Forty', 'Fifty', 'Sixty', 'Seventy', 'Eighty', 'Ninety'];
+      const toWordsUnderThousand = (n) => {
+        if (n === 0) return '';
+        if (n < 20) return ones[n];
+        if (n < 100) {
+          const whole = tens[Math.floor(n / 10)];
+          const rest = ones[n % 10];
+          return rest ? `${whole} ${rest}` : whole;
+        }
+        const hundreds = ones[Math.floor(n / 100)];
+        const remainder = n % 100;
+        const tail = toWordsUnderThousand(remainder);
+        return tail ? `${hundreds} Hundred ${tail}` : `${hundreds} Hundred`;
+      };
+
+      const absValue = Math.floor(Math.abs(num));
+      if (absValue > 999999999) return String(absValue);
+
+      const millions = Math.floor(absValue / 1000000);
+      const thousands = Math.floor((absValue % 1000000) / 1000);
+      const remainder = absValue % 1000;
+      const parts = [];
+      if (millions) parts.push(`${toWordsUnderThousand(millions)} Million`);
+      if (thousands) parts.push(`${toWordsUnderThousand(thousands)} Thousand`);
+      if (remainder) parts.push(toWordsUnderThousand(remainder));
+      return parts.join(' ');
+    };
+    const formatCheckAmountWords = (value) => {
+      const abs = Math.abs(Number(value || 0));
+      const dollars = Math.floor(abs);
+      const cents = Math.round((abs - dollars) * 100);
+      const centsLabel = String(cents).padStart(2, '0');
+      const words = numberToWords(dollars) || 'Zero';
+      return `${words} and ${centsLabel}/100`;
+    };
     const pickInvoiceTemplateId = (vendor) => {
       const normalized = normalizeVendor(vendor);
       if (invoiceTemplateByVendor.has(normalized)) {
@@ -547,7 +614,7 @@ export const surlIntermediateCutoffV1 = {
     const instruction = {
       ...initialInstruction(),
       title: 'Search for Unrecorded Liabilities',
-      moduleCode: 'SURL-201',
+      moduleCode: 'SURL-301',
       hook: {
         headline: 'Tie-out first, then follow the scope.',
         risk: 'If the population is wrong or the scope is ignored, real liabilities stay hidden.',
@@ -570,6 +637,7 @@ export const surlIntermediateCutoffV1 = {
     };
 
     const yearEnd = resolvedYearEnd;
+    const tieOutShouldMatch = true;
 
     const parsePseudoDate = (value) => {
       if (!value) return null;
@@ -599,8 +667,6 @@ export const surlIntermediateCutoffV1 = {
 
     const yearEndDate = parseCutoffDate(yearEnd);
 
-    const PAYROLL_VENDOR = 'PayPilot Payroll Services';
-
     const payeePool = [
       'BrightStitch Apparel Co.',
       'LogoForge Plastics',
@@ -612,7 +678,7 @@ export const surlIntermediateCutoffV1 = {
       'Warehouse Harbor 3PL',
       'BadgeCraft Awards',
       'SparkPromo Creative Studio',
-      PAYROLL_VENDOR,
+      'PayPilot Payroll Services',
       'BenefitBridge HR',
       'LedgerLift Accounting',
       'MetroNet Business Internet',
@@ -642,9 +708,21 @@ export const surlIntermediateCutoffV1 = {
     const payees = shuffle(
       Array.from({ length: disbursementCount }, (_, idx) => selectedVendors[idx % selectedVendors.length])
     );
-    const offsets = shuffle(Array.from({ length: 31 }, (_, idx) => 30 + idx))
-      .slice(0, disbursementCount)
-      .sort((a, b) => a - b);
+    const buildOffsets = (count) => {
+      if (count <= 1) return [randomInt(1, 31)];
+      const allDays = shuffle(Array.from({ length: 31 }, (_, idx) => 1 + idx));
+      const maxDuplicateSlots = Math.min(3, count - 1);
+      const duplicateSlots = maxDuplicateSlots > 0 ? randomInt(1, maxDuplicateSlots) : 0;
+      const uniqueCount = Math.max(1, count - duplicateSlots);
+      const uniqueDays = allDays.slice(0, uniqueCount).sort((a, b) => a - b);
+      const duplicateDays = shuffle(uniqueDays).slice(0, Math.min(duplicateSlots, uniqueDays.length));
+      const offsets = [...uniqueDays, ...duplicateDays];
+      while (offsets.length < count) {
+        offsets.push(uniqueDays[randomInt(0, uniqueDays.length - 1)]);
+      }
+      return offsets.sort((a, b) => a - b);
+    };
+    const offsets = buildOffsets(disbursementCount);
     const amountSet = new Set();
     const serviceTiming = Array.from({ length: disbursementCount }, () =>
       rng() < 0.45 ? 'pre' : 'post'
@@ -652,19 +730,55 @@ export const surlIntermediateCutoffV1 = {
     if (!serviceTiming.includes('pre')) {
       serviceTiming[0] = 'pre';
     }
-    const preIndexes = serviceTiming
+    if (!serviceTiming.includes('post')) {
+      serviceTiming[serviceTiming.length - 1] = 'post';
+    }
+    let preIndexes = serviceTiming
       .map((value, index) => (value === 'pre' ? index : null))
       .filter((value) => value !== null);
-    const trapIndex = preIndexes[randomInt(0, preIndexes.length - 1)];
-    const allocationTrapIndex = (() => {
-      if (preIndexes.length <= 1) return trapIndex;
-      const eligible = preIndexes.filter((index) => index !== trapIndex);
-      return eligible[randomInt(0, eligible.length - 1)];
-    })();
+    let postIndexes = serviceTiming
+      .map((value, index) => (value === 'post' ? index : null))
+      .filter((value) => value !== null);
+    if (preIndexes.length < 2 && postIndexes.length > 0) {
+      serviceTiming[postIndexes[0]] = 'pre';
+      preIndexes = serviceTiming
+        .map((value, index) => (value === 'pre' ? index : null))
+        .filter((value) => value !== null);
+      postIndexes = serviceTiming
+        .map((value, index) => (value === 'post' ? index : null))
+        .filter((value) => value !== null);
+    }
+    if (postIndexes.length === 0 && preIndexes.length > 1) {
+      const flipIndex = preIndexes[preIndexes.length - 1];
+      serviceTiming[flipIndex] = 'post';
+      preIndexes = serviceTiming
+        .map((value, index) => (value === 'pre' ? index : null))
+        .filter((value) => value !== null);
+      postIndexes = serviceTiming
+        .map((value, index) => (value === 'post' ? index : null))
+        .filter((value) => value !== null);
+    }
+    const bundleIndex = preIndexes[randomInt(0, preIndexes.length - 1)];
+    const remainingPre = preIndexes.filter((index) => index !== bundleIndex);
+    const accrualIndex = remainingPre.length > 0
+      ? remainingPre[randomInt(0, remainingPre.length - 1)]
+      : bundleIndex;
+    const timingIndex = postIndexes.length > 0
+      ? postIndexes[randomInt(0, postIndexes.length - 1)]
+      : preIndexes.find((index) => index !== bundleIndex && index !== accrualIndex) ?? bundleIndex;
+    const getTrapType = (index) => {
+      if (index === bundleIndex) return 'bundle';
+      if (index === timingIndex) return 'timing';
+      if (index === accrualIndex) return 'accrual';
+      return null;
+    };
 
     const disbursementTargets = offsets.map((offset, index) => {
-      const isAllocationTrap = index === allocationTrapIndex;
-      let amount = Math.round(randomInt(12000, 90000) / 25) * 25;
+      const trapType = getTrapType(index);
+      const isOverscope = Boolean(trapType);
+      const minAmount = isOverscope ? 75000 : 12000;
+      const maxAmount = isOverscope ? 125000 : 85000;
+      let amount = Math.round(randomInt(minAmount, maxAmount) / 25) * 25;
       while (amountSet.has(amount)) {
         amount += 25;
       }
@@ -675,7 +789,12 @@ export const surlIntermediateCutoffV1 = {
           : rng() < 0.25
           ? 2
           : 1;
-      const resolvedInvoiceCount = isAllocationTrap ? 1 : invoiceCount;
+      const resolvedInvoiceCount =
+        trapType === 'bundle'
+          ? 10
+          : trapType === 'accrual'
+          ? 3
+          : invoiceCount;
       return {
         paymentId: `P-${101 + index}`,
         payee: payees[index],
@@ -683,26 +802,25 @@ export const surlIntermediateCutoffV1 = {
         amount,
         invoiceCount: resolvedInvoiceCount,
         serviceTiming: serviceTiming[index],
-        trap: index === trapIndex,
-        allocationTrap: isAllocationTrap,
-        requiresPayrollRegister: isAllocationTrap,
+        trapType,
+        trap: trapType === 'bundle',
       };
     });
-
-    const allocationTrapTarget = disbursementTargets.find((target) => target.allocationTrap);
-    if (allocationTrapTarget) {
-      allocationTrapTarget.payee = PAYROLL_VENDOR;
+    const overscopeTargets = disbursementTargets.filter((target) => target.trapType);
+    if (overscopeTargets.length > 0) {
       const maxAmount = Math.max(...disbursementTargets.map((target) => Number(target.amount || 0)));
       const roundTo25 = (value) => Math.round(Number(value || 0) / 25) * 25;
-      const bumpAmount = Math.max(10000, maxAmount * 0.12);
-      let bumped = roundTo25(maxAmount + bumpAmount);
-      const currentAmount = allocationTrapTarget.amount;
-      amountSet.delete(currentAmount);
-      while (amountSet.has(bumped)) {
-        bumped += 25;
-      }
-      amountSet.add(bumped);
-      allocationTrapTarget.amount = bumped;
+      let bumped = roundTo25(maxAmount + 12000);
+      overscopeTargets.forEach((target) => {
+        const currentAmount = target.amount;
+        amountSet.delete(currentAmount);
+        while (amountSet.has(bumped)) {
+          bumped += 25;
+        }
+        amountSet.add(bumped);
+        target.amount = bumped;
+        bumped += 5000;
+      });
     }
 
     const normalizeTargets = (targets, issues) => {
@@ -719,6 +837,7 @@ export const surlIntermediateCutoffV1 = {
             paymentDate: addDaysPseudo(base.paymentDate, 2 + i),
             amount: base.amount + 75 * (i + 1),
             trap: false,
+            trapType: null,
           });
         }
       }
@@ -728,14 +847,17 @@ export const surlIntermediateCutoffV1 = {
       if (issues.some((issue) => issue.code === 'payment-date-window')) {
         nextTargets = nextTargets.map((target, index) => ({
           ...target,
-          paymentDate: addDaysPseudo(yearEnd, 35 + index),
+          paymentDate: addDaysPseudo(yearEnd, 2 + index),
         }));
       }
       if (issues.some((issue) => issue.code === 'payment-date-variation')) {
-        nextTargets = nextTargets.map((target, index) => ({
-          ...target,
-          paymentDate: addDaysPseudo(target.paymentDate, index),
-        }));
+        const duplicateEvery = Math.max(3, Math.floor(nextTargets.length / 3));
+        nextTargets = nextTargets.map((target, index) => {
+          if (index > 0 && index % duplicateEvery === 0) {
+            return { ...target, paymentDate: nextTargets[index - 1].paymentDate };
+          }
+          return target;
+        });
       }
       if (issues.some((issue) => issue.code === 'payee-variation')) {
         const seen = new Map();
@@ -753,15 +875,43 @@ export const surlIntermediateCutoffV1 = {
           amount: target.amount + index * 25,
         }));
       }
-      if (issues.some((issue) => issue.code === 'no-trap')) {
+      if (issues.some((issue) => issue.code === 'bundle-trap-missing')) {
         nextTargets = nextTargets.map((target, index) =>
-          index === 0 ? { ...target, serviceTiming: 'pre', trap: true } : target
+          index === 0
+            ? {
+                ...target,
+                serviceTiming: 'pre',
+                trapType: 'bundle',
+                trap: true,
+                invoiceCount: 10,
+              }
+            : target
         );
       }
-      const allocationTarget = nextTargets.find((target) => target.allocationTrap);
-      if (allocationTarget) {
-        allocationTarget.payee = PAYROLL_VENDOR;
-        allocationTarget.requiresPayrollRegister = true;
+      if (issues.some((issue) => issue.code === 'timing-trap-missing')) {
+        nextTargets = nextTargets.map((target, index) =>
+          index === 1
+            ? {
+                ...target,
+                serviceTiming: 'post',
+                trapType: 'timing',
+                trap: false,
+              }
+            : target
+        );
+      }
+      if (issues.some((issue) => issue.code === 'accrual-trap-missing')) {
+        nextTargets = nextTargets.map((target, index) =>
+          index === 2
+            ? {
+                ...target,
+                serviceTiming: 'pre',
+                trapType: 'accrual',
+                trap: false,
+                invoiceCount: 3,
+              }
+            : target
+        );
       }
       return nextTargets;
     };
@@ -776,77 +926,168 @@ export const surlIntermediateCutoffV1 = {
       return true;
     };
 
-    const computeAllocationSplit = (invoice, totalAmount) => {
-      if (!invoice || !yearEndDate) return null;
-      const start = parseCutoffDate(invoice.servicePeriodStart);
-      const end = parseCutoffDate(invoice.servicePeriodEnd);
-      if (!start || !end) return null;
-      const msPerDay = 1000 * 60 * 60 * 24;
-      const totalDays = Math.round((end.getTime() - start.getTime()) / msPerDay) + 1;
-      if (totalDays <= 0) return null;
-      const cutoffEnd = new Date(Math.min(end.getTime(), yearEndDate.getTime()));
-      const preDays =
-        cutoffEnd.getTime() >= start.getTime()
-          ? Math.round((cutoffEnd.getTime() - start.getTime()) / msPerDay) + 1
-          : 0;
-      const preAmount = roundMoney((Number(totalAmount || 0) * preDays) / totalDays);
-      const postAmount = roundMoney(Number(totalAmount || 0) - preAmount);
-      return {
-        preAmount,
-        postAmount,
-        preDays,
-        totalDays,
-        startLabel: invoice.servicePeriodStart,
-        endLabel: invoice.servicePeriodEnd,
-      };
+    const splitAmountByWeights = (total, count) => {
+      if (!Number.isFinite(total) || total <= 0 || count <= 1) {
+        return [roundMoney(total)];
+      }
+      const weights = Array.from({ length: count }, () => 0.6 + rng() * 0.8);
+      const sumWeights = weights.reduce((sum, w) => sum + w, 0) || 1;
+      const raw = weights.map((w) => (total * w) / sumWeights);
+      const rounded = raw.map((value) => roundMoney(value));
+      const delta = roundMoney(total - rounded.reduce((sum, value) => sum + value, 0));
+      rounded[0] = roundMoney(rounded[0] + delta);
+      return rounded;
     };
 
     const buildInvoicesForTarget = (target, invoiceIndexStart) => {
-      const count = Math.max(1, Number(target.invoiceCount || 1));
-      const amounts = [];
-      if (count === 1) {
-        amounts.push(target.amount);
-      } else {
-        const primary = Math.round(target.amount * 0.6);
-        const secondary = target.amount - primary;
-        amounts.push(primary, secondary);
+      const trapType = target.trapType;
+      if (trapType === 'bundle') {
+        const count = Math.max(8, Number(target.invoiceCount || 10));
+        const unrecordedIndex = randomInt(0, count - 1);
+        const unrecordedAmount = roundMoney(Number(target.amount || 0) * (0.08 + rng() * 0.07));
+        const remainingTotal = Math.max(0, Number(target.amount || 0) - unrecordedAmount);
+        const remainingAmounts = splitAmountByWeights(remainingTotal, count - 1);
+        const amounts = [];
+        for (let i = 0; i < count; i += 1) {
+          if (i === unrecordedIndex) {
+            amounts.push(unrecordedAmount);
+          } else {
+            amounts.push(remainingAmounts.shift() || 0);
+          }
+        }
+        return amounts.map((amount, idx) => {
+          const serviceDate = addDaysPseudo(yearEnd, -(8 + idx * 2));
+          const invoiceDate = addDaysPseudo(yearEnd, -(15 + idx));
+          const shippingDate = addDaysPseudo(serviceDate, 2);
+          const dueDate = addDaysPseudo(target.paymentDate, 20 + idx);
+          const shouldInclude = shouldBeInAging(serviceDate, shippingDate);
+          const isRecorded = idx === unrecordedIndex ? false : shouldInclude;
+          return {
+            paymentId: target.paymentId,
+            vendor: target.payee,
+            invoiceNumber: `INV-${invoiceIndexStart + idx + 1}`,
+            invoiceDate,
+            serviceDate,
+            servicePeriodStart: null,
+            servicePeriodEnd: null,
+            shippingDate,
+            dueDate,
+            amount,
+            isRecorded,
+            trapType: target.trapType || null,
+          };
+        });
       }
+
+      if (trapType === 'timing') {
+        const amount = Number(target.amount || 0);
+        const servicePeriodStart = addDaysPseudo(yearEnd, 1);
+        const servicePeriodEnd = addDaysPseudo(yearEnd, 90);
+        const serviceDate = servicePeriodStart;
+        const invoiceDate = addDaysPseudo(yearEnd, -12);
+        const shippingDate = addDaysPseudo(serviceDate, 5);
+        const dueDate = addDaysPseudo(target.paymentDate, 20);
+        return [
+          {
+            paymentId: target.paymentId,
+            vendor: target.payee,
+            invoiceNumber: `INV-${invoiceIndexStart + 1}`,
+            invoiceDate,
+            serviceDate,
+            servicePeriodStart,
+            servicePeriodEnd,
+            shippingDate,
+            dueDate,
+            amount,
+            isRecorded: true,
+            trapType: target.trapType || null,
+          },
+        ];
+      }
+
+      if (trapType === 'accrual') {
+        const count = Math.max(2, Number(target.invoiceCount || 3));
+        const amounts = splitAmountByWeights(Number(target.amount || 0), count);
+        const settlementInvoices = amounts.map((amount, idx) => {
+          const serviceDate = addDaysPseudo(yearEnd, -(20 + idx * 3));
+          const invoiceDate = addDaysPseudo(yearEnd, 5 + idx * 2);
+          const shippingDate = addDaysPseudo(serviceDate, 2);
+          const dueDate = addDaysPseudo(target.paymentDate, 15 + idx * 3);
+          return {
+            paymentId: target.paymentId,
+            vendor: target.payee,
+            invoiceNumber: `INV-${invoiceIndexStart + idx + 1}`,
+            invoiceDate,
+            serviceDate,
+            servicePeriodStart: null,
+            servicePeriodEnd: null,
+            shippingDate,
+            dueDate,
+            amount,
+            isRecorded: false,
+            trapType: target.trapType || null,
+          };
+        });
+        const settlementTotal = settlementInvoices.reduce(
+          (sum, inv) => sum + Number(inv.amount || 0),
+          0
+        );
+        const accrualEstimate = roundMoney(settlementTotal * (0.95 + rng() * 0.04));
+        const estimateInvoice = {
+          paymentId: target.paymentId,
+          vendor: target.payee,
+          invoiceNumber: `ACCR-${invoiceIndexStart + count + 1}`,
+          invoiceDate: yearEnd,
+          serviceDate: addDaysPseudo(yearEnd, -6),
+          servicePeriodStart: null,
+          servicePeriodEnd: null,
+          shippingDate: null,
+          dueDate: yearEnd,
+          amount: accrualEstimate,
+          apAgingAmount: accrualEstimate,
+          isRecorded: true,
+          isEstimateOnly: true,
+          trapType: target.trapType || null,
+        };
+        return [...settlementInvoices, estimateInvoice];
+      }
+
+      const count = Math.max(1, Number(target.invoiceCount || 1));
+      const amounts = count === 1
+        ? [target.amount]
+        : (() => {
+            const primary = Math.round(target.amount * 0.6);
+            const secondary = target.amount - primary;
+            return [primary, secondary];
+          })();
       return amounts.map((amount, idx) => {
-        const isAllocationTrap = target.allocationTrap && idx === 0;
-        const servicePeriodStart = isAllocationTrap
-          ? addDaysPseudo(yearEnd, -randomInt(4, 5))
-          : null;
-        const servicePeriodEnd = isAllocationTrap
-          ? addDaysPseudo(yearEnd, randomInt(4, 10))
-          : null;
         const serviceDate =
-          servicePeriodStart ||
-          (target.serviceTiming === 'pre'
+          target.serviceTiming === 'pre'
             ? addDaysPseudo(yearEnd, -(12 + idx * 3))
-            : addDaysPseudo(yearEnd, 7 + idx * 5));
+            : addDaysPseudo(yearEnd, 7 + idx * 5);
         const invoiceDate = addDaysPseudo(target.paymentDate, -(4 + idx));
-        const shippingDate = isAllocationTrap ? null : addDaysPseudo(serviceDate, 2);
+        const shippingDate = addDaysPseudo(serviceDate, 2);
         const dueDate = addDaysPseudo(target.paymentDate, 26 + idx);
         const shouldInclude = shouldBeInAging(serviceDate, shippingDate);
-        let isRecorded = shouldInclude;
-        if (target.trap && idx === 0 && shouldInclude) {
-          isRecorded = false;
-        } else if (target.allocationTrap && idx === 0 && shouldInclude) {
-          isRecorded = true;
-        }
+        const isTimingTrap = target.trapType === 'timing';
+        const isRecorded = isTimingTrap
+          ? true
+          : target.trap && idx === 0 && shouldInclude
+          ? false
+          : shouldInclude;
         return {
           paymentId: target.paymentId,
           vendor: target.payee,
           invoiceNumber: `INV-${invoiceIndexStart + idx + 1}`,
           invoiceDate,
           serviceDate,
-          servicePeriodStart,
-          servicePeriodEnd,
+          servicePeriodStart: null,
+          servicePeriodEnd: null,
           shippingDate,
           dueDate,
           amount,
           isRecorded,
-          isAllocationTrap,
+          trapType: target.trapType || null,
         };
       });
     };
@@ -860,6 +1101,13 @@ export const surlIntermediateCutoffV1 = {
         invoiceCatalog.push(...invoices);
       });
       invoiceCatalog.forEach((invoice) => {
+        if (invoice.isEstimateOnly) {
+          invoice.lineItems = [];
+          invoice.subtotal = Number(invoice.amount || 0);
+          invoice.taxRate = 0;
+          invoice.shipping = 0;
+          return;
+        }
         const lineItemsResult = buildLineItemsForInvoice(
           invoice.vendor,
           Number(invoice.amount || 0)
@@ -877,6 +1125,7 @@ export const surlIntermediateCutoffV1 = {
       });
       const totalsByPayment = new Map();
       invoiceCatalog.forEach((invoice) => {
+        if (invoice.isEstimateOnly) return;
         const current = totalsByPayment.get(invoice.paymentId) || 0;
         totalsByPayment.set(invoice.paymentId, current + Number(invoice.amount || 0));
       });
@@ -887,34 +1136,15 @@ export const surlIntermediateCutoffV1 = {
         }
       });
 
-      const allocationInvoice = invoiceCatalog.find(
-        (invoice) => invoice.servicePeriodStart && invoice.servicePeriodEnd
-      );
-      const allocationSplit = allocationInvoice
-        ? computeAllocationSplit(allocationInvoice, Number(allocationInvoice.amount || 0))
-        : null;
-      if (allocationInvoice && allocationSplit) {
-        allocationInvoice.apAgingAmount = allocationSplit.preAmount;
-      }
-      const payrollRegisterFileName = allocationSplit
-        ? `Payroll Register (${allocationSplit.startLabel} - ${allocationSplit.endLabel}).pdf`
-        : 'Payroll Register.pdf';
-
       const apAgingRowsCorrected = invoiceCatalog
         .filter((invoice) => invoice.isRecorded)
         .map((invoice) => ({
-          amount: Number(invoice.apAgingAmount ?? invoice.amount),
           vendor: invoice.vendor,
           invoiceNumber: invoice.invoiceNumber,
           invoiceDate: invoice.invoiceDate,
           dueDate: invoice.dueDate,
-          buckets: {
-            current: Number(invoice.apAgingAmount ?? invoice.amount),
-            days30: 0,
-            days60: 0,
-            days90: 0,
-            days90Plus: 0,
-          },
+          amount: invoice.amount,
+          buckets: { current: invoice.amount, days30: 0, days60: 0, days90: 0, days90Plus: 0 },
         }));
 
       const computeAgingTotal = (rows = []) =>
@@ -942,6 +1172,12 @@ export const surlIntermediateCutoffV1 = {
           };
         });
       })();
+      const apAgingRowsInitial = tieOutShouldMatch
+        ? apAgingRowsCorrected.map((row) => ({
+            ...row,
+            buckets: { ...(row.buckets || {}) },
+          }))
+        : apAgingRowsMismatch;
 
       const leadScheduleRows = [
         {
@@ -970,7 +1206,10 @@ export const surlIntermediateCutoffV1 = {
         return 'properlyExcluded';
       };
 
-      const buildDisbursementExplanation = ({ classification, invoices }) => {
+      const formatMoney = (value) =>
+        Number(value || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+
+      const buildDisbursementExplanation = ({ classification, invoices, trapType, meta }) => {
         const yearEndLabel = yearEnd;
         const resolveDate = (invoice) => {
           if (!invoice || typeof invoice !== 'object') return { label: 'Activity date', value: '' };
@@ -978,6 +1217,28 @@ export const surlIntermediateCutoffV1 = {
           if (invoice.shippingDate) return { label: 'Shipping date', value: invoice.shippingDate };
           return { label: 'Activity date', value: '' };
         };
+
+        if (trapType === 'bundle') {
+          const missingInvoice = invoices.find(
+            (inv) => shouldBeInAging(inv.serviceDate, inv.shippingDate) && !inv.isRecorded
+          );
+          const { label, value } = resolveDate(missingInvoice);
+          const missingAmount = Number(missingInvoice?.amount || 0);
+          return `Bundled payment includes ${invoices.length} invoices. ${label} ${value || 'before year-end'} was before ${yearEndLabel}, but invoice ${missingInvoice?.invoiceNumber || ''} was missing from AP aging. Accrue ${formatMoney(missingAmount)}.`;
+        }
+        if (trapType === 'timing') {
+          const invoice = invoices[0] || null;
+          const serviceLabel =
+            invoice?.servicePeriodStart && invoice?.servicePeriodEnd
+              ? `${invoice.servicePeriodStart} - ${invoice.servicePeriodEnd}`
+              : invoice?.serviceDate || '';
+          return `Invoice dated ${invoice?.invoiceDate || 'before year-end'} covers ${serviceLabel || 'a future period'} after ${yearEndLabel}, but it was accrued. This should be excluded from year-end liabilities.`;
+        }
+        if (trapType === 'accrual') {
+          const estimateAmount = Number(meta?.accrualEstimate || 0);
+          const settlementTotal = Number(meta?.settlementTotal || 0);
+          return `Year-end accrual of ${formatMoney(estimateAmount)} was recorded for this obligation. The later invoices total ${formatMoney(settlementTotal)}, which is within a reasonable estimate range, so no adjustment is needed.`;
+        }
 
         const pickInvoice = (predicate) => invoices.find(predicate) || invoices[0] || null;
         if (classification === 'improperlyExcluded') {
@@ -1002,50 +1263,78 @@ export const surlIntermediateCutoffV1 = {
 
       const disbursements = targets.map((target) => {
         const invoices = invoiceCatalog.filter((invoice) => invoice.paymentId === target.paymentId);
-        const total = invoices.reduce((sum, inv) => sum + Number(inv.amount || 0), 0);
-        const allocationInvoice = invoices.find((invoice) => invoice.servicePeriodStart && invoice.servicePeriodEnd);
-        if (target.allocationTrap && allocationInvoice && allocationSplit) {
-          const split = allocationSplit;
-          if (split) {
-            const explanation = `Service period ${split.startLabel} - ${split.endLabel} spans year-end. Allocate ${split.preDays}/${split.totalDays} to the pre-year-end period.`;
-            return buildDisbursement({
-              paymentId: target.paymentId,
-              payee: target.payee,
-              amount: total,
-              paymentDate: target.paymentDate,
-              answerKeyMode: 'split',
-              answerKeyClassification: 'properlyIncluded',
-              answerKey: {
-                properlyIncluded: split.preAmount,
-                properlyExcluded: split.postAmount,
-                improperlyIncluded: 0,
-                improperlyExcluded: 0,
-                explanation,
-              },
-              shouldFlag: false,
-            });
-          }
+        const settlementInvoices = invoices.filter((invoice) => !invoice.isEstimateOnly);
+        const total = settlementInvoices.reduce((sum, inv) => sum + Number(inv.amount || 0), 0);
+        if (target.trapType === 'bundle') {
+          const recordedTotal = invoices
+            .filter((inv) => shouldBeInAging(inv.serviceDate, inv.shippingDate) && inv.isRecorded)
+            .reduce((sum, inv) => sum + Number(inv.amount || 0), 0);
+          const missingTotal = invoices
+            .filter((inv) => shouldBeInAging(inv.serviceDate, inv.shippingDate) && !inv.isRecorded)
+            .reduce((sum, inv) => sum + Number(inv.amount || 0), 0);
+          const explanation = buildDisbursementExplanation({
+            classification: 'improperlyExcluded',
+            invoices,
+            trapType: 'bundle',
+          });
+          return buildDisbursement({
+            paymentId: target.paymentId,
+            payee: target.payee,
+            amount: total,
+            paymentDate: target.paymentDate,
+            answerKeyMode: 'split',
+            answerKeyClassification: 'improperlyExcluded',
+            answerKey: {
+              properlyIncluded: roundMoney(recordedTotal),
+              properlyExcluded: 0,
+              improperlyIncluded: 0,
+              improperlyExcluded: roundMoney(missingTotal),
+              explanation,
+            },
+            shouldFlag: true,
+            meta: { trapType: 'bundle', bundleInvoiceCount: invoices.length },
+          });
         }
-        const classification = classifyDisbursement(invoices);
+        const classification =
+          target.trapType === 'timing'
+            ? 'improperlyIncluded'
+            : target.trapType === 'accrual'
+            ? 'properlyIncluded'
+            : classifyDisbursement(invoices);
+        const accrualEstimateInvoice =
+          target.trapType === 'accrual'
+            ? invoices.find((inv) => inv.isEstimateOnly)
+            : null;
+        const accrualEstimate =
+          target.trapType === 'accrual' ? Number(accrualEstimateInvoice?.amount || 0) : null;
+        const meta =
+          target.trapType === 'accrual'
+            ? { trapType: 'accrual', accrualEstimate, settlementTotal: total }
+            : target.trapType === 'timing'
+            ? { trapType: 'timing' }
+            : {};
         return buildDisbursement({
           paymentId: target.paymentId,
           payee: target.payee,
           amount: total,
           paymentDate: target.paymentDate,
           answerKeyClassification: classification,
-          explanation: buildDisbursementExplanation({ classification, invoices }),
+          explanation: buildDisbursementExplanation({
+            classification,
+            invoices,
+            trapType: target.trapType,
+            meta,
+          }),
+          meta,
         });
       });
 
       return {
         invoiceCatalog,
         apAgingRowsCorrected,
-        apAgingRowsMismatch,
+        apAgingRowsMismatch: apAgingRowsInitial,
         leadScheduleRows,
         disbursements,
-        allocationInvoice,
-        allocationSplit,
-        payrollRegisterFileName,
       };
     };
 
@@ -1072,12 +1361,12 @@ export const surlIntermediateCutoffV1 = {
         const parsed = parsePseudoDate(target.paymentDate);
         if (!parsed || !yearEndDate) return true;
         const daysAfter = Math.round((parsed - yearEndDate) / (1000 * 60 * 60 * 24));
-        return daysAfter <= 0 || daysAfter < 30 || daysAfter > 60;
+        return daysAfter <= 0 || daysAfter > 31;
       });
       if (windowIssues) {
         issues.push({
           code: 'payment-date-window',
-          message: 'Payment dates must be 1-2 months after year-end.',
+          message: 'Payment dates must fall in January after year-end.',
         });
       }
 
@@ -1090,7 +1379,9 @@ export const surlIntermediateCutoffV1 = {
           });
           return;
         }
-        const total = invoices.reduce((sum, inv) => sum + Number(inv.amount || 0), 0);
+        const total = invoices
+          .filter((inv) => !inv.isEstimateOnly)
+          .reduce((sum, inv) => sum + Number(inv.amount || 0), 0);
         if (Math.abs(total - Number(disbursement.amount || 0)) > 0.01) {
           issues.push({
             code: 'invoice-total-mismatch',
@@ -1100,6 +1391,7 @@ export const surlIntermediateCutoffV1 = {
       });
 
       invoiceCatalog.forEach((invoice) => {
+        if (invoice.isEstimateOnly) return;
         const items = Array.isArray(invoice.lineItems) ? invoice.lineItems : [];
         if (items.length === 0) {
           issues.push({
@@ -1137,18 +1429,14 @@ export const surlIntermediateCutoffV1 = {
       invoiceCatalog.forEach((invoice) => {
         const shouldInclude = shouldBeInAging(invoice.serviceDate, invoice.shippingDate);
         const agingEntry = apMap.get(invoice.invoiceNumber);
+        const isTimingTrap = invoice.trapType === 'timing';
         if (shouldInclude && invoice.isRecorded) {
           if (!agingEntry) {
             issues.push({
               code: 'aging-missing',
               message: `Invoice ${invoice.invoiceNumber} should appear in AP aging.`,
             });
-          } else if (
-            Math.abs(
-              Number(agingEntry.amount || 0) -
-                Number(invoice.apAgingAmount ?? invoice.amount ?? 0)
-            ) > 0.01
-          ) {
+          } else if (Math.abs(Number(agingEntry.amount || 0) - Number(invoice.amount || 0)) > 0.01) {
             issues.push({
               code: 'aging-amount-mismatch',
               message: `AP aging amount mismatch for ${invoice.invoiceNumber}.`,
@@ -1156,7 +1444,7 @@ export const surlIntermediateCutoffV1 = {
           }
         } else if (shouldInclude && !invoice.isRecorded && !agingEntry) {
           trapCount += 1;
-        } else if (!shouldInclude && agingEntry) {
+        } else if (!shouldInclude && agingEntry && !isTimingTrap) {
           issues.push({
             code: 'aging-should-not-appear',
             message: `Invoice ${invoice.invoiceNumber} should not appear in AP aging.`,
@@ -1164,19 +1452,36 @@ export const surlIntermediateCutoffV1 = {
         }
       });
       if (trapCount === 0) {
-        issues.push({ code: 'no-trap', message: 'No unrecorded prior-period invoices found.' });
+        issues.push({ code: 'bundle-trap-missing', message: 'No bundled unrecorded invoice found.' });
       }
-      const hasSplitAllocation = disbursements.some((item) => item?.answerKeyMode === 'split');
+      const hasBundle = targets.some((target) => target.trapType === 'bundle');
+      if (!hasBundle) {
+        issues.push({ code: 'bundle-trap-missing', message: 'Bundle trap is missing.' });
+      }
+      const hasTiming = targets.some((target) => target.trapType === 'timing');
+      if (!hasTiming) {
+        issues.push({ code: 'timing-trap-missing', message: 'Timing misconception trap is missing.' });
+      }
+      const hasAccrual = targets.some((target) => target.trapType === 'accrual');
+      if (!hasAccrual) {
+        issues.push({ code: 'accrual-trap-missing', message: 'Accrual settlement trap is missing.' });
+      }
+      const hasSplitAllocation = disbursements.some(
+        (item) => item?.answerKeyMode === 'split' && item?.meta?.trapType === 'bundle'
+      );
       if (!hasSplitAllocation) {
-        issues.push({ code: 'allocation-trap-missing', message: 'No allocation split item was generated.' });
+        issues.push({ code: 'bundle-split-missing', message: 'Bundled payment split was not generated.' });
       }
 
       if (!invoiceCatalog.every((invoice) => invoice.invoiceNumber && invoice.vendor)) {
         issues.push({ code: 'invoice-data', message: 'Invoice data missing identifiers.' });
       }
 
-      if (paymentDates.length !== new Set(paymentDates).size) {
-        issues.push({ code: 'payment-date-variation', message: 'Payment dates are not varied.' });
+      if (paymentDates.length === new Set(paymentDates).size) {
+        issues.push({
+          code: 'payment-date-variation',
+          message: 'Payment dates should include multiple disbursements on the same day.',
+        });
       }
 
       return issues;
@@ -1189,9 +1494,6 @@ export const surlIntermediateCutoffV1 = {
     let leadScheduleRows = [];
     let disbursements = [];
     let lastIssues = [];
-    let allocationInvoice = null;
-    let allocationSplit = null;
-    let payrollRegisterFileName = 'Payroll Register.pdf';
 
     const maxAttempts = 50;
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
@@ -1201,9 +1503,6 @@ export const surlIntermediateCutoffV1 = {
       apAgingRowsMismatch = built.apAgingRowsMismatch;
       leadScheduleRows = built.leadScheduleRows;
       disbursements = built.disbursements;
-      allocationInvoice = built.allocationInvoice || null;
-      allocationSplit = built.allocationSplit || null;
-      payrollRegisterFileName = built.payrollRegisterFileName || payrollRegisterFileName;
       lastIssues = validateCaseData({
         targets: validatedTargets,
         invoiceCatalog,
@@ -1360,6 +1659,78 @@ export const surlIntermediateCutoffV1 = {
       thresholdAmount > 0 ? thresholdAmount / scopePercent : disbursementTotal * 0.25
     );
 
+    const accrualTolerance = roundMoney((performanceMateriality / 0.75) * 0.05);
+    const formatMoney = (value) =>
+      Number(value || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
+    if (Number.isFinite(accrualTolerance) && accrualTolerance > 0) {
+      const estimateInvoice = invoiceCatalog.find((invoice) => invoice.isEstimateOnly);
+      if (estimateInvoice) {
+        const settlementTotal = invoiceCatalog
+          .filter(
+            (invoice) =>
+              invoice.paymentId === estimateInvoice.paymentId && !invoice.isEstimateOnly
+          )
+          .reduce((sum, invoice) => sum + Number(invoice.amount || 0), 0);
+        const accrualRng = createRng(`${seed}|accrual-estimate`);
+        const variance = roundMoney((0.2 + accrualRng() * 0.6) * accrualTolerance);
+        const sign = accrualRng() < 0.5 ? -1 : 1;
+        const currentEstimate = Number(estimateInvoice.amount || 0);
+        let nextEstimate = roundMoney(settlementTotal + sign * variance);
+        if (nextEstimate <= 0) {
+          nextEstimate = roundMoney(settlementTotal + Math.abs(variance));
+        }
+        const delta = roundMoney(nextEstimate - currentEstimate);
+        if (Math.abs(delta) > 0.01) {
+          estimateInvoice.amount = nextEstimate;
+          estimateInvoice.apAgingAmount = nextEstimate;
+          estimateInvoice.subtotal = nextEstimate;
+          const updateAgingRows = (rows) =>
+            rows.map((row) => {
+              if (row.invoiceNumber !== estimateInvoice.invoiceNumber) return row;
+              const nextAmount = roundMoney(Number(row.amount || 0) + delta);
+              return {
+                ...row,
+                amount: nextAmount,
+                buckets: { current: nextAmount, days30: 0, days60: 0, days90: 0, days90Plus: 0 },
+              };
+            });
+          apAgingRowsCorrected = updateAgingRows(apAgingRowsCorrected);
+          apAgingRowsMismatch = updateAgingRows(apAgingRowsMismatch);
+          leadScheduleRows = leadScheduleRows.map((row) => {
+            if (row.invoiceNumber !== 'GL-AP') return row;
+            const nextAmount = roundMoney(Number(row.amount || 0) + delta);
+            return {
+              ...row,
+              amount: nextAmount,
+              buckets: { current: nextAmount, days30: 0, days60: 0, days90: 0, days90Plus: 0 },
+            };
+          });
+          disbursements = disbursements.map((item) => {
+            if (!item || item.paymentId !== estimateInvoice.paymentId) return item;
+            const nextMeta = {
+              ...(item.meta || {}),
+              trapType: 'accrual',
+              accrualEstimate: nextEstimate,
+              settlementTotal,
+            };
+            const explanation =
+              `Year-end accrual of ${formatMoney(nextEstimate)} was recorded for this obligation. ` +
+              `The later invoices total ${formatMoney(settlementTotal)}, which is within a reasonable estimate range, ` +
+              'so no adjustment is needed.';
+            const nextAnswerKey =
+              item.answerKey && typeof item.answerKey === 'object'
+                ? { ...item.answerKey, explanation }
+                : item.answerKey;
+            return {
+              ...item,
+              meta: nextMeta,
+              answerKey: nextAnswerKey,
+            };
+          });
+        }
+      }
+    }
+
     const apAgingMismatchData = {
       companyName: 'Team Up Promotional Products, LLC',
       asOfDate: 'December 31 20X2',
@@ -1396,62 +1767,376 @@ export const surlIntermediateCutoffV1 = {
       },
     };
 
-    const payrollServiceStart = allocationSplit?.startLabel || addDaysPseudo(yearEnd, -12);
-    const payrollServiceEnd = allocationSplit?.endLabel || addDaysPseudo(yearEnd, 10);
-    const payrollPayDate = addDaysPseudo(payrollServiceEnd, 4);
-    const payrollGross = roundMoney(Number(allocationInvoice?.amount || 128940));
-    const payrollEmployeeTaxes = roundMoney(payrollGross * 0.22);
-    const payrollDeductions = roundMoney(payrollGross * 0.08);
-    const payrollNetPay = roundMoney(payrollGross - payrollEmployeeTaxes - payrollDeductions);
-    const payrollEmployerTaxes = roundMoney(payrollGross * 0.0765);
-    const formatPayrollMoney = (value) =>
-      Number(value || 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
-
-    const payrollRegisterData = {
-      reportTitle: 'Payroll Register',
-      payPeriod: `${payrollServiceStart} - ${payrollServiceEnd}`,
-      reportScopeLabel: 'Company Totals',
-      payDate: payrollPayDate,
-      companyCode: 'TU-01',
-      companyNameLine1: 'Team Up Promotional Products, LLC',
-      companyNameLine2: 'Payroll Services',
-      pageNumber: '1',
-      pageCount: '1',
-      totalHours: '1,486.50',
-      totalEmployees: '42',
-      totals: [
-        { label: 'Gross Wages', amount: formatPayrollMoney(payrollGross) },
-        { label: 'Employee Taxes Withheld', amount: formatPayrollMoney(payrollEmployeeTaxes) },
-        { label: 'Deductions & Benefits', amount: formatPayrollMoney(payrollDeductions) },
-        { label: 'Net Pay', amount: formatPayrollMoney(payrollNetPay) },
-        { label: 'Employer Payroll Taxes', amount: formatPayrollMoney(payrollEmployerTaxes) },
-      ],
-      footerNote:
-        'Service period spans year-end. AP aging includes the pre-year-end portion; allocate the remainder to the next period.',
+    const periodLabel = (() => {
+      const token = String(yearEnd).slice(0, 4);
+      const yearDigit = Number(token.slice(-1));
+      const nextToken = Number.isFinite(yearDigit) ? `20X${yearDigit + 1}` : token;
+      return `January ${nextToken}`;
+    })();
+    const statementRng = createRng(`${seed}|statement`);
+    const statementRandomInt = (min, max) =>
+      Math.floor(statementRng() * (max - min + 1)) + min;
+    const statementShuffle = (list) => {
+      const next = [...list];
+      for (let i = next.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(statementRng() * (i + 1));
+        [next[i], next[j]] = [next[j], next[i]];
+      }
+      return next;
     };
+    const sortedDisbursementRows = disbursements
+      .map((item) => ({
+        paymentId: item.paymentId,
+        payee: item.payee,
+        paymentDate: item.paymentDate,
+        amount: Number(item.amount || 0),
+      }))
+      .sort((a, b) => {
+        const dateA = parsePseudoDate(a.paymentDate);
+        const dateB = parsePseudoDate(b.paymentDate);
+        if (dateA && dateB) return dateA - dateB;
+        return String(a.paymentDate || '').localeCompare(String(b.paymentDate || ''));
+      });
+    const checkStart = 10420 + randomInt(8, 80);
+    const disbursementRowsWithChecks = sortedDisbursementRows.map((row, index) => {
+      const selector = hashSeed(`${seed}|paymentType|${row.paymentId || index}`) % 10;
+      const paymentType = selector < 6 ? 'Check' : selector < 9 ? 'ACH' : 'Wire';
+      return {
+        ...row,
+        paymentType,
+        checkNumber: '',
+      };
+    });
+    let electronicIndices = disbursementRowsWithChecks
+      .map((row, index) => (row.paymentType === 'Check' ? null : index))
+      .filter((value) => value !== null);
+    let checkIndices = disbursementRowsWithChecks
+      .map((row, index) => (row.paymentType === 'Check' ? index : null))
+      .filter((value) => value !== null);
+    if (electronicIndices.length === 0 && disbursementRowsWithChecks.length > 0) {
+      const fallbackIndex = Math.max(0, disbursementRowsWithChecks.length - 1);
+      disbursementRowsWithChecks[fallbackIndex] = {
+        ...disbursementRowsWithChecks[fallbackIndex],
+        paymentType: 'ACH',
+        checkNumber: '',
+      };
+      electronicIndices = [fallbackIndex];
+      checkIndices = disbursementRowsWithChecks
+        .map((row, index) => (row.paymentType === 'Check' ? index : null))
+        .filter((value) => value !== null);
+    }
+    const canUseCheckGap = checkIndices.length >= 2;
+    const canUseElectronicGap = electronicIndices.length > 0;
+    const gapScenario = (() => {
+      if (canUseCheckGap && canUseElectronicGap) return rng() < 0.5 ? 'check-gap' : 'missing-electronic';
+      if (canUseCheckGap) return 'check-gap';
+      if (canUseElectronicGap) return 'missing-electronic';
+      return 'missing-electronic';
+    })();
+    const checkGapIndex =
+      gapScenario === 'check-gap' && checkIndices.length >= 2
+        ? randomInt(1, checkIndices.length - 1)
+        : null;
+    let checkCounter = 0;
+    disbursementRowsWithChecks.forEach((row) => {
+      if (row.paymentType !== 'Check') return;
+      const gapOffset = checkGapIndex !== null && checkCounter >= checkGapIndex ? 1 : 0;
+      row.checkNumber = String(checkStart + checkCounter + gapOffset);
+      checkCounter += 1;
+    });
+    const missingCheckNumber =
+      gapScenario === 'check-gap' && checkGapIndex !== null ? String(checkStart + checkGapIndex) : null;
+    const missingIndex =
+      gapScenario === 'missing-electronic' && electronicIndices.length > 0
+        ? electronicIndices[randomInt(0, electronicIndices.length - 1)]
+        : null;
+    const listingRows = disbursementRowsWithChecks.map(({ paymentId, ...rest }) => rest);
+    const disbursementListingRowsInitial =
+      missingIndex !== null ? listingRows.filter((_row, index) => index !== missingIndex) : listingRows;
+    const disbursementListingRowsCorrected = listingRows;
+    const disbursementListingInitialData = {
+      companyName: 'Team Up Promotional Products, LLC',
+      periodLabel,
+      rows: disbursementListingRowsInitial,
+    };
+    const disbursementListingCorrectedData = {
+      companyName: 'Team Up Promotional Products, LLC',
+      periodLabel,
+      rows: disbursementListingRowsCorrected,
+    };
+    const outstandingCheckCount =
+      checkIndices.length >= 4 ? 2 : checkIndices.length >= 2 ? 1 : 0;
+    const outstandingCheckIndices = new Set(
+      statementShuffle(checkIndices).slice(0, outstandingCheckCount)
+    );
+    const clearedDisbursementRows = disbursementRowsWithChecks.filter((row, index) => {
+      if (row.paymentType !== 'Check') return true;
+      return !outstandingCheckIndices.has(index);
+    });
+    const priorPeriodCheckCount = 1 + statementRandomInt(0, 1);
+    const usedCheckNumbers = new Set(
+      disbursementRowsWithChecks
+        .filter((row) => row.paymentType === 'Check' && row.checkNumber)
+        .map((row) => Number(row.checkNumber))
+    );
+    let priorCheckNumber = checkStart - statementRandomInt(25, 90);
+    const priorPayees = statementShuffle(payeePool).slice(0, priorPeriodCheckCount);
+    const priorPeriodChecks = Array.from({ length: priorPeriodCheckCount }, (_value, idx) => {
+      while (usedCheckNumbers.has(priorCheckNumber) || priorCheckNumber <= 0) {
+        priorCheckNumber -= 1;
+      }
+      const clearedDate = addDaysPseudo(yearEnd, statementRandomInt(2, 27));
+      const checkDate = addDaysPseudo(yearEnd, -statementRandomInt(5, 55));
+      const amount = roundMoney(statementRandomInt(1200, 45000) / 25 * 25);
+      const payee = priorPayees[idx] || `Vendor ${idx + 1}`;
+      const checkNumber = String(priorCheckNumber);
+      usedCheckNumbers.add(priorCheckNumber);
+      priorCheckNumber -= statementRandomInt(1, 6);
+      return {
+        checkNumber,
+        payee,
+        amount,
+        clearedDate,
+        checkDate,
+      };
+    });
+    const resolveClearedDate = (paymentDate) => {
+      const parsed = parsePseudoDate(paymentDate);
+      if (!parsed) return paymentDate;
+      const day = parsed.getDate();
+      const delay = statementRandomInt(0, 6);
+      if (day + delay > 28) return paymentDate;
+      return addDaysPseudo(paymentDate, delay);
+    };
+    const bankStatementDebitRows = [
+      ...clearedDisbursementRows.map((row) => {
+        const base = {
+          date: row.paymentType === 'Check' ? resolveClearedDate(row.paymentDate) : row.paymentDate,
+          reference: row.paymentId,
+          amount: -Number(row.amount || 0),
+          payee: row.payee,
+        };
+        if (row.paymentType === 'Check') {
+          return {
+            ...base,
+            description: `Check ${row.checkNumber} ${row.payee}`,
+            checkNumber: row.checkNumber,
+          };
+        }
+        const prefix = row.paymentType === 'Wire' ? 'Wire' : 'ACH';
+        return {
+          ...base,
+          description: `${prefix} ${row.payee}`,
+        };
+      }),
+      ...priorPeriodChecks.map((check) => ({
+        date: check.clearedDate,
+        reference: `CHK-${check.checkNumber}`,
+        amount: -Number(check.amount || 0),
+        payee: check.payee,
+        description: `Check ${check.checkNumber} ${check.payee}`,
+        checkNumber: check.checkNumber,
+      })),
+    ];
 
+    // Add a few realistic credits so the statement isn't "No credits this period."
+    // Keep these independent of the SURL disbursement population.
+    const creditCount = 2 + randomInt(0, 2); // 2–4 credits
+    const creditStartOffset = randomInt(2, 8);
+    const creditRows = Array.from({ length: creditCount }, (_v, idx) => {
+      const creditDate = addDaysPseudo(yearEnd, creditStartOffset + idx * randomInt(4, 9));
+      const creditAmount = roundMoney(randomInt(18000, 62000) / 25 * 25);
+      const refNo = `DEP-${randomInt(4100, 9800)}`;
+      const descriptions = [
+        'ACH Credit - Customer Deposit',
+        'Wire Received - Client Payment',
+        'Remote Deposit - Checks',
+        'ACH Credit - Merchant Settlement',
+      ];
+      const description = descriptions[hashSeed(`${seed}|credit|${idx}`) % descriptions.length];
+      return {
+        date: creditDate,
+        description,
+        reference: refNo,
+        amount: Number(creditAmount),
+      };
+    });
+
+    // Combine and sort rows by date so debits/credits interleave naturally.
+    const bankStatementRows = [...bankStatementDebitRows, ...creditRows].sort((a, b) => {
+      const dateA = parsePseudoDate(a.date);
+      const dateB = parsePseudoDate(b.date);
+      if (dateA && dateB) return dateA - dateB;
+      return String(a.date || '').localeCompare(String(b.date || ''));
+    });
+
+    const totalDebits = bankStatementRows.reduce(
+      (sum, row) => sum + (Number(row.amount || 0) < 0 ? Math.abs(Number(row.amount || 0)) : 0),
+      0
+    );
+    const totalCredits = bankStatementRows.reduce(
+      (sum, row) => sum + (Number(row.amount || 0) > 0 ? Number(row.amount || 0) : 0),
+      0
+    );
+
+    // Opening balance should be large enough to cover debits with a cushion.
+    // Include credits in the cushion so the ending balance doesn't go negative.
+    const openingBalance = roundMoney(Math.max(25000, (totalDebits - totalCredits) * (1.15 + rng() * 0.35)));
+
+    const bankName = 'Cascade National Bank';
+    const accountName = 'Team Up Promotional Products, LLC';
+    const accountNumber = '*** 4812';
+    const buildCheckCopyData = ({ checkNumber, date, payee, amount, memo }) => ({
+      payer: {
+        name: accountName,
+        addressLine: '2150 Riverfront Ave, Denver, CO 80202',
+      },
+      checkNumber,
+      date,
+      payee,
+      amountNumeric: formatMoneyNumber(amount),
+      amountWords: formatCheckAmountWords(amount),
+      bank: {
+        name: bankName,
+        subName: 'Member FDIC',
+      },
+      memo: memo || 'A/P Disbursement',
+      signatureName: 'K. Ramirez',
+      micr: {
+        routingSymbol: 'T',
+        routingNumber: '102000021',
+        accountSymbol: 'A',
+        accountNumber: '0004812001',
+        checkNumber,
+      },
+    });
+
+    // Build "canceled check pages" from check payments only.
+    const clearedCheckRows = clearedDisbursementRows.filter((row) => row.paymentType === 'Check');
+    const canceledCheckRows = [
+      ...clearedCheckRows.map((row) => ({
+        checkNumber: row.checkNumber,
+        date: row.paymentDate,
+        amount: Number(row.amount || 0),
+        payee: row.payee,
+        memo: 'A/P Disbursement',
+      })),
+      ...priorPeriodChecks.map((check) => ({
+        checkNumber: check.checkNumber,
+        date: check.checkDate,
+        amount: Number(check.amount || 0),
+        payee: check.payee,
+        memo: 'Prior period check',
+      })),
+    ];
+    const checksPerPage = 6;
+    const canceledCheckPages = [];
+    for (let i = 0; i < canceledCheckRows.length; i += checksPerPage) {
+      const slice = canceledCheckRows.slice(i, i + checksPerPage);
+      canceledCheckPages.push({
+        checks: slice.map((row) => ({
+          ...buildCheckCopyData(row),
+          amount: Number(row.amount || 0),
+          // imageUrl intentionally omitted for now; the PDF template can fallback to text.
+          // imageUrl: '...'
+        })),
+      });
+    }
+
+    const bankStatementData = {
+      bankName,
+      accountName,
+      accountNumber,
+      periodLabel,
+      openingBalance,
+      rows: bankStatementRows,
+      // Ensure the PDF template stacks debits then credits vertically (default), but keep explicit.
+      layout: { txLayout: 'stacked' },
+      canceledCheckPages,
+    };
+    const voidedCheckDoc = (() => {
+      if (!missingCheckNumber) return null;
+      const voidedAmount = roundMoney(statementRandomInt(800, 24000) / 25 * 25);
+      return {
+        ...initialReferenceDocument(),
+        _tempId: getUUID(),
+        fileName: `Voided Check ${missingCheckNumber}.pdf`,
+        generationSpecId: null,
+        generationSpec: {
+          templateId: 'refdoc.check-copy.v1',
+          data: {
+            payer: {
+              name: accountName,
+              addressLine: '2150 Riverfront Ave, Denver, CO 80202',
+            },
+            checkNumber: missingCheckNumber,
+            date: addDaysPseudo(yearEnd, statementRandomInt(3, 18)),
+            payee: statementShuffle(payeePool)[0] || 'Vendor',
+            amountNumeric: formatMoneyNumber(voidedAmount),
+            amountWords: formatCheckAmountWords(voidedAmount),
+            bank: {
+              name: bankName,
+              subName: 'Member FDIC',
+            },
+            memo: 'VOID - Check canceled',
+            signatureName: 'K. Ramirez',
+            micr: {
+              routingSymbol: 'T',
+              routingNumber: '102000021',
+              accountSymbol: 'A',
+              accountNumber: '0004812001',
+              checkNumber: missingCheckNumber,
+            },
+          },
+        },
+      };
+    })();
+    const checkCopySpecs = disbursementRowsWithChecks
+      .filter((row) => row.paymentType === 'Check' && row.checkNumber)
+      .map((row) => {
+        const amountValue = Number(row.amount || 0);
+        const checkNumber = row.checkNumber || row.paymentId;
+        const data = buildCheckCopyData({
+          checkNumber,
+          date: row.paymentDate,
+          payee: row.payee,
+          amount: amountValue,
+        });
+        return {
+          id: getUUID(),
+          fileName: `Check Copy ${checkNumber}.pdf`,
+          generationSpec: {
+            templateId: 'refdoc.check-copy.v1',
+            data,
+            linkToPaymentId: row.paymentId,
+          },
+          linkToPaymentId: row.paymentId,
+          phaseId: 'step2',
+          internalOnly: true,
+        };
+      });
     const referenceDocuments = [
       ...invoiceCatalog
-        .filter((invoice) => !invoice.isAllocationTrap)
+        .filter((invoice) => !invoice.isEstimateOnly)
         .map((invoice) => {
-          const templateId = pickInvoiceTemplateId(invoice.vendor);
-          const data = buildInvoiceData(invoice, templateId);
-          return {
-            ...initialReferenceDocument(),
-            _tempId: getUUID(),
+        const templateId = pickInvoiceTemplateId(invoice.vendor);
+        const data = buildInvoiceData(invoice, templateId);
+        return {
+          ...initialReferenceDocument(),
+          _tempId: getUUID(),
           fileName: `${invoice.vendor} Invoice ${invoice.invoiceNumber}.pdf`,
           generationSpecId: null,
-            generationSpec: {
-              templateId,
-              data,
-              invoiceTotal: data.invoiceTotal,
-              serviceDate: invoice.serviceDate,
-              shippingDate: invoice.shippingDate,
-              linkToPaymentId: invoice.paymentId,
-              isRecorded: invoice.isRecorded,
-            },
-          };
-        }),
+          generationSpec: {
+            templateId,
+            data,
+            invoiceTotal: data.invoiceTotal,
+            serviceDate: invoice.serviceDate,
+            shippingDate: invoice.shippingDate,
+            linkToPaymentId: invoice.paymentId,
+            isRecorded: invoice.isRecorded,
+          },
+        };
+      }),
       {
         ...initialReferenceDocument(),
         _tempId: getUUID(),
@@ -1460,6 +2145,26 @@ export const surlIntermediateCutoffV1 = {
         generationSpec: {
           templateId: 'refdoc.ap-aging.v1',
           data: apAgingMismatchData,
+        },
+      },
+      {
+        ...initialReferenceDocument(),
+        _tempId: getUUID(),
+        fileName: 'January Disbursements Listing (Initial).pdf',
+        generationSpecId: null,
+        generationSpec: {
+          templateId: 'refdoc.disbursement-listing.v1',
+          data: disbursementListingInitialData,
+        },
+      },
+      {
+        ...initialReferenceDocument(),
+        _tempId: getUUID(),
+        fileName: 'January Bank Statement.pdf',
+        generationSpecId: null,
+        generationSpec: {
+          templateId: 'refdoc.bank-statement.v1',
+          data: bankStatementData,
         },
       },
       {
@@ -1475,20 +2180,6 @@ export const surlIntermediateCutoffV1 = {
       {
         ...initialReferenceDocument(),
         _tempId: getUUID(),
-        fileName: payrollRegisterFileName,
-        generationSpecId: null,
-        generationSpec: {
-          templateId: 'refdoc.payroll-register.v1',
-          data: payrollRegisterData,
-          linkToPaymentId:
-            allocationInvoice?.paymentId ||
-            validatedTargets.find((target) => target.allocationTrap)?.paymentId ||
-            null,
-        },
-      },
-      {
-        ...initialReferenceDocument(),
-        _tempId: getUUID(),
         fileName: 'AP Aging Summary (Corrected).pdf',
         generationSpecId: null,
         generationSpec: {
@@ -1496,6 +2187,21 @@ export const surlIntermediateCutoffV1 = {
           data: apAgingCorrectedData,
         },
       },
+      ...(gapScenario === 'missing-electronic'
+        ? [
+            {
+              ...initialReferenceDocument(),
+              _tempId: getUUID(),
+              fileName: 'January Disbursements Listing (Corrected).pdf',
+              generationSpecId: null,
+              generationSpec: {
+                templateId: 'refdoc.disbursement-listing.v1',
+                data: disbursementListingCorrectedData,
+              },
+            },
+          ]
+        : []),
+      ...(voidedCheckDoc ? [voidedCheckDoc] : []),
     ];
 
     referenceDocuments.forEach((doc) => {
@@ -1505,46 +2211,26 @@ export const surlIntermediateCutoffV1 = {
     const tieOutGate = {
       enabled: true,
       skillTag: 'ca_tie_out',
+      stepTitle: 'AP Aging C&A',
+      description: 'Confirm the AP aging ties to the ledger before you evaluate the population.',
       assessmentQuestion: 'Do the AP aging and AP ledger totals tie out?',
       assessmentOptions: [
         {
           id: 'assess_yes',
           text: 'Yes, they tie out.',
-          correct: false,
+          correct: true,
           outcome: 'match',
-          feedback: 'Double-check the totals and the report run dates before moving on.',
+          feedback: 'Totals tie out. Move on to population completeness.',
         },
         {
           id: 'assess_no',
           text: 'No, they do not tie out.',
-          correct: true,
+          correct: false,
           outcome: 'mismatch',
-          feedback: 'Good catch. Resolve the mismatch before selecting items to test.',
+          feedback: 'Re-check the totals before moving on.',
         },
       ],
-      actionQuestion: 'You indicated the reports do not tie. What is the best next step?',
-      successMessage: 'Correct. Get a corrected population before selecting items.',
-      failureMessage: 'Not yet. Resolve the tie-out before you select items to test.',
-      actionOptions: [
-        {
-          id: 'opt1',
-          text: 'Proceed with selection and note the mismatch for later.',
-          correct: false,
-          feedback: 'You need a corrected population before you can scope testing.',
-        },
-        {
-          id: 'opt2',
-          text: 'Ask the client to correct the tie-out and rerun the reports.',
-          correct: true,
-          feedback: 'That is the right next step.',
-        },
-        {
-          id: 'opt3',
-          text: 'Ignore the aging and test disbursements randomly.',
-          correct: false,
-          feedback: 'Testing off a broken population risks missing liabilities.',
-        },
-      ],
+      passedMessage: 'Tie-out complete. Continue to the completeness check.',
       referenceDocNames: ['AP Aging Summary (Initial).pdf', 'AP Lead Schedule (GL).pdf'],
       correctedReferenceDocNames: ['AP Aging Summary (Corrected).pdf', 'AP Lead Schedule (GL).pdf'],
       requireOpenedDocs: true,
@@ -1554,12 +2240,134 @@ export const surlIntermediateCutoffV1 = {
       },
     };
 
+    const completenessReferenceDocNames = [
+      'January Disbursements Listing (Initial).pdf',
+      'January Bank Statement.pdf',
+    ];
+    const voidedCheckFileName = voidedCheckDoc?.fileName || null;
+    const completenessCorrectedReferenceDocNames =
+      gapScenario === 'check-gap'
+        ? voidedCheckFileName
+          ? [voidedCheckFileName]
+          : []
+        : ['January Disbursements Listing (Corrected).pdf', 'January Bank Statement.pdf'];
+    const isCheckGapScenario = gapScenario === 'check-gap';
+
+    const completenessActionOptions = isCheckGapScenario
+      ? [
+          {
+            id: 'opt1',
+            text: 'There is a gap in the check sequence, and the client supported it with a voided check copy.',
+            correct: true,
+            feedback: 'Exactly. The gap is explained by a voided check, so the listing is complete.',
+          },
+          {
+            id: 'opt2',
+            text: 'The bank statement shows an ACH/wire that is missing from the listing.',
+            correct: false,
+            feedback: 'That would indicate a missing electronic payment, not a check gap.',
+          },
+          {
+            id: 'opt3',
+            text: 'The listing looks like it is filtered to checks only.',
+            correct: false,
+            feedback: 'Possible, but the evidence here is a specific check-number gap.',
+          },
+          {
+            id: 'opt4',
+            text: 'The totals do not tie, so the listing must be incomplete.',
+            correct: false,
+            feedback: 'Totals can tie even when the sequence shows a gap.',
+          },
+        ]
+      : [
+          {
+            id: 'opt1',
+            text: 'The bank statement shows an ACH/wire that is missing from the listing.',
+            correct: true,
+            feedback: 'Correct. The electronic payment is on the bank statement but not on the listing.',
+          },
+          {
+            id: 'opt2',
+            text: 'There is a gap in the check sequence, and the client supported it with a voided check copy.',
+            correct: false,
+            feedback: 'That would explain a check gap, not a missing electronic payment.',
+          },
+          {
+            id: 'opt3',
+            text: 'The listing includes only payments above the scope threshold.',
+            correct: false,
+            feedback: 'Scope thresholds come after completeness. The population should be full.',
+          },
+          {
+            id: 'opt4',
+            text: 'The bank statement has prior-period checks clearing in January.',
+            correct: false,
+            feedback: 'Those explain statement-only items, not a missing electronic payment.',
+          },
+        ];
+
+    const completenessGate = {
+      enabled: true,
+      skillTag: 'ca_completeness',
+      stepTitle: 'Disbursement Listing C&A',
+      description:
+        'Validate the January disbursement listing against the bank statement before you select items to test.',
+      assessmentQuestion: 'Does the January disbursement listing appear complete?',
+      assessmentOptions: [
+        {
+          id: 'assess_yes',
+          text: 'Yes, the listing looks complete.',
+          correct: false,
+          outcome: 'match',
+          feedback: 'Look for gaps or missing activity compared to the bank statement.',
+        },
+        {
+          id: 'assess_no',
+          text: 'No, it looks incomplete.',
+          correct: true,
+          outcome: 'incomplete',
+          feedback: 'Good catch. Identify the right response.',
+        },
+      ],
+      actionQuestion: 'What exactly did you see that made you answer that way?',
+      successMessage: isCheckGapScenario
+        ? 'Correct. You identified the check-number gap and the supporting void evidence.'
+        : 'Correct. You spotted the missing electronic payment on the bank statement.',
+      failureMessage: 'Not yet. Point to the specific evidence that makes the listing incomplete.',
+      actionOptions: completenessActionOptions,
+      passedMessage: isCheckGapScenario
+        ? 'Disbursement listing C&A complete. Void documentation explains the gap.'
+        : 'Disbursement listing C&A complete. Use the corrected disbursement listing for selection.',
+      includeAllReferenceDocs: true,
+      referenceDocNames: completenessReferenceDocNames,
+      correctedReferenceDocNames: completenessCorrectedReferenceDocNames,
+      requireOpenedDocs: true,
+    };
+
     const selectionScope = {
       performanceMateriality,
       scopePercent,
       thresholdAmount,
       skillTag: 'scope_threshold',
+      lockOnPass: true,
     };
+    const step2DocNames = new Set([
+      'AP Aging Summary (Initial).pdf',
+      'AP Lead Schedule (GL).pdf',
+      'AP Aging Summary (Corrected).pdf',
+      'January Disbursements Listing (Initial).pdf',
+      'January Disbursements Listing (Corrected).pdf',
+      'January Bank Statement.pdf',
+    ]);
+    const referenceSpecs = referenceDocuments.map((doc) => ({
+      id: doc.generationSpecId || doc._tempId,
+      fileName: doc.fileName,
+      generationSpec: doc.generationSpec,
+      linkToPaymentId: doc.generationSpec?.linkToPaymentId || null,
+      phaseId: step2DocNames.has(doc.fileName) ? 'step2' : 'step3',
+    }));
+    const generationSpecs = [...referenceSpecs, ...checkCopySpecs];
 
     return {
       caseName: `SURL Cutoff: January Disbursements (${yearEnd})`,
@@ -1568,10 +2376,10 @@ export const surlIntermediateCutoffV1 = {
       instruction,
       workpaper: {
         layoutType: 'two_pane',
-        layoutConfig: { tieOutGate, selectionScope },
+        layoutConfig: { tieOutGate, completenessGate, selectionScope },
       },
       workflow: {
-        steps: ['instruction', 'ca_check', 'selection', 'testing', 'results'],
+        steps: ['instruction', 'ca_check', 'ca_completeness', 'selection', 'testing', 'results'],
         gateScope: 'per_attempt',
       },
       disbursements,
@@ -1587,12 +2395,11 @@ export const surlIntermediateCutoffV1 = {
         },
         notes:
           'Reference documents are generated from templates; run the PDF generator to populate storagePath/downloadURL.',
-        referenceDocumentSpecs: referenceDocuments.map((doc) => ({
-          id: doc.generationSpecId || doc._tempId,
-          fileName: doc.fileName,
-          generationSpec: doc.generationSpec,
-          linkToPaymentId: doc.generationSpec?.linkToPaymentId || null,
-        })),
+        phases: [
+          { id: 'step2', label: 'C&A gates' },
+          { id: 'step3', label: 'Selection + testing' },
+        ],
+        referenceDocumentSpecs: generationSpecs,
       },
     };
   },

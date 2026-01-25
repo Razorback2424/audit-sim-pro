@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, RotateCcw } from 'lucide-react';
+import { CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, PlusCircle, RotateCcw } from 'lucide-react';
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { currencyFormatter } from '../../utils/formatters';
 import { storage } from '../../AppCore';
@@ -78,6 +78,47 @@ const extractBreakdown = (source) => {
   return breakdown;
 };
 
+const extractSplitValues = (source) => {
+  const raw = source && typeof source === 'object' ? source : {};
+  return CLASSIFICATION_KEYS.reduce((acc, key) => {
+    acc[key] = parseNumber(raw?.[key]);
+    return acc;
+  }, {});
+};
+
+const hasSplitExpectation = (item) => {
+  const answerKey = item?.answerKey && typeof item.answerKey === 'object' ? item.answerKey : null;
+  if (!answerKey) return false;
+  const breakdown = extractBreakdown(answerKey);
+  return breakdown.length > 1;
+};
+
+const compareSplitValues = (allocation, answerKey) => {
+  const actualSource =
+    allocation?.splitValues && typeof allocation.splitValues === 'object'
+      ? allocation.splitValues
+      : allocation;
+  const expectedSource = answerKey && typeof answerKey === 'object' ? answerKey : {};
+  const actual = extractSplitValues(actualSource);
+  const expected = extractSplitValues(expectedSource);
+  const tolerance = 0.01;
+  const mismatchedKeys = CLASSIFICATION_KEYS.filter(
+    (key) => Math.abs((actual[key] || 0) - (expected[key] || 0)) > tolerance
+  );
+  return { matches: mismatchedKeys.length === 0, mismatchedKeys };
+};
+
+const pickImproperKey = (breakdown) => {
+  const improperKeys = new Set(['improperlyIncluded', 'improperlyExcluded']);
+  const improper = (breakdown || []).filter(
+    ({ key, amount }) => improperKeys.has(key) && Math.abs(amount) > 0.01
+  );
+  if (improper.length === 0) return '';
+  if (improper.length === 1) return improper[0].key;
+  const sorted = [...improper].sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+  return sorted[0].key;
+};
+
 const extractDecisionFromAllocation = (allocation) => {
   if (!allocation || typeof allocation !== 'object') {
     return { primaryKey: '', breakdown: [] };
@@ -91,6 +132,13 @@ const extractDecisionFromAllocation = (allocation) => {
     return { primaryKey: explicitKey, breakdown };
   }
 
+  if (allocation.isException === true) {
+    const improperKey = pickImproperKey(breakdown);
+    if (improperKey) {
+      return { primaryKey: improperKey, breakdown };
+    }
+  }
+
   if (breakdown.length > 0) {
     return { primaryKey: breakdown[0].key, breakdown };
   }
@@ -101,8 +149,16 @@ const extractDecisionFromAllocation = (allocation) => {
 };
 
 const extractCorrectDecision = (item) => {
+  const explicitKey = typeof item?.answerKeySingleClassification === 'string' ? item.answerKeySingleClassification : '';
+  if (CLASSIFICATION_KEYS.includes(explicitKey)) {
+    return { primaryKey: explicitKey, breakdown: [] };
+  }
   const answerKey = item?.answerKey && typeof item.answerKey === 'object' ? item.answerKey : null;
   const breakdown = answerKey ? extractBreakdown(answerKey) : [];
+  const improperKey = pickImproperKey(breakdown);
+  if (improperKey) {
+    return { primaryKey: improperKey, breakdown };
+  }
   if (breakdown.length > 0) {
     return { primaryKey: breakdown[0].key, breakdown };
   }
@@ -175,6 +231,7 @@ export default function ResultsAnalysis({
   gateResults,
   referenceDocuments = [],
   onRequestRetake,
+  onGenerateNewCase,
   onReturnToDashboard,
 }) {
   const [activeIssueIndex, setActiveIssueIndex] = useState(0);
@@ -206,6 +263,8 @@ export default function ResultsAnalysis({
       const hasAnswer = selectedIds.has(item.paymentId);
       const studentDecision = extractDecisionFromAllocation(answer);
       const correctDecision = extractCorrectDecision(item);
+      const splitExpected = hasSplitExpectation(item);
+      const splitCheck = splitExpected ? compareSplitValues(answer, item.answerKey) : { matches: true };
 
       if (isTrap) {
         traps.push(item);
@@ -235,6 +294,14 @@ export default function ResultsAnalysis({
               studentDecision,
               correctDecision,
             });
+          } else if (splitExpected && !splitCheck.matches) {
+            issues.push({
+              type: 'split_mismatch',
+              item,
+              studentDecision,
+              correctDecision,
+              mismatchedKeys: splitCheck.mismatchedKeys,
+            });
           } else {
             caughtTraps.push({ item, studentDecision, correctDecision });
           }
@@ -259,7 +326,16 @@ export default function ResultsAnalysis({
           correctDecision.primaryKey &&
           normalize(studentDecision.primaryKey) === normalize(correctDecision.primaryKey)
         ) {
-          routineCorrect.push({ item, studentDecision, correctDecision });
+          if (splitExpected && !splitCheck.matches) {
+            issues.push({
+              type: 'wrong_routine_classification',
+              item,
+              studentDecision,
+              correctDecision,
+            });
+          } else {
+            routineCorrect.push({ item, studentDecision, correctDecision });
+          }
           return;
         }
 
@@ -280,12 +356,16 @@ export default function ResultsAnalysis({
   const currentIssue = issues[activeIssueIndex] || null;
   const isDone = issues.length > 0 && activeIssueIndex >= issues.length;
   const criticalIssues = issues.filter(
-    (issue) => issue.type === 'missed_exception' || issue.type === 'wrong_classification'
+    (issue) =>
+      issue.type === 'missed_exception' ||
+      issue.type === 'wrong_classification' ||
+      issue.type === 'split_mismatch'
   );
   const criticalMissCount = criticalIssues.length;
   const routineIssueCount = Math.max(0, issues.length - criticalMissCount);
   const hasTraps = traps.length > 0;
   const showRetake = typeof onRequestRetake === 'function' && hasTraps;
+  const showGenerate = typeof onGenerateNewCase === 'function' && hasTraps;
   const showReturn = typeof onReturnToDashboard === 'function';
 
   const invoiceDoc = useMemo(() => {
@@ -494,24 +574,50 @@ export default function ResultsAnalysis({
               >
                 Back to Dashboard
               </button>
-              <button
-                type="button"
-                onClick={onRequestRetake}
-                className="inline-flex items-center justify-center gap-2 rounded-md bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-800 focus:ring-offset-2"
-              >
-                <RotateCcw size={16} />
-                Retake Case
-              </button>
+              {showRetake ? (
+                <button
+                  type="button"
+                  onClick={onRequestRetake}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-800 focus:ring-offset-2"
+                >
+                  <RotateCcw size={16} />
+                  Retake Case
+                </button>
+              ) : null}
+              {showGenerate ? (
+                <button
+                  type="button"
+                  onClick={onGenerateNewCase}
+                  className="inline-flex items-center justify-center gap-2 rounded-md border border-gray-900 px-4 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-900 hover:text-white focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-offset-2"
+                >
+                  <PlusCircle size={16} />
+                  Generate New Case
+                </button>
+              ) : null}
             </div>
-          ) : showRetake ? (
-            <button
-              type="button"
-              onClick={onRequestRetake}
-              className="inline-flex items-center justify-center gap-2 rounded-md bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-800 focus:ring-offset-2"
-            >
-              <RotateCcw size={16} />
-              Try Again
-            </button>
+          ) : showRetake || showGenerate ? (
+            <div className="flex flex-col sm:flex-row gap-2">
+              {showRetake ? (
+                <button
+                  type="button"
+                  onClick={onRequestRetake}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-800 focus:ring-offset-2"
+                >
+                  <RotateCcw size={16} />
+                  Try Again
+                </button>
+              ) : null}
+              {showGenerate ? (
+                <button
+                  type="button"
+                  onClick={onGenerateNewCase}
+                  className="inline-flex items-center justify-center gap-2 rounded-md border border-gray-900 px-4 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-900 hover:text-white focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-offset-2"
+                >
+                  <PlusCircle size={16} />
+                  Generate New Case
+                </button>
+              ) : null}
+            </div>
           ) : null}
         </div>
       </div>
@@ -556,22 +662,38 @@ export default function ResultsAnalysis({
                   <div className="text-sm text-gray-700">Run the case again and apply the same reasoning in real time.</div>
                 </div>
               </div>
-              {typeof onRequestRetake === 'function' ? (
-                <button
-                  type="button"
-                  onClick={onRequestRetake}
-                  className="inline-flex items-center justify-center gap-2 rounded-md bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-800 focus:ring-offset-2"
-                >
-                  <RotateCcw size={16} />
-                  Try Again
-                </button>
+              {showRetake || showGenerate ? (
+                <div className="flex flex-col sm:flex-row gap-2">
+                  {showRetake ? (
+                    <button
+                      type="button"
+                      onClick={onRequestRetake}
+                      className="inline-flex items-center justify-center gap-2 rounded-md bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-800 focus:ring-offset-2"
+                    >
+                      <RotateCcw size={16} />
+                      Try Again
+                    </button>
+                  ) : null}
+                  {showGenerate ? (
+                    <button
+                      type="button"
+                      onClick={onGenerateNewCase}
+                      className="inline-flex items-center justify-center gap-2 rounded-md border border-gray-900 px-4 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-900 hover:text-white focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-offset-2"
+                    >
+                      <PlusCircle size={16} />
+                      Generate New Case
+                    </button>
+                  ) : null}
+                </div>
               ) : null}
             </div>
           ) : currentIssue ? (
             <div className="px-6 py-6 space-y-5">
               {(() => {
                 const isCritical =
-                  currentIssue.type === 'missed_exception' || currentIssue.type === 'wrong_classification';
+                  currentIssue.type === 'missed_exception' ||
+                  currentIssue.type === 'wrong_classification' ||
+                  currentIssue.type === 'split_mismatch';
                 if (!isCritical) return null;
                 return (
                   <div className="grid gap-4 lg:grid-cols-2">

@@ -5,7 +5,7 @@ import { Timestamp } from 'firebase/firestore';
  */
 
 /**
- * @typedef {'instruction' | 'ca_check' | 'selection' | 'testing' | 'results'} ProgressStep
+ * @typedef {'instruction' | 'ca_check' | 'ca_completeness' | 'selection' | 'testing' | 'results'} ProgressStep
  */
 
 /**

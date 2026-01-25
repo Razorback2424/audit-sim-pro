@@ -543,7 +543,7 @@ describe('TraineeCaseViewPage', () => {
       disbursements: [
         {
           paymentId: 'p1',
-          payee: 'Promotador',
+          payee: 'Seed Alpha',
           amount: '125892.57',
           paymentDate: '2024-01-01',
           downloadURL: 'https://example.com/invoice.pdf',
@@ -567,7 +567,7 @@ describe('TraineeCaseViewPage', () => {
 
     await screen.findByRole('heading', { name: /Audit Completion Report/i });
     expect(screen.getByText(/You missed 1 critical item/i)).toBeInTheDocument();
-    expect(screen.getByText(/Promotador/i)).toBeInTheDocument();
+    expect(screen.getByText(/Seed Alpha/i)).toBeInTheDocument();
     expect(screen.getByText(/\$125,892\.57/)).toBeInTheDocument();
     expect(screen.getByText(/Your decision/i)).toBeInTheDocument();
     expect(screen.getByText(/Properly Included/i)).toBeInTheDocument();
@@ -581,7 +581,7 @@ describe('TraineeCaseViewPage', () => {
       disbursements: [
         {
           paymentId: 'p1',
-          payee: 'Promotador',
+          payee: 'Seed Alpha',
           amount: '100',
           paymentDate: '2024-01-01',
           downloadURL: 'https://example.com/invoice.pdf',

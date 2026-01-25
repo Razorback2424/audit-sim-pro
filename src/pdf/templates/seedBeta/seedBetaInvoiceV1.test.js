@@ -1,8 +1,8 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { endeavorrInvoiceV1 } from './endeavorrInvoiceV1';
+import { seedBetaInvoiceV1 } from './seedBetaInvoiceV1';
 
-describe('endeavorrInvoiceV1', () => {
+describe('seedBetaInvoiceV1', () => {
   test('renders long vendor name with compact brand class', () => {
     const longBrand = 'Northwind Office Furniture Distribution Group';
     const data = {
@@ -19,7 +19,7 @@ describe('endeavorrInvoiceV1', () => {
       shipping: 125,
     };
 
-    const { Component } = endeavorrInvoiceV1;
+    const { Component } = seedBetaInvoiceV1;
     const html = renderToStaticMarkup(<Component data={data} />);
     expect(html).toContain('brand tiny');
     expect(html).toContain(longBrand);
