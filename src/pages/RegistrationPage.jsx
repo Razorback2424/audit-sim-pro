@@ -13,7 +13,7 @@ const RegistrationPage = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
-  const [role, setSelectedRole] = useState('admin'); // allow choosing admin or trainee for testing
+  const [role, setSelectedRole] = useState('admin'); // allow choosing owner/admin/trainee for testing
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -38,7 +38,7 @@ const RegistrationPage = () => {
       showModal?.('Passwords do not match.', 'Confirmation mismatch');
       return;
     }
-    if (role !== 'admin' && role !== 'trainee') {
+    if (role !== 'admin' && role !== 'owner' && role !== 'trainee') {
       showModal?.('Please choose a role.', 'Missing role');
       return;
     }
@@ -141,6 +141,16 @@ const RegistrationPage = () => {
         <div>
           <span className="block text-xs font-medium text-gray-700 mb-1">Choose role</span>
           <div className="space-y-2">
+            <label className="flex items-center gap-2 text-sm text-gray-800">
+              <input
+                type="radio"
+                name="role"
+                value="owner"
+                checked={role === 'owner'}
+                onChange={() => setSelectedRole('owner')}
+              />
+              <span>Owner</span>
+            </label>
             <label className="flex items-center gap-2 text-sm text-gray-800">
               <input
                 type="radio"

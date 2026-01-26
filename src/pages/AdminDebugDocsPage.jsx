@@ -134,7 +134,7 @@ export default function AdminDebugDocsPage() {
     }
   };
 
-  if (loadingRole || role !== 'admin') {
+  if (loadingRole || (role !== 'admin' && role !== 'owner')) {
     return <div className="p-6">Loading…</div>;
   }
 

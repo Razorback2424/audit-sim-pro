@@ -32,7 +32,7 @@ const LoginPage = () => {
   };
 
   const dashboardPath = useMemo(() => {
-    if (role === 'admin') return '/admin';
+    if (role === 'admin' || role === 'owner') return '/admin';
     if (role === 'instructor') return '/instructor';
     if (role === 'trainee') return '/trainee';
     return '/home';
@@ -88,7 +88,7 @@ const LoginPage = () => {
       }
       const resolvedRole = (claimedRole || (!loadingRole ? role : null) || '').toLowerCase();
       const immediateDashboard =
-        resolvedRole === 'admin'
+        resolvedRole === 'admin' || resolvedRole === 'owner'
           ? '/admin'
           : resolvedRole === 'instructor'
             ? '/instructor'
@@ -197,7 +197,7 @@ const LoginPage = () => {
       <div className="mt-6 text-xs text-gray-400">
         <p>
           Need access? Ask an admin to create an account in Firebase Auth and grant you admin role at
-          <code className="mx-1">roles/&lt;your-uid&gt;</code>.
+          <code className="mx-1">roles/&lt;your-uid&gt;</code>. Owner roles are also supported.
         </p>
       </div>
 

@@ -1578,7 +1578,7 @@ function useCaseForm({ params }) {
       showModal('No generation plan found for this case.', 'Generation');
       return;
     }
-    if (role && role !== 'admin' && role !== 'instructor') {
+    if (role && role !== 'admin' && role !== 'owner' && role !== 'instructor') {
       showModal('Only admins or instructors can generate reference documents.', 'Permission Needed');
       return;
     }
@@ -1607,7 +1607,7 @@ function useCaseForm({ params }) {
       const resolvedOrgId = orgIdFromToken ?? userProfile?.orgId ?? null;
       const resolvedRole = role || 'unknown';
 
-      if (resolvedRole !== 'admin' && !resolvedOrgId) {
+      if (resolvedRole !== 'admin' && resolvedRole !== 'owner' && !resolvedOrgId) {
         showModal(
           'Your account is missing an orgId. Please contact an admin to set your organization before generating documents.',
           'Permission Needed'

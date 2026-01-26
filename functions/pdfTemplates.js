@@ -2933,15 +2933,11 @@ const TEMPLATE_REGISTRY = {
 };
 
 const resolveTemplateIds = () => {
-  const candidates = [
-    path.resolve(__dirname, './shared/pdfTemplateIds.json'),
-    path.resolve(__dirname, '../shared/pdfTemplateIds.json'),
-  ];
-  const match = candidates.find((candidate) => fs.existsSync(candidate));
-  if (!match) {
+  const templateIdsPath = path.resolve(__dirname, './shared/pdfTemplateIds.json');
+  if (!fs.existsSync(templateIdsPath)) {
     return null;
   }
-  return JSON.parse(fs.readFileSync(match, 'utf8'));
+  return JSON.parse(fs.readFileSync(templateIdsPath, 'utf8'));
 };
 
 const registryIds = Object.keys(TEMPLATE_REGISTRY);

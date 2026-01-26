@@ -650,7 +650,7 @@ const resolveRequesterIdentity = async ({ context, appId, firestore, logLabel })
   let requesterOrgId = context.auth.token?.orgId ?? null;
   let resolvedRole = requesterRole;
 
-  if (resolvedRole !== 'admin' && resolvedRole !== 'instructor') {
+  if (resolvedRole !== 'admin' && resolvedRole !== 'owner' && resolvedRole !== 'instructor') {
     try {
       const roleSnap = await firestore.doc(`roles/${context.auth.uid}`).get();
       const docRole = roleSnap.exists ? roleSnap.data()?.role : null;
@@ -698,7 +698,7 @@ exports.listRosterOptions = functions.https.onCall(async (data, context) => {
     logLabel: 'listRosterOptions',
   });
 
-  if (resolvedRole !== 'admin' && resolvedRole !== 'instructor') {
+  if (resolvedRole !== 'admin' && resolvedRole !== 'owner' && resolvedRole !== 'instructor') {
     throw new functions.https.HttpsError('permission-denied', 'Insufficient permissions.');
   }
   let rosterQuery = firestore.collection(`artifacts/${appId}/users`);
@@ -779,7 +779,7 @@ exports.auditOrphanedInvoices = functions.https.onCall(async (data, context) => 
     logLabel: 'auditOrphanedInvoices',
   });
 
-  if (resolvedRole !== 'admin') {
+  if (resolvedRole !== 'admin' && resolvedRole !== 'owner') {
     throw new functions.https.HttpsError('permission-denied', 'Insufficient permissions.');
   }
 
@@ -910,7 +910,7 @@ exports.queueCaseDocGeneration = functions.https.onCall(async (data, context) =>
     logLabel: 'queueCaseDocGeneration',
   });
 
-  if (resolvedRole !== 'admin' && resolvedRole !== 'instructor' && resolvedRole !== 'trainee') {
+  if (resolvedRole !== 'admin' && resolvedRole !== 'owner' && resolvedRole !== 'instructor' && resolvedRole !== 'trainee') {
     throw new functions.https.HttpsError('permission-denied', 'Insufficient permissions.');
   }
 
@@ -1043,7 +1043,7 @@ exports.generateDebugRefdoc = functions
       logLabel: 'generateDebugRefdoc',
     });
 
-    if (resolvedRole !== 'admin') {
+    if (resolvedRole !== 'admin' && resolvedRole !== 'owner') {
       throw new functions.https.HttpsError('permission-denied', 'Admin access required.');
     }
 
@@ -1126,7 +1126,7 @@ exports.deleteRetakeAttempt = functions.https.onCall(async (data, context) => {
     logLabel: 'deleteRetakeAttempt',
   });
 
-  if (resolvedRole !== 'admin' && resolvedRole !== 'instructor' && resolvedRole !== 'trainee') {
+  if (resolvedRole !== 'admin' && resolvedRole !== 'owner' && resolvedRole !== 'instructor' && resolvedRole !== 'trainee') {
     throw new functions.https.HttpsError('permission-denied', 'Insufficient permissions.');
   }
 

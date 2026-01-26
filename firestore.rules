@@ -23,7 +23,15 @@ service cloud.firestore {
       );
     }
 
+    function isOwner() {
+      return hasRole('owner');
+    }
+
     function isAdmin() {
+      return hasRole('admin') || isOwner();
+    }
+
+    function isPlatformAdmin() {
       return hasRole('admin');
     }
 
@@ -237,7 +245,7 @@ service cloud.firestore {
              );
     }
 
-    // Role documents store whether a user is an admin or trainee
+    // Role documents store whether a user is an admin, owner, or trainee
     match /roles/{userId} {
       // Allow users to read their own role document (for display/initial setup)
       allow read: if request.auth != null && request.auth.uid == userId;
@@ -368,6 +376,15 @@ service cloud.firestore {
     match /artifacts/{appId}/public/data/recipes/{recipeId} {
       allow read: if request.auth != null && (isAdmin() || isInstructor() || isTrainee());
       allow create, update, delete: if request.auth != null && isAdmin();
+    }
+
+    // Billing summary snapshot (server-writable only)
+    match /artifacts/{appId}/billing/orgs/{orgId} {
+      allow read: if request.auth != null && (
+        (isOwner() && request.auth.token.orgId != null && request.auth.token.orgId == orgId) ||
+        isPlatformAdmin()
+      );
+      allow create, update, delete: if false;
     }
 
 

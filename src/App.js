@@ -48,7 +48,7 @@ const HomeRedirect = () => {
       </div>
     );
   }
-  if (role === ROLES.ADMIN) return <Navigate to="/admin" replace />;
+  if (role === ROLES.ADMIN || role === ROLES.OWNER) return <Navigate to="/admin" replace />;
   if (role === ROLES.INSTRUCTOR) return <Navigate to="/instructor" replace />;
   if (role === ROLES.TRAINEE) return <Navigate to="/trainee" replace />;
   return <Navigate to="/select-role" replace />;
@@ -66,7 +66,7 @@ export default function App() {
         <Route path="/select-role" element={<RoleSelectionPage />} />
 
         <Route element={<AppLayout />}>
-          <Route element={<RoleRoute allowed={[ROLES.ADMIN]} />}>
+          <Route element={<RoleRoute allowed={[ROLES.ADMIN, ROLES.OWNER]} />}>
             <Route path="/admin" element={<AdminDashboardPage />} />
             <Route path="/admin/dashboard" element={<AdminDashboardPage />} />
             <Route path="/admin/edit-recipe/:recipeId" element={<RecipeFormRoute />} />
@@ -80,7 +80,7 @@ export default function App() {
             <Route path="/admin/submission-detail/:caseId/:userId" element={<AdminSubmissionDetailRoute />} />
           </Route>
 
-          <Route element={<RoleRoute allowed={[ROLES.INSTRUCTOR]} />}>
+          <Route element={<RoleRoute allowed={[ROLES.INSTRUCTOR, ROLES.OWNER]} />}>
             <Route path="/instructor" element={<InstructorDashboardPage />} />
           </Route>
 

@@ -117,6 +117,7 @@ export default function AdminUserManagementPage() {
                           onChange={(event) => handleRoleSelection(user.id, event.target.value)}
                           options={[
                             { value: '', label: 'Select role…', disabled: true },
+                            { value: 'owner', label: 'Owner' },
                             { value: 'admin', label: 'Administrator' },
                             { value: 'trainee', label: 'Trainee' },
                           ]}

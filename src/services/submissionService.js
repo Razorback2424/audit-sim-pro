@@ -15,6 +15,72 @@ import {
   where,
 } from 'firebase/firestore';
 import { db, FirestorePaths, appId as defaultAppId } from '../AppCore';
+import { validateAttemptSummary } from '../utils/attemptSummaryValidator';
+
+const ALLOWED_ATTEMPT_TYPES = new Set(['baseline', 'practice', 'final']);
+const REQUIRED_ATTEMPT_SUMMARY_FIELDS = [
+  'totalConsidered',
+  'missedExceptionsCount',
+  'falsePositivesCount',
+  'wrongClassificationCount',
+  'criticalIssuesCount',
+];
+
+const toFiniteNumber = (value, fallback = 0) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : fallback;
+};
+
+const normalizeAttemptSummary = (summary, attemptIndex, attemptType) => {
+  if (!summary || typeof summary !== 'object') return null;
+  const normalized = { ...summary };
+
+  REQUIRED_ATTEMPT_SUMMARY_FIELDS.forEach((field) => {
+    normalized[field] = toFiniteNumber(normalized[field], 0);
+  });
+
+  if (normalized.score !== null && normalized.score !== undefined) {
+    const score = Number(normalized.score);
+    normalized.score = Number.isFinite(score) ? score : null;
+  } else {
+    normalized.score = null;
+  }
+
+  if (normalized.requiredDocsOpened !== null && normalized.requiredDocsOpened !== undefined) {
+    normalized.requiredDocsOpened =
+      typeof normalized.requiredDocsOpened === 'boolean' ? normalized.requiredDocsOpened : null;
+  }
+
+  if (normalized.timeToCompleteSeconds !== null && normalized.timeToCompleteSeconds !== undefined) {
+    const seconds = Number(normalized.timeToCompleteSeconds);
+    normalized.timeToCompleteSeconds =
+      Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+  }
+
+  normalized.attemptIndex =
+    Number.isInteger(normalized.attemptIndex) && normalized.attemptIndex > 0
+      ? normalized.attemptIndex
+      : attemptIndex;
+
+  const normalizedAttemptType =
+    typeof normalized.attemptType === 'string' ? normalized.attemptType.trim() : '';
+  normalized.attemptType = normalizedAttemptType || attemptType;
+
+  if (typeof normalized.isBaseline !== 'boolean') {
+    normalized.isBaseline = attemptIndex === 1;
+  }
+
+  const errors = validateAttemptSummary(normalized);
+  if (errors.length > 0) {
+    console.warn('[SubmissionService] Invalid attemptSummary; dropping.', {
+      errors,
+      attemptSummary: summary,
+    });
+    return null;
+  }
+
+  return normalized;
+};
 
 export const saveSubmission = async (userId, caseId, data) => {
   const ref = doc(db, FirestorePaths.USER_CASE_SUBMISSION(userId, caseId));
@@ -40,22 +106,17 @@ export const saveSubmission = async (userId, caseId, data) => {
     }
   }
   const attemptTypeRaw = typeof attemptData.attemptType === 'string' ? attemptData.attemptType.trim() : '';
-  const attemptType = attemptTypeRaw || (attemptIndex === 1 ? 'baseline' : 'practice');
-  const attemptSummary =
+  const attemptTypeCandidate = attemptTypeRaw || (attemptIndex === 1 ? 'baseline' : 'practice');
+  const attemptType = ALLOWED_ATTEMPT_TYPES.has(attemptTypeCandidate)
+    ? attemptTypeCandidate
+    : attemptIndex === 1
+    ? 'baseline'
+    : 'practice';
+  const rawAttemptSummary =
     attemptData.attemptSummary && typeof attemptData.attemptSummary === 'object'
       ? { ...attemptData.attemptSummary }
       : null;
-  if (attemptSummary) {
-    if (!Number.isFinite(Number(attemptSummary.attemptIndex))) {
-      attemptSummary.attemptIndex = attemptIndex;
-    }
-    if (!attemptSummary.attemptType) {
-      attemptSummary.attemptType = attemptType;
-    }
-    if (typeof attemptSummary.isBaseline !== 'boolean') {
-      attemptSummary.isBaseline = attemptIndex === 1;
-    }
-  }
+  const attemptSummary = normalizeAttemptSummary(rawAttemptSummary, attemptIndex, attemptType);
   const normalizedAttemptData = {
     ...attemptData,
     attemptIndex,

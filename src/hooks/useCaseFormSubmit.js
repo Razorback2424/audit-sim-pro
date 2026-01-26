@@ -647,7 +647,7 @@ export function createCaseFormSubmitHandler({
       const resolvedOrgId = orgIdFromToken ?? userProfile?.orgId ?? null;
       const resolvedRole = role || 'unknown';
 
-      if (resolvedRole !== 'admin' && !resolvedOrgId) {
+      if (resolvedRole !== 'admin' && resolvedRole !== 'owner' && !resolvedOrgId) {
         logValidationFail('org-id-missing', { resolvedOrgId, role });
         console.error('[CaseForm] Blocking save: missing orgId', {
           resolvedOrgId,

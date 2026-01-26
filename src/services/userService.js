@@ -154,7 +154,7 @@ export const upsertUserProfile = async (userId, data = {}) => {
 
 /**
  * Ensures a user has an orgId by reusing an existing one if present or creating a new shared orgId
- * based on the oldest admin/instructor profile. This keeps orgs stable for future users.
+ * based on the oldest admin/owner/instructor profile. This keeps orgs stable for future users.
  */
 export const ensureOrgIdForUser = async (userId, { role } = {}) => {
   const profileRef = doc(db, FirestorePaths.USER_PROFILE(userId));
@@ -165,17 +165,17 @@ export const ensureOrgIdForUser = async (userId, { role } = {}) => {
     return existingProfile.orgId;
   }
 
-  // Avoid privileged reads for non-admin/non-instructor users; derive a deterministic orgId instead.
+  // Avoid privileged reads for non-admin/non-owner/non-instructor users; derive a deterministic orgId instead.
   let candidateOrgId = `${appId}-org`;
 
-  if (role === 'admin' || role === 'instructor') {
+  if (role === 'admin' || role === 'owner' || role === 'instructor') {
     try {
       const rosterRef = collection(db, FirestorePaths.USERS_COLLECTION());
       const rosterSnap = await getDocs(rosterRef);
       rosterSnap.forEach((docSnap) => {
         const data = docSnap.data() || {};
         const docRole = (data.role || '').toLowerCase();
-        if (!candidateOrgId && (docRole === 'admin' || docRole === 'instructor') && data.orgId) {
+        if (!candidateOrgId && (docRole === 'admin' || docRole === 'owner' || docRole === 'instructor') && data.orgId) {
           candidateOrgId = data.orgId;
         }
       });

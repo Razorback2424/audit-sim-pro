@@ -185,7 +185,7 @@ export default function AdminDashboardPage() {
       return 12;
     }
   });
-  const isAdmin = role === 'admin';
+  const isAdmin = role === 'admin' || role === 'owner';
   const handleNavigate = useCallback(
     (target) => {
       if (!target || typeof target !== 'string') return;
@@ -358,7 +358,7 @@ export default function AdminDashboardPage() {
   ]);
 
   useEffect(() => {
-    if (loadingRole || role !== 'admin') {
+    if (loadingRole || !isAdmin) {
       if (!loadingRole) {
         setLoadingSummary(false);
       }
@@ -385,7 +385,7 @@ export default function AdminDashboardPage() {
   }, [showModal, role, loadingRole]);
 
   useEffect(() => {
-    if (loadingRole || role !== 'admin') {
+    if (loadingRole || !isAdmin) {
       if (!loadingRole) {
         setRecipesLoading(false);
       }
@@ -428,7 +428,7 @@ export default function AdminDashboardPage() {
   }, [loadingRole, role]);
 
   useEffect(() => {
-    if (loadingRole || role !== 'admin') {
+    if (loadingRole || !isAdmin) {
       if (!loadingRole) {
         setLoadingUsers(false);
       }
@@ -457,7 +457,7 @@ export default function AdminDashboardPage() {
   }, [showModal, role, loadingRole]);
 
   useEffect(() => {
-    if (loadingRole || role !== 'admin') {
+    if (loadingRole || !isAdmin) {
       if (!loadingRole) {
         setLoadingAlerts(false);
       }
@@ -484,7 +484,7 @@ export default function AdminDashboardPage() {
   }, [showModal, role, loadingRole]);
 
   useEffect(() => {
-    if (loadingRole || role !== 'admin') {
+    if (loadingRole || !isAdmin) {
       return;
     }
 

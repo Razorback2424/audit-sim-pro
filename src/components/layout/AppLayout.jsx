@@ -56,7 +56,7 @@ export default function AppLayout() {
               className="text-xs sm:text-sm px-2 py-1 sm:px-3"
               onClick={() => {
                 if (loadingRole) return;
-                if (role === ROLES.ADMIN) {
+                if (role === ROLES.ADMIN || role === ROLES.OWNER) {
                   navigate('/admin');
                   return;
                 }

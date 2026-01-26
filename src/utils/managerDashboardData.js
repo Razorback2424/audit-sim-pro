@@ -6,6 +6,19 @@ const toNumber = (value) => {
   return Number.isFinite(num) ? num : null;
 };
 
+const toMillis = (value) => {
+  if (!value) return null;
+  if (typeof value.toMillis === 'function') return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'number') return value;
+  if (typeof value.seconds === 'number') return value.seconds * 1000;
+  if (typeof value === 'string') {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.getTime();
+  }
+  return null;
+};
+
 const getAttemptIndex = (attempt) => {
   const direct = toNumber(attempt?.attemptIndex);
   if (direct !== null && direct > 0) return direct;
@@ -256,5 +269,83 @@ export const buildDashboardData = ({
   return {
     cohortSummary,
     learners: learnersOutput,
+  };
+};
+
+const sortAttemptsBySubmittedAt = (attempts = []) => {
+  return [...attempts].sort((a, b) => {
+    const aTime = toMillis(a?.submittedAt) ?? 0;
+    const bTime = toMillis(b?.submittedAt) ?? 0;
+    if (aTime !== bTime) return aTime - bTime;
+    const aIdx = getAttemptIndex(a) ?? 0;
+    const bIdx = getAttemptIndex(b) ?? 0;
+    return aIdx - bIdx;
+  });
+};
+
+const attemptWithinRange = (attempt, startMillis, endMillis) => {
+  const submittedAtMillis = toMillis(attempt?.submittedAt);
+  if (submittedAtMillis === null) return false;
+  if (startMillis !== null && submittedAtMillis < startMillis) return false;
+  if (endMillis !== null && submittedAtMillis > endMillis) return false;
+  return true;
+};
+
+export const buildValueMetrics = ({
+  learners = [],
+  startDate = null,
+  endDate = null,
+  rushedSeconds = DEFAULT_RUSHED_SECONDS,
+} = {}) => {
+  const startMillis = toMillis(startDate);
+  const endMillis = toMillis(endDate);
+  const activeLearnerIds = new Set();
+  let attemptsCount = 0;
+  let criticalIssuesSum = 0;
+  let rushedAttemptsCount = 0;
+  let improvementSum = 0;
+  let improvementCount = 0;
+
+  learners.forEach((learner, index) => {
+    const attempts = Array.isArray(learner?.attempts) ? learner.attempts : [];
+    const attemptsInRange = attempts.filter((attempt) => attemptWithinRange(attempt, startMillis, endMillis));
+    if (attemptsInRange.length === 0) return;
+
+    const learnerId = learner?.userId || learner?.id || learner?.uid || `learner-${index + 1}`;
+    activeLearnerIds.add(learnerId);
+
+    attemptsInRange.forEach((attempt) => {
+      attemptsCount += 1;
+      const summary = getSummary(attempt);
+      const criticalIssues = toNumber(summary?.criticalIssuesCount);
+      if (criticalIssues !== null) {
+        criticalIssuesSum += criticalIssues;
+      }
+      const timeSeconds = toNumber(summary?.timeToCompleteSeconds);
+      if (timeSeconds !== null && timeSeconds < rushedSeconds) {
+        rushedAttemptsCount += 1;
+      }
+    });
+
+    if (attemptsInRange.length >= 2) {
+      const ordered = sortAttemptsBySubmittedAt(attemptsInRange);
+      const baselineAttempt =
+        ordered.find((attempt) => getAttemptType(attempt) === 'baseline') || ordered[0];
+      const latestAttempt = ordered[ordered.length - 1];
+      const baselineScore = toNumber(getSummary(baselineAttempt)?.score);
+      const latestScore = toNumber(getSummary(latestAttempt)?.score);
+      if (baselineScore !== null && latestScore !== null) {
+        improvementSum += latestScore - baselineScore;
+        improvementCount += 1;
+      }
+    }
+  });
+
+  return {
+    activeLearners: activeLearnerIds.size,
+    attemptsCount,
+    avgImprovement: improvementCount > 0 ? improvementSum / improvementCount : null,
+    criticalIssuesRate: attemptsCount > 0 ? criticalIssuesSum / attemptsCount : null,
+    rushedAttemptsRate: attemptsCount > 0 ? rushedAttemptsCount / attemptsCount : null,
   };
 };

@@ -8,12 +8,20 @@ service firebase.storage {
       return roleValue is string && roleValue.matches('(?i)^admin$');
     }
 
+    function isOwnerRole(roleValue) {
+      return roleValue is string && roleValue.matches('(?i)^owner$');
+    }
+
     function hasGlobalAdminRole() {
       return request.auth != null && (
         isAdminRole(request.auth.token.role) ||
+        isOwnerRole(request.auth.token.role) ||
         (
           firestore.exists(/databases/(default)/documents/roles/$(request.auth.uid)) &&
-          isAdminRole(firestore.get(/databases/(default)/documents/roles/$(request.auth.uid)).data.role)
+          (
+            isAdminRole(firestore.get(/databases/(default)/documents/roles/$(request.auth.uid)).data.role) ||
+            isOwnerRole(firestore.get(/databases/(default)/documents/roles/$(request.auth.uid)).data.role)
+          )
         )
       );
     }

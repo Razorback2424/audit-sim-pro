@@ -18,7 +18,7 @@ const Navbar = () => {
   const { role } = useUser();
 
   const dashboardPath = useMemo(() => {
-    if (role === 'admin') return '/admin';
+    if (role === 'admin' || role === 'owner') return '/admin';
     if (role === 'instructor') return '/instructor';
     if (role === 'trainee') return '/trainee';
     return '/home';

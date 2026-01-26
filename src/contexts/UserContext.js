@@ -16,6 +16,7 @@ const ROLE_PRIORITY = {
   trainee: 1,
   instructor: 2,
   admin: 3,
+  owner: 4,
 };
 
 const normalizeRoleValue = (value) => {
