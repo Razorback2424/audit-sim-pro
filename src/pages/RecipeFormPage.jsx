@@ -168,6 +168,27 @@ export default function RecipeFormPage({ params }) {
 
         <form onSubmit={handleSave} className="space-y-6">
           <section className="rounded-lg border border-gray-200 bg-white p-5">
+            <div className="space-y-1">
+              <h2 className="text-sm font-semibold text-gray-900">Recipe metadata</h2>
+              <p className="text-xs text-gray-500">
+                Skill label shown in learner progress and reporting.
+              </p>
+            </div>
+            <div className="mt-4">
+              <label className="block text-sm font-medium text-gray-700" htmlFor="primary-skill">
+                Primary skill
+              </label>
+              <input
+                id="primary-skill"
+                type="text"
+                value={primarySkill}
+                onChange={(event) => setPrimarySkill(event.target.value)}
+                placeholder="SURL"
+                className="mt-2 w-full rounded-md border border-gray-200 px-3 py-2 text-sm text-gray-900 focus:border-gray-400 focus:outline-none"
+              />
+            </div>
+          </section>
+          <section className="rounded-lg border border-gray-200 bg-white p-5">
             <InstructionStep instructionData={{ instruction, setInstruction }} />
           </section>
 

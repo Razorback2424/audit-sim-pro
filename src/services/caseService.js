@@ -186,6 +186,40 @@ const normalizeNumberOrNull = (value) => {
   return Number.isFinite(num) ? num : null;
 };
 
+const isPlainObject = (value) =>
+  Object.prototype.toString.call(value) === '[object Object]';
+
+const stripUndefinedDeep = (value) => {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => stripUndefinedDeep(entry))
+      .filter((entry) => entry !== undefined);
+  }
+  if (isPlainObject(value)) {
+    const next = {};
+    Object.entries(value).forEach(([key, entry]) => {
+      if (entry === undefined) return;
+      const cleaned = stripUndefinedDeep(entry);
+      if (cleaned !== undefined) {
+        next[key] = cleaned;
+      }
+    });
+    return next;
+  }
+  return value;
+};
+
+const normalizePrimarySkill = (value, { moduleId, moduleTitle, title, caseName }) => {
+  const skill = toTrimmedString(value);
+  if (skill) return skill;
+  const label = `${toTrimmedString(moduleTitle || title || caseName)} ${toTrimmedString(moduleId)}`.trim();
+  const isSurl = /surl/i.test(label);
+  if (isSurl) {
+    return 'SURL';
+  }
+  return skill;
+};
+
 const extractPrivateCaseKeyEntries = (items = []) => {
   const sanitizedItems = [];
   const privateEntries = {};
@@ -744,7 +778,12 @@ const sanitizeCaseWriteData = (rawData = {}, { isCreate = false } = {}) => {
   sanitized.moduleId = toOptionalString(sanitized.moduleId);
   sanitized.recipeVersion = normalizeNumberOrNull(sanitized.recipeVersion);
   sanitized.moduleTitle = toTrimmedString(sanitized.moduleTitle) || toTrimmedString(sanitized.title);
-  sanitized.primarySkill = toTrimmedString(sanitized.primarySkill);
+  sanitized.primarySkill = normalizePrimarySkill(sanitized.primarySkill, {
+    moduleId: sanitized.moduleId,
+    moduleTitle: sanitized.moduleTitle,
+    title: sanitized.title,
+    caseName: sanitized.caseName,
+  });
   sanitized.secondarySkills = normalizeStringArray(sanitized.secondarySkills);
   sanitized.estimatedMinutes = normalizeNumberOrNull(sanitized.estimatedMinutes);
   sanitized.orderIndex = normalizeNumberOrNull(sanitized.orderIndex);
@@ -773,12 +812,12 @@ const sanitizeCaseWriteData = (rawData = {}, { isCreate = false } = {}) => {
     sanitized.createdAt = sanitized.createdAt ?? serverTimestamp();
   }
 
-  const caseKeysDoc = {
+  const caseKeysDoc = stripUndefinedDeep({
     items: privateEntries,
     updatedAt: serverTimestamp(),
-  };
+  });
 
-  return { caseData: sanitized, caseKeysDoc };
+  return { caseData: stripUndefinedDeep(sanitized), caseKeysDoc };
 };
 
 const buildCaseRepairPatch = (data = {}) => {

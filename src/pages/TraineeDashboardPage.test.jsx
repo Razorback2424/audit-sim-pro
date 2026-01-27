@@ -44,7 +44,7 @@ describe('TraineeDashboardPage', () => {
     expect(await screen.findByText(/no activities assigned yet/i)).toBeInTheDocument();
     expect(listStudentCases).toHaveBeenCalled();
     expect(listRecipes).toHaveBeenCalled();
-    expect(screen.getByText(/current path/i)).toBeInTheDocument();
+    expect(screen.getByText(/program path/i)).toBeInTheDocument();
     expect(fetchRecipeProgress).not.toHaveBeenCalled();
     expect(generateAttemptFromRecipe).not.toHaveBeenCalled();
   });

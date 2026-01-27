@@ -46,6 +46,17 @@ const normalizeWorkflow = (value) => {
   };
 };
 
+const normalizePrimarySkill = (value, { moduleId, moduleTitle, title }) => {
+  const skill = toTrimmedString(value);
+  if (skill) return skill;
+  const label = `${toTrimmedString(moduleTitle || title)} ${toTrimmedString(moduleId)}`.trim();
+  const isSurl = /surl/i.test(label);
+  if (isSurl) {
+    return 'SURL';
+  }
+  return skill;
+};
+
 const sanitizeRecipeWriteData = (rawData = {}, { isCreate = false } = {}) => {
   const { createdAt: _ignoredCreatedAt, updatedAt: _ignoredUpdatedAt, ...data } = rawData;
   const sanitized = { ...data };
@@ -56,7 +67,11 @@ const sanitizeRecipeWriteData = (rawData = {}, { isCreate = false } = {}) => {
   sanitized.pathId = toTrimmedString(sanitized.pathId);
   sanitized.tier = normalizeTier(sanitized.tier);
   sanitized.auditArea = toTrimmedString(sanitized.auditArea);
-  sanitized.primarySkill = toTrimmedString(sanitized.primarySkill);
+  sanitized.primarySkill = normalizePrimarySkill(sanitized.primarySkill, {
+    moduleId: sanitized.moduleId,
+    moduleTitle: sanitized.moduleTitle,
+    title: sanitized.title,
+  });
   sanitized.workflow = normalizeWorkflow(sanitized.workflow);
 
   const recipeVersion = normalizeRecipeVersion(sanitized.recipeVersion ?? sanitized.instruction?.version);
