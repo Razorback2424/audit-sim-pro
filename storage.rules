@@ -8,12 +8,20 @@ service firebase.storage {
       return roleValue is string && roleValue.matches('(?i)^admin$');
     }
 
+    function isOwnerRole(roleValue) {
+      return roleValue is string && roleValue.matches('(?i)^owner$');
+    }
+
     function hasGlobalAdminRole() {
       return request.auth != null && (
         isAdminRole(request.auth.token.role) ||
+        isOwnerRole(request.auth.token.role) ||
         (
           firestore.exists(/databases/(default)/documents/roles/$(request.auth.uid)) &&
-          isAdminRole(firestore.get(/databases/(default)/documents/roles/$(request.auth.uid)).data.role)
+          (
+            isAdminRole(firestore.get(/databases/(default)/documents/roles/$(request.auth.uid)).data.role) ||
+            isOwnerRole(firestore.get(/databases/(default)/documents/roles/$(request.auth.uid)).data.role)
+          )
         )
       );
     }
@@ -88,6 +96,12 @@ service firebase.storage {
       allow create, update: if isAdmin(appId) && isAllowedArtifactUpload();
       allow get, list: if isAdmin(appId) || traineeHasAccessToCase(appId, caseId);
       allow delete: if isAdmin(appId);
+    }
+
+    // ---------- Debug reference documents (admin-only) ----------
+    match /artifacts/{appId}/debug/reference/{file=**} {
+      allow create, update: if isAdmin(appId) && isAllowedArtifactUpload();
+      allow get, list, delete: if isAdmin(appId);
     }
 
     // ---------- Highlighted evidence (admin-prepared answer key snippets) ----------

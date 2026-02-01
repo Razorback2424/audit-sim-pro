@@ -95,6 +95,8 @@ export const FirestorePaths = {
   USER_PROFILE: (userId) => `artifacts/${appId}/users/${userId}/userProfileData/profile`,
   CASES_COLLECTION: () => `artifacts/${appId}/public/data/cases`,
   CASE_DOCUMENT: (caseId) => `artifacts/${appId}/public/data/cases/${caseId}`,
+  RECIPES_COLLECTION: () => `artifacts/${appId}/public/data/recipes`,
+  RECIPE_DOCUMENT: (recipeId) => `artifacts/${appId}/public/data/recipes/${recipeId}`,
   // Keys are stored under /private/data/case_keys (keep doc/collection parity for Firestore).
   CASE_KEYS_COLLECTION: () => `artifacts/${appId}/private/data/case_keys`,
   CASE_KEYS_DOCUMENT: (caseId) => `artifacts/${appId}/private/data/case_keys/${caseId}`,
@@ -105,9 +107,15 @@ export const FirestorePaths = {
     `artifacts/${appIdValue}/users/${userId}/caseSubmissions`,
   USER_CASE_SUBMISSION: (userId, caseId) =>
     `artifacts/${appId}/users/${userId}/caseSubmissions/${caseId}`,
+  BILLING_DOCUMENT: (appIdValue, userId) =>
+    `artifacts/${appIdValue || appId}/users/${userId}/billing`,
   ROLE_DOCUMENT: (userId) => `roles/${userId}`,
   STUDENT_PROGRESS_COLLECTION: (appIdValue, uid) =>
     `artifacts/${appIdValue}/student_progress/${uid}/cases`,
+  STUDENT_RECIPE_PROGRESS_COLLECTION: (appIdValue, uid) =>
+    `artifacts/${appIdValue}/student_progress/${uid}/recipes`,
+  STUDENT_RECIPE_PROGRESS_DOCUMENT: (appIdValue, uid, recipeId) =>
+    `artifacts/${appIdValue}/student_progress/${uid}/recipes/${recipeId}`,
   GLOBAL_TAG_SETTINGS: (appIdValue = appId) =>
     `artifacts/${appIdValue}/settings/global_tags`,
 };

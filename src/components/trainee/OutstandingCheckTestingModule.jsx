@@ -1,8 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Timestamp } from 'firebase/firestore';
-import { Button, appId } from '../../AppCore';
+import { ref as storageRef, getDownloadURL } from 'firebase/storage';
+import { Button, appId, storage } from '../../AppCore';
 import { saveSubmission } from '../../services/submissionService';
 import { saveProgress, subscribeProgressForCases } from '../../services/progressService';
+import { fetchRecipeProgress, saveRecipeProgress } from '../../services/recipeProgressService';
 import { currencyFormatter } from '../../utils/formatters';
 import InstructionView from '../InstructionView';
 
@@ -30,7 +32,7 @@ const STEP_LABELS = {
 const STEP_DESCRIPTIONS = {
   [FLOW_STEPS.INSTRUCTION]: 'Review the materials and successfully answer the knowledge check questions to access the simulation.',
   [FLOW_STEPS.SELECTION]: 'Pick the checks you will test from January clearings.',
-  [FLOW_STEPS.TESTING]: 'Trace each selection to the register and the 12/31 outstanding list.',
+  [FLOW_STEPS.TESTING]: 'Conclude properly included/excluded based on register and 12/31 list.',
   [FLOW_STEPS.RESULTS]: 'See your recap and any exceptions.',
 };
 
@@ -38,8 +40,22 @@ const normalizeCheckNo = (value) => (value === null || value === undefined ? '' 
 
 const parseDate = (value) => {
   if (!value) return null;
-  const dt = new Date(value);
+  const normalized = String(value).replace(/^20X/, '202');
+  const dt = new Date(normalized);
   return Number.isNaN(dt.getTime()) ? null : dt;
+};
+
+const formatShortDate = (value) => {
+  if (!value) return '';
+  return value.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: '2-digit' });
+};
+
+const coerceToMillis = (value) => {
+  if (!value) return null;
+  if (typeof value.toMillis === 'function') return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === 'number') return value;
+  return null;
 };
 
 const compareDatesYMD = (a, b) => {
@@ -73,6 +89,25 @@ const deriveStateFromProgress = (step, percentComplete) => {
   return 'not_started';
 };
 
+const getRecipeId = (caseData) =>
+  caseData?.moduleId || caseData?.recipeId || caseData?.id || '';
+
+const normalizeRecipeVersion = (value) => {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 1;
+  return Math.floor(parsed);
+};
+
+const getRecipeVersion = (caseData) => {
+  if (!caseData) return 1;
+  return normalizeRecipeVersion(
+    caseData?.instruction?.version ??
+      caseData?.recipeVersion ??
+      caseData?.moduleVersion ??
+      1
+  );
+};
+
 const isSameSelectionMap = (currentMap, nextMap) => {
   const currentKeys = Object.keys(currentMap);
   const nextKeys = Object.keys(nextMap);
@@ -92,8 +127,36 @@ const shallowEqualRecord = (a, b) => {
 function ArtifactViewer({ artifacts = [] }) {
   const yearEnd = artifacts.find((doc) => doc?.type === 'cash_year_end_statement') || null;
   const cutoff = artifacts.find((doc) => doc?.type === 'cash_cutoff_statement') || null;
+  const [resolvedUrls, setResolvedUrls] = useState({ yearEnd: '', cutoff: '' });
 
-  const renderOne = (doc, title) => {
+  useEffect(() => {
+    let isActive = true;
+    const resolveUrls = async () => {
+      const resolveOne = async (doc) => {
+        if (!doc) return '';
+        if (doc.downloadURL) return doc.downloadURL;
+        if (doc.storagePath) {
+          try {
+            return await getDownloadURL(storageRef(storage, doc.storagePath));
+          } catch (err) {
+            console.warn('[ArtifactViewer] Failed to resolve storage path', err);
+            return '';
+          }
+        }
+        return '';
+      };
+      const [yearEndUrl, cutoffUrl] = await Promise.all([resolveOne(yearEnd), resolveOne(cutoff)]);
+      if (isActive) {
+        setResolvedUrls({ yearEnd: yearEndUrl, cutoff: cutoffUrl });
+      }
+    };
+    resolveUrls();
+    return () => {
+      isActive = false;
+    };
+  }, [cutoff, yearEnd]);
+
+  const renderOne = (doc, title, url) => {
     if (!doc) {
       return (
         <div className="rounded-md border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-center text-sm text-gray-600">
@@ -101,7 +164,6 @@ function ArtifactViewer({ artifacts = [] }) {
         </div>
       );
     }
-    const url = doc.downloadURL || '';
     return (
       <div className="rounded-md border border-gray-200 bg-white shadow-sm">
         <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2">
@@ -128,16 +190,118 @@ function ArtifactViewer({ artifacts = [] }) {
 
   return (
     <div className="space-y-4">
-      {renderOne(yearEnd, 'December (Year-End) Bank Statement')}
-      {renderOne(cutoff, 'January Cutoff Bank Statement')}
+      {yearEnd ? renderOne(yearEnd, 'December (Year-End) Bank Statement', resolvedUrls.yearEnd) : null}
+      {renderOne(cutoff, 'January Cutoff Bank Statement', resolvedUrls.cutoff)}
+    </div>
+  );
+}
+
+const parseCheckNumber = (doc) => {
+  if (!doc || typeof doc !== 'object') return '';
+  const fromSpec = doc?.generationSpec?.data?.checkNumber;
+  if (fromSpec) return String(fromSpec).trim();
+  const name = String(doc.fileName || '');
+  const match = name.match(/check copy\s+(\d+)/i);
+  return match ? match[1] : '';
+};
+
+const CLASSIFICATION_LABELS = {
+  properly_included: 'Properly Included',
+  properly_excluded: 'Properly Excluded',
+  improperly_included: 'Improperly Included',
+  improperly_excluded: 'Improperly Excluded',
+};
+
+function CheckCopyViewer({ referenceDocuments = [], selectedCheckNos = [], activeCheckNo = '' }) {
+  const [checkUrls, setCheckUrls] = useState({});
+
+  const checkDocMap = useMemo(() => {
+    const map = new Map();
+    (Array.isArray(referenceDocuments) ? referenceDocuments : []).forEach((doc) => {
+      const checkNo = parseCheckNumber(doc);
+      if (!checkNo) return;
+      map.set(checkNo, doc);
+    });
+    return map;
+  }, [referenceDocuments]);
+
+  useEffect(() => {
+    let isActive = true;
+    const resolveUrls = async () => {
+      const entries = await Promise.all(
+        (selectedCheckNos || []).map(async (checkNo) => {
+          const doc = checkDocMap.get(checkNo);
+          if (!doc) return [checkNo, ''];
+          if (doc.downloadURL) return [checkNo, doc.downloadURL];
+          if (doc.storagePath) {
+            try {
+              const url = await getDownloadURL(storageRef(storage, doc.storagePath));
+              return [checkNo, url];
+            } catch (err) {
+              console.warn('[CheckCopyViewer] Failed to resolve storage path', err);
+              return [checkNo, ''];
+            }
+          }
+          return [checkNo, ''];
+        })
+      );
+      if (isActive) {
+        const nextUrls = Object.fromEntries(entries);
+        setCheckUrls(nextUrls);
+      }
+    };
+    resolveUrls();
+    return () => {
+      isActive = false;
+    };
+  }, [checkDocMap, selectedCheckNos]);
+
+  const activeUrl = activeCheckNo ? checkUrls[activeCheckNo] || '' : '';
+  const activeDoc = activeCheckNo ? checkDocMap.get(activeCheckNo) : null;
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
+      <div className="border-b border-gray-100 px-4 py-3">
+        <h3 className="text-sm font-semibold text-gray-800">Check Copy Preview</h3>
+        <p className="text-xs text-gray-500">Click a check selection to preview its copy.</p>
+      </div>
+      <div className="border-t border-gray-100 bg-gray-50 min-h-[360px]">
+        {activeUrl ? (
+          <iframe
+            title={activeDoc?.fileName || 'Check copy'}
+            src={activeUrl}
+            className="h-[360px] w-full"
+          />
+        ) : (
+          <div className="px-4 py-6 text-sm text-gray-600">
+            {activeCheckNo
+              ? 'Preview is not ready yet. Please wait a moment.'
+              : (selectedCheckNos || []).length === 0
+                ? 'No checks selected yet.'
+                : 'Select a check to preview the PDF.'}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
 export default function OutstandingCheckTestingModule({ caseId, caseData, userId, navigate, showModal }) {
+  const firstPostInstructionStep = FLOW_STEPS.SELECTION;
+
   const yearEndDateRaw = caseData?.cashContext?.reconciliationDate || '';
   const yearEndDate = useMemo(() => parseDate(yearEndDateRaw), [yearEndDateRaw]);
   const yearEndDateMissing = !yearEndDateRaw || !yearEndDate;
+  const cutoffWindowDaysRaw = caseData?.cashContext?.cutoffWindowDays ?? '';
+  const cutoffWindowDays = Number(cutoffWindowDaysRaw);
+  const cutoffWindowValid = Number.isFinite(cutoffWindowDays) && cutoffWindowDays > 0;
+  const cutoffEndDate = useMemo(() => {
+    if (!yearEndDate || !cutoffWindowValid) return null;
+    const end = new Date(yearEndDate);
+    end.setDate(end.getDate() + cutoffWindowDays);
+    return end;
+  }, [cutoffWindowDays, cutoffWindowValid, yearEndDate]);
+  const cutoffWindowLabel = cutoffWindowValid ? `${cutoffWindowDays} day${cutoffWindowDays === 1 ? '' : 's'}` : '';
 
   const bankPopulation = useMemo(() => {
     const raw = Array.isArray(caseData?.cashCutoffItems) ? caseData.cashCutoffItems : [];
@@ -174,32 +338,39 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
     return map;
   }, [caseData]);
 
-  const registerMap = useMemo(() => {
-    const raw = Array.isArray(caseData?.cashRegisterItems) ? caseData.cashRegisterItems : [];
+  const checkCopyMap = useMemo(() => {
+    const docs = Array.isArray(caseData?.referenceDocuments) ? caseData.referenceDocuments : [];
     const map = new Map();
-    raw.forEach((row, index) => {
-      const checkNo = normalizeCheckNo(row?.checkNo);
+    docs.forEach((doc) => {
+      const templateId = doc?.generationSpec?.templateId;
+      if (templateId && templateId !== 'refdoc.check-copy.v1') return;
+      const checkNo = parseCheckNumber(doc);
       if (!checkNo) return;
+      const data = doc?.generationSpec?.data || {};
       map.set(checkNo, {
-        id: checkNo,
         checkNo,
-        writtenDate: row?.writtenDate || '',
-        amount: row?.amount ?? '',
-        payee: row?.payee || '',
-        __index: index,
+        writtenDate: data?.date || '',
+        amount: data?.amountNumeric || data?.amount || '',
+        payee: data?.payee || '',
       });
     });
     return map;
   }, [caseData]);
 
+  const outstandingRows = useMemo(() => {
+    const rows = Array.from(outstandingList.values());
+    rows.sort((a, b) => String(a.checkNo || '').localeCompare(String(b.checkNo || '')));
+    return rows;
+  }, [outstandingList]);
+
   const [activeStep, setActiveStep] = useState(FLOW_STEPS.INSTRUCTION);
+  const [recipeProgress, setRecipeProgress] = useState(null);
   const [selectedChecks, setSelectedChecks] = useState({});
-  const [registerConfirmed, setRegisterConfirmed] = useState({});
-  const [decisions, setDecisions] = useState({});
-  const [exceptionNotes, setExceptionNotes] = useState({});
+  const [classificationByCheck, setClassificationByCheck] = useState({});
   const [isLocked, setIsLocked] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [furthestStepIndex, setFurthestStepIndex] = useState(0);
+  const [activeCheckNo, setActiveCheckNo] = useState('');
 
   const progressSaveTimeoutRef = useRef(null);
   const lastLocalChangeRef = useRef(0);
@@ -207,10 +378,27 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
   const selectionRef = useRef(selectedChecks);
   const selectedCheckNosRef = useRef([]);
   const completedCountRef = useRef(0);
-  const registerConfirmedRef = useRef(registerConfirmed);
-  const decisionsRef = useRef(decisions);
-  const exceptionNotesRef = useRef(exceptionNotes);
+  const classificationRef = useRef(classificationByCheck);
   const isLockedRef = useRef(isLocked);
+  const attemptStartedAtRef = useRef(null);
+  const hasProgressRef = useRef(false);
+
+  const recipeId = useMemo(() => getRecipeId(caseData), [caseData]);
+  const recipeGateId = useMemo(() => {
+    const base = recipeId || '';
+    const level = typeof caseData?.caseLevel === 'string' ? caseData.caseLevel.trim().toLowerCase() : '';
+    return level ? `${base}::${level}` : base;
+  }, [caseData, recipeId]);
+  const recipeVersion = useMemo(() => getRecipeVersion(caseData), [caseData]);
+  const gateScope = useMemo(() => {
+    const scope = caseData?.workflow?.gateScope;
+    return scope === 'per_attempt' ? 'per_attempt' : 'once';
+  }, [caseData]);
+  const gatePassed = useMemo(
+    () => Boolean(recipeProgress && recipeProgress.passedVersion >= recipeVersion),
+    [recipeProgress, recipeVersion]
+  );
+  const gateRequired = gateScope === 'per_attempt' ? true : !gatePassed;
 
   const selectedCheckNos = useMemo(
     () =>
@@ -222,52 +410,58 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
 
   const selectedCount = selectedCheckNos.length;
   const bankPopulationMissing = bankPopulation.length === 0;
-  const registerMissingForSelected = useMemo(
-    () => selectedCheckNos.filter((checkNo) => !registerMap.has(checkNo)),
-    [registerMap, selectedCheckNos]
-  );
+
+  useEffect(() => {
+    if (selectedCheckNos.length === 0) {
+      if (activeCheckNo) setActiveCheckNo('');
+      return;
+    }
+    if (!activeCheckNo || !selectedCheckNos.includes(activeCheckNo)) {
+      setActiveCheckNo(selectedCheckNos[0]);
+    }
+  }, [activeCheckNo, selectedCheckNos]);
 
   const evalForCheck = useCallback(
     (checkNo) => {
-      const reg = registerMap.get(checkNo) || null;
-      const writtenDate = reg ? parseDate(reg.writtenDate) : null;
+      const bankItem = bankPopulation.find((item) => item.checkNo === checkNo) || null;
+      const checkCopy = checkCopyMap.get(checkNo) || null;
+      const writtenDate = checkCopy ? parseDate(checkCopy.writtenDate) : null;
       const eligible =
         yearEndDate && writtenDate ? compareDatesYMD(writtenDate, yearEndDate) <= 0 : null;
       const onOutstandingList = outstandingList.has(checkNo);
-      const correctDecision =
-        eligible === false ? 'out_of_scope' : eligible === true ? (onOutstandingList ? 'found' : 'missing') : '';
+      const correctClassification =
+        eligible === true
+          ? onOutstandingList
+            ? 'properly_included'
+            : 'improperly_excluded'
+          : eligible === false
+            ? onOutstandingList
+              ? 'improperly_included'
+              : 'properly_excluded'
+            : '';
 
-      const studentDecision = decisions[checkNo] || '';
+      const studentClassification = classificationByCheck[checkNo] || '';
+
       return {
         checkNo,
-        registerItem: reg,
+        bankItem,
         eligible,
         onOutstandingList,
-        correctDecision,
-        studentDecision,
-        isCorrect: correctDecision && studentDecision ? correctDecision === studentDecision : false,
+        correctClassification,
+        studentClassification,
       };
     },
-    [decisions, outstandingList, registerMap, yearEndDate]
+    [bankPopulation, checkCopyMap, classificationByCheck, outstandingList, yearEndDate]
   );
 
   const completedCount = useMemo(() => {
     return selectedCheckNos.filter((checkNo) => {
-      if (!registerConfirmed[checkNo]) return false;
-      const info = evalForCheck(checkNo);
-      if (info.eligible === false) return true;
-      if (info.eligible === true) {
-        const decision = decisions[checkNo];
-        if (decision !== 'found' && decision !== 'missing') return false;
-        if (decision === 'missing') {
-          const note = (exceptionNotes[checkNo] || '').trim();
-          return note.length > 0;
-        }
-        return true;
-      }
-      return false;
+      return Boolean(classificationByCheck[checkNo]);
     }).length;
-  }, [decisions, evalForCheck, exceptionNotes, registerConfirmed, selectedCheckNos]);
+  }, [
+    classificationByCheck,
+    selectedCheckNos,
+  ]);
 
   const percentComplete = useMemo(
     () => computePercentComplete(activeStep, selectedCount, completedCount),
@@ -275,17 +469,22 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
   );
 
   const enqueueProgressSave = useCallback(
-    (nextStep) => {
+    (nextStep, overrideSelectedIds = null) => {
       if (!caseId || !userId) return;
+      if (!attemptStartedAtRef.current) {
+        attemptStartedAtRef.current = Date.now();
+      }
       if (progressSaveTimeoutRef.current) {
         clearTimeout(progressSaveTimeoutRef.current);
       }
       const targetStep = nextStep || activeStepRef.current;
       progressSaveTimeoutRef.current = setTimeout(async () => {
         try {
-          const currentSelected = Array.isArray(selectedCheckNosRef.current)
-            ? selectedCheckNosRef.current
-            : [];
+          const currentSelected = Array.isArray(overrideSelectedIds)
+            ? overrideSelectedIds
+            : Array.isArray(selectedCheckNosRef.current)
+              ? selectedCheckNosRef.current
+              : [];
           const currentSelectedCount = currentSelected.length;
           const currentCompletedCount = Number(completedCountRef.current || 0);
           const currentPercent = computePercentComplete(
@@ -304,9 +503,7 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
               draft: {
                 selectedPaymentIds: currentSelected,
                 outstandingCheckTesting: {
-                  registerConfirmed: registerConfirmedRef.current,
-                  decisions: decisionsRef.current,
-                  exceptionNotes: exceptionNotesRef.current,
+                  classifications: classificationRef.current,
                 },
               },
             },
@@ -328,6 +525,35 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
   }, [activeStep]);
 
   useEffect(() => {
+    if (!caseData || !userId || !recipeGateId) return;
+    let isActive = true;
+
+    fetchRecipeProgress({ appId, uid: userId, recipeId: recipeGateId })
+      .then((progress) => {
+        if (!isActive) return;
+        setRecipeProgress(progress);
+      })
+      .catch((error) => {
+        console.error('Error fetching recipe progress:', error);
+        if (isActive) {
+          setRecipeProgress(null);
+        }
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [caseData, userId, recipeGateId]);
+
+  useEffect(() => {
+    if (isLocked) return;
+    if (hasProgressRef.current) return;
+    if (gateScope !== 'once' || !gatePassed) return;
+    if (activeStepRef.current !== FLOW_STEPS.INSTRUCTION) return;
+    setActiveStep(firstPostInstructionStep);
+  }, [gateScope, gatePassed, isLocked, firstPostInstructionStep]);
+
+  useEffect(() => {
     selectionRef.current = selectedChecks;
   }, [selectedChecks]);
 
@@ -340,16 +566,8 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
   }, [completedCount]);
 
   useEffect(() => {
-    registerConfirmedRef.current = registerConfirmed;
-  }, [registerConfirmed]);
-
-  useEffect(() => {
-    decisionsRef.current = decisions;
-  }, [decisions]);
-
-  useEffect(() => {
-    exceptionNotesRef.current = exceptionNotes;
-  }, [exceptionNotes]);
+    classificationRef.current = classificationByCheck;
+  }, [classificationByCheck]);
 
   useEffect(() => {
     isLockedRef.current = isLocked;
@@ -362,6 +580,12 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
       (progressMap) => {
         const entry = progressMap.get(caseId);
         if (!entry) return;
+        hasProgressRef.current = true;
+
+        const startedAtMs = coerceToMillis(entry.activeAttempt?.startedAt);
+        if (startedAtMs && !attemptStartedAtRef.current) {
+          attemptStartedAtRef.current = startedAtMs;
+        }
 
         const nextStep = STEP_SEQUENCE.includes(entry.step) ? entry.step : FLOW_STEPS.INSTRUCTION;
         const recentlyChanged = Date.now() - lastLocalChangeRef.current < 900;
@@ -375,25 +599,21 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
           if (checkNo) nextSelection[checkNo] = true;
         });
         if (!recentlyChanged && !isSameSelectionMap(selectionRef.current, nextSelection)) {
-          setSelectedChecks(nextSelection);
+          const localHasSelection = Object.keys(selectionRef.current || {}).length > 0;
+          const serverHasSelection = Object.keys(nextSelection).length > 0;
+          if (serverHasSelection || !localHasSelection) {
+            setSelectedChecks(nextSelection);
+          }
         }
 
-        const otc = entry.draft?.outstandingCheckTesting && typeof entry.draft.outstandingCheckTesting === 'object'
-          ? entry.draft.outstandingCheckTesting
-          : {};
-        const nextRegisterConfirmed =
-          otc.registerConfirmed && typeof otc.registerConfirmed === 'object' ? otc.registerConfirmed : {};
-        const nextDecisions = otc.decisions && typeof otc.decisions === 'object' ? otc.decisions : {};
-        const nextNotes = otc.exceptionNotes && typeof otc.exceptionNotes === 'object' ? otc.exceptionNotes : {};
-
-        if (!recentlyChanged && !shallowEqualRecord(registerConfirmedRef.current, nextRegisterConfirmed)) {
-          setRegisterConfirmed(nextRegisterConfirmed);
-        }
-        if (!recentlyChanged && !shallowEqualRecord(decisionsRef.current, nextDecisions)) {
-          setDecisions(nextDecisions);
-        }
-        if (!recentlyChanged && !shallowEqualRecord(exceptionNotesRef.current, nextNotes)) {
-          setExceptionNotes(nextNotes);
+        const otc =
+          entry.draft?.outstandingCheckTesting && typeof entry.draft.outstandingCheckTesting === 'object'
+            ? entry.draft.outstandingCheckTesting
+            : {};
+        const nextClassifications =
+          otc.classifications && typeof otc.classifications === 'object' ? otc.classifications : {};
+        if (!recentlyChanged && !shallowEqualRecord(classificationRef.current, nextClassifications)) {
+          setClassificationByCheck(nextClassifications);
         }
 
         const shouldLock = entry.state === 'submitted' || nextStep === FLOW_STEPS.RESULTS;
@@ -417,6 +637,21 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
     };
   }, []);
 
+  const handleEnterSimulation = useCallback(() => {
+    if (isLocked) return;
+    if (!gatePassed && recipeGateId && userId) {
+      setRecipeProgress({ recipeId: recipeGateId, passedVersion: recipeVersion, passedAt: null });
+      saveRecipeProgress({ appId, uid: userId, recipeId: recipeGateId, passedVersion: recipeVersion }).catch((error) => {
+        console.error('Failed to save recipe progress:', error);
+      });
+    }
+    if (!attemptStartedAtRef.current) {
+      attemptStartedAtRef.current = Date.now();
+    }
+    enqueueProgressSave(firstPostInstructionStep);
+    setActiveStep(firstPostInstructionStep);
+  }, [gatePassed, recipeGateId, recipeVersion, userId, isLocked, enqueueProgressSave, firstPostInstructionStep]);
+
   const toggleSelection = (checkNo) => {
     if (isLocked) return;
     const id = normalizeCheckNo(checkNo);
@@ -429,65 +664,20 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
       } else {
         next[id] = true;
       }
+      const nextSelectedIds = Object.keys(next).filter((key) => next[key]);
+      selectionRef.current = next;
+      selectedCheckNosRef.current = nextSelectedIds;
+      enqueueProgressSave(FLOW_STEPS.SELECTION, nextSelectedIds);
       return next;
     });
   };
 
-  const confirmRegisterForCheck = (checkNo) => {
-    if (isLocked) return;
-    const id = normalizeCheckNo(checkNo);
-    if (!id) return;
-    const reg = registerMap.get(id);
-    if (!reg) {
-      showModal?.(`No matching check register entry found for check #${id}. Ask your instructor to add it.`, 'Register Missing');
-      return;
-    }
-    if (!yearEndDate) {
-      showModal?.('Year-end date (reconciliation date) is missing. Ask your instructor to set it in Cash Context.', 'Missing Year-End Date');
-      return;
-    }
-    const writtenDate = parseDate(reg.writtenDate);
-    if (!writtenDate) {
-      showModal?.(`Register written date is missing/invalid for check #${id}.`, 'Register Date Missing');
-      return;
-    }
-
-    lastLocalChangeRef.current = Date.now();
-    setRegisterConfirmed((prev) => ({ ...prev, [id]: true }));
-    const eligible = compareDatesYMD(writtenDate, yearEndDate) <= 0;
-    setDecisions((prev) => {
-      if (!eligible) {
-        return { ...prev, [id]: 'out_of_scope' };
-      }
-      if (prev[id] === 'out_of_scope') {
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      }
-      return prev;
-    });
-    enqueueProgressSave(FLOW_STEPS.TESTING);
-  };
-
-  const setDecision = (checkNo, value) => {
-    if (isLocked) return;
-    const id = normalizeCheckNo(checkNo);
-    if (!id) return;
-    if (!registerConfirmed[id]) {
-      showModal?.('Confirm the check register written date before concluding.', 'Confirm Register First');
-      return;
-    }
-    lastLocalChangeRef.current = Date.now();
-    setDecisions((prev) => ({ ...prev, [id]: value }));
-    enqueueProgressSave(FLOW_STEPS.TESTING);
-  };
-
-  const setNote = (checkNo, value) => {
+  const setClassificationDecision = (checkNo, value) => {
     if (isLocked) return;
     const id = normalizeCheckNo(checkNo);
     if (!id) return;
     lastLocalChangeRef.current = Date.now();
-    setExceptionNotes((prev) => ({ ...prev, [id]: value }));
+    setClassificationByCheck((prev) => ({ ...prev, [id]: value }));
     enqueueProgressSave(FLOW_STEPS.TESTING);
   };
 
@@ -504,15 +694,6 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
       );
       return;
     }
-    if (registerMissingForSelected.length > 0) {
-      showModal?.(
-        `The check register is missing entries for: ${registerMissingForSelected.join(
-          ', '
-        )}. Ask your instructor to add them before continuing.`,
-        'Register Missing'
-      );
-      return;
-    }
     setActiveStep(FLOW_STEPS.TESTING);
     enqueueProgressSave(FLOW_STEPS.TESTING);
   };
@@ -522,11 +703,21 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
     if (!caseId || !userId) return;
     if (Date.now() - lastLocalChangeRef.current < 200) return;
     enqueueProgressSave(activeStepRef.current);
-  }, [activeStep, selectedChecks, registerConfirmed, decisions, exceptionNotes, enqueueProgressSave, isLocked, caseId, userId]);
+  }, [
+    activeStep,
+    selectedChecks,
+    classificationByCheck,
+    enqueueProgressSave,
+    isLocked,
+    caseId,
+    userId,
+  ]);
 
   const resetForRetake = async () => {
     if (!caseId || !userId) return;
     if (isSubmitting) return;
+    const initialStep =
+      gateScope === 'once' ? firstPostInstructionStep : FLOW_STEPS.INSTRUCTION;
     try {
       if (progressSaveTimeoutRef.current) clearTimeout(progressSaveTimeoutRef.current);
       await saveProgress({
@@ -536,25 +727,24 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
         patch: {
           percentComplete: 0,
           state: 'not_started',
-          step: FLOW_STEPS.INSTRUCTION,
+          step: initialStep,
           draft: {
             selectedPaymentIds: [],
             outstandingCheckTesting: {
-              registerConfirmed: {},
-              decisions: {},
-              exceptionNotes: {},
+              classifications: {},
             },
           },
+          hasSuccessfulAttempt: false,
         },
         forceOverwrite: true,
+        clearActiveAttempt: true,
       });
       setIsLocked(false);
-      setActiveStep(FLOW_STEPS.INSTRUCTION);
+      setActiveStep(initialStep);
       setFurthestStepIndex(0);
       setSelectedChecks({});
-      setRegisterConfirmed({});
-      setDecisions({});
-      setExceptionNotes({});
+      setClassificationByCheck({});
+      attemptStartedAtRef.current = null;
     } catch (err) {
       console.error('[OutstandingCheckTesting] Failed to reset retake', err);
       showModal?.('We ran into an issue preparing your retake. Please try again.', 'Retake Error');
@@ -569,26 +759,19 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
     const missing = [];
     const results = selectedCheckNos.map((checkNo) => {
       const info = evalForCheck(checkNo);
-      const regConfirmed = !!registerConfirmed[checkNo];
-      const decision = decisions[checkNo] || '';
-      const note = (exceptionNotes[checkNo] || '').trim();
-      if (!regConfirmed) {
+      const studentClassification = classificationByCheck[checkNo] || '';
+      if (!studentClassification) {
         missing.push(checkNo);
-        return { ...info, decision, note, regConfirmed };
       }
-      if (info.eligible === true) {
-        if (decision !== 'found' && decision !== 'missing') {
-          missing.push(checkNo);
-        } else if (decision === 'missing' && !note) {
-          missing.push(checkNo);
-        }
-      }
-      return { ...info, decision, note, regConfirmed };
+      return {
+        ...info,
+        studentClassification,
+      };
     });
 
     if (missing.length > 0) {
       showModal?.(
-        `Complete register confirmation and conclusions for: ${Array.from(new Set(missing)).join(', ')}.`,
+        `Select a conclusion for: ${Array.from(new Set(missing)).join(', ')}.`,
         'Incomplete Testing'
       );
       return;
@@ -597,6 +780,16 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
     const caseTitle = caseData.title || caseData.caseName || 'Audit Case';
     try {
       setIsSubmitting(true);
+      const totalConsidered = results.length;
+      const correctCount = results.filter(
+        (row) => row.correctClassification && row.studentClassification === row.correctClassification
+      ).length;
+      const incorrectCount = totalConsidered - correctCount;
+      const score = totalConsidered > 0 ? Math.round((correctCount / totalConsidered) * 100) : null;
+      const startedAtMs = attemptStartedAtRef.current;
+      const timeToCompleteSeconds =
+        startedAtMs ? Math.max(0, Math.round((Date.now() - startedAtMs) / 1000)) : null;
+
       await saveSubmission(userId, caseId, {
         caseId,
         caseName: caseTitle,
@@ -604,10 +797,20 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
         outstandingCheckTesting: {
           yearEndDate: yearEndDateRaw,
           selectedCheckNos,
-          registerConfirmed,
-          decisions,
-          exceptionNotes,
+          classifications: classificationByCheck,
           results,
+        },
+        attemptSummary: {
+          score,
+          totalConsidered,
+          missedExceptionsCount: 0,
+          falsePositivesCount: 0,
+          eligibilityErrorsCount: 0,
+          matchErrorsCount: 0,
+          wrongClassificationCount: incorrectCount,
+          criticalIssuesCount: incorrectCount,
+          requiredDocsOpened: null,
+          timeToCompleteSeconds,
         },
         status: 'submitted',
       });
@@ -623,12 +826,12 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
           draft: {
             selectedPaymentIds: selectedCheckNos,
             outstandingCheckTesting: {
-              registerConfirmed,
-              decisions,
-              exceptionNotes,
+              classifications: classificationByCheck,
             },
           },
+          hasSuccessfulAttempt: true,
         },
+        clearActiveAttempt: true,
       });
 
       setIsLocked(true);
@@ -643,16 +846,24 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
 
   const resultsSummary = useMemo(() => {
     const rows = selectedCheckNos.map((checkNo) => evalForCheck(checkNo));
-    const eligible = rows.filter((r) => r.eligible === true);
-    const exceptions = rows.filter((r) => r.correctDecision === 'missing');
-    const missed = rows.filter((r) => r.correctDecision === 'missing' && r.studentDecision !== 'missing');
-    const falsePositives = rows.filter((r) => r.correctDecision !== 'missing' && r.studentDecision === 'missing');
+    const correct = rows.filter(
+      (r) => r.correctClassification && r.studentClassification === r.correctClassification
+    );
+    const incorrect = rows.filter(
+      (r) => r.studentClassification && r.correctClassification && r.studentClassification !== r.correctClassification
+    );
+    const properlyIncluded = rows.filter((r) => r.studentClassification === 'properly_included');
+    const properlyExcluded = rows.filter((r) => r.studentClassification === 'properly_excluded');
+    const improperlyIncluded = rows.filter((r) => r.studentClassification === 'improperly_included');
+    const improperlyExcluded = rows.filter((r) => r.studentClassification === 'improperly_excluded');
     return {
       sampleSize: rows.length,
-      eligibleCount: eligible.length,
-      exceptionCount: exceptions.length,
-      missedCount: missed.length,
-      falsePositiveCount: falsePositives.length,
+      correctCount: correct.length,
+      incorrectCount: incorrect.length,
+      properlyIncludedCount: properlyIncluded.length,
+      properlyExcludedCount: properlyExcluded.length,
+      improperlyIncludedCount: improperlyIncluded.length,
+      improperlyExcludedCount: improperlyExcluded.length,
     };
   }, [evalForCheck, selectedCheckNos]);
 
@@ -719,17 +930,23 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
         <div>
           <h2 className="text-2xl font-semibold text-gray-800">Step 1 — Instruction</h2>
           <p className="text-sm text-gray-500">
-            Review the materials and successfully answer the knowledge check questions to access the simulation.
+            {gateScope === 'per_attempt'
+              ? 'Review the materials and successfully answer the knowledge check questions to access the simulation.'
+              : gatePassed
+              ? 'Review the materials. The gate check is optional because you already cleared it.'
+              : 'Review the materials and successfully answer the knowledge check questions to access the simulation.'}
           </p>
+          <div className="text-xs text-gray-500 mt-2">
+            Year-end date: {yearEndDate ? formatShortDate(yearEndDate) : 'Not set'}{' '}
+            {cutoffWindowValid ? `• Cutoff window: ${cutoffWindowLabel}` : ''}
+            {cutoffEndDate ? ` (through ${formatShortDate(cutoffEndDate)})` : ''}
+          </div>
         </div>
         <InstructionView
           instructionData={caseData.instruction}
           ctaLabel="Enter the Simulation"
-          onStartSimulation={() => {
-            if (isLocked) return;
-            enqueueProgressSave(FLOW_STEPS.SELECTION);
-            setActiveStep(FLOW_STEPS.SELECTION);
-          }}
+          gateRequired={gateRequired}
+          onStartSimulation={handleEnterSimulation}
         />
       </div>
     );
@@ -741,6 +958,11 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
         <h2 className="text-2xl font-semibold text-gray-800">Step 2 — Select Sample</h2>
         <p className="text-sm text-gray-500">
           Select the January-clearing checks you will test (sampling is trainee-driven in this module).
+        </p>
+        <p className="text-xs text-gray-500">
+          Year-end date: {yearEndDate ? formatShortDate(yearEndDate) : 'Not set'}
+          {cutoffWindowValid ? ` • Cutoff window: ${cutoffWindowLabel}` : ''}
+          {cutoffEndDate ? ` (through ${formatShortDate(cutoffEndDate)})` : ''}
         </p>
         {yearEndDateMissing ? (
           <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
@@ -775,7 +997,6 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
                     checked={!!selectedChecks[item.checkNo]}
                     onChange={() => {
                       toggleSelection(item.checkNo);
-                      enqueueProgressSave(FLOW_STEPS.SELECTION);
                     }}
                     disabled={isLocked}
                     className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
@@ -786,11 +1007,6 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
                       <span className="text-gray-500">Cleared: {item.clearingDate || '—'}</span>
                       <span className="text-gray-500">Amount: {currencyFormatter.format(Number(item.amount) || 0)}</span>
                     </div>
-                    {!registerMap.has(item.checkNo) ? (
-                      <p className="mt-1 text-xs text-amber-700">
-                        Missing register entry for this check number (ask instructor to add it).
-                      </p>
-                    ) : null}
                   </div>
                 </label>
               ))
@@ -811,19 +1027,45 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
 
   const renderTestingRow = (checkNo) => {
     const bankItem = bankPopulation.find((b) => b.checkNo === checkNo) || null;
-    const registerItem = registerMap.get(checkNo) || null;
-    const outstandingItem = outstandingList.get(checkNo) || null;
-    const confirmed = !!registerConfirmed[checkNo];
     const evalRow = evalForCheck(checkNo);
-    const eligible = evalRow.eligible === true;
-    const ineligible = evalRow.eligible === false;
-    const decision = decisions[checkNo] || '';
-
-    const amountMismatch =
-      registerItem && bankItem ? Math.abs(Number(registerItem.amount || 0) - Number(bankItem.amount || 0)) > 0.01 : false;
+    const checkCopy = checkCopyMap.get(checkNo) || null;
+    const classification = classificationByCheck[checkNo] || '';
+    const hasCheckCopy = Boolean(checkCopy);
+    const hasWrittenDate = Boolean(checkCopy?.writtenDate);
+    const hasYearEnd = Boolean(yearEndDate);
+    const classificationDisabled = isLocked || !hasYearEnd || !hasCheckCopy || !hasWrittenDate;
+    const isActive = activeCheckNo === checkNo;
+    const options = [
+      {
+        value: 'properly_included',
+        label: 'Properly Included',
+        hint: 'Written before year-end and appears on the 12/31 list.',
+      },
+      {
+        value: 'properly_excluded',
+        label: 'Properly Excluded',
+        hint: 'Written after year-end and not on the 12/31 list.',
+      },
+      {
+        value: 'improperly_included',
+        label: 'Improperly Included',
+        hint: 'Written after year-end but appears on the 12/31 list.',
+      },
+      {
+        value: 'improperly_excluded',
+        label: 'Improperly Excluded',
+        hint: 'Written before year-end but missing from the 12/31 list.',
+      },
+    ];
 
     return (
-      <div key={checkNo} className="rounded-lg border border-gray-200 bg-white p-4 space-y-3">
+      <div
+        key={checkNo}
+        className={`rounded-lg border p-4 space-y-3 cursor-pointer ${
+          isActive ? 'border-blue-200 bg-blue-50/40' : 'border-gray-200 bg-white'
+        }`}
+        onClick={() => setActiveCheckNo(checkNo)}
+      >
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
             <h4 className="text-base font-semibold text-gray-900">Check #{checkNo}</h4>
@@ -831,102 +1073,42 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
               Bank cleared: {bankItem?.clearingDate || '—'} · Amount: {currencyFormatter.format(Number(bankItem?.amount) || 0)}
             </p>
           </div>
-          <div className="text-xs text-gray-500">
-            {confirmed ? (
-              ineligible ? (
-                <span className="rounded-full bg-gray-100 px-2 py-1 font-semibold text-gray-700">Out of scope (written after YE)</span>
-              ) : eligible ? (
-                <span className="rounded-full bg-blue-50 px-2 py-1 font-semibold text-blue-700">Eligible (written ≤ YE)</span>
-              ) : (
-                <span className="rounded-full bg-amber-50 px-2 py-1 font-semibold text-amber-700">Eligibility unknown</span>
-              )
-            ) : (
-              <span className="rounded-full bg-amber-50 px-2 py-1 font-semibold text-amber-700">Confirm register first</span>
-            )}
-          </div>
         </div>
 
-        <div className="rounded-md border border-gray-100 bg-gray-50 p-3 space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Register Trace (Written Date)</p>
-          {registerItem ? (
-            <div className="text-sm text-gray-800 flex flex-wrap gap-x-4 gap-y-1">
-              <span>Written: {registerItem.writtenDate || '—'}</span>
-              <span>Payee: {registerItem.payee || '—'}</span>
-              <span>Amount: {currencyFormatter.format(Number(registerItem.amount) || 0)}</span>
-              {amountMismatch ? (
-                <span className="text-amber-700 font-semibold">Amount mismatch vs bank</span>
-              ) : null}
-            </div>
-          ) : (
-            <p className="text-sm text-red-700">No register entry found for this check number.</p>
-          )}
-          <div className="flex items-center gap-2">
-            <Button
-              variant="secondary"
-              onClick={() => confirmRegisterForCheck(checkNo)}
-              disabled={isLocked || !registerItem || confirmed}
-            >
-              {confirmed ? 'Register Confirmed' : 'Confirm Register Trace'}
-            </Button>
-            <span className="text-xs text-gray-500">
-              Required before you can conclude whether it should appear on the 12/31 outstanding list.
-            </span>
-          </div>
-        </div>
-
-        {confirmed && eligible ? (
-          <div className="rounded-md border border-gray-100 bg-white p-3 space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Trace To 12/31 Outstanding List</p>
-            <div className="text-sm text-gray-800">
-              {outstandingItem ? (
-                <div className="flex flex-wrap gap-x-4 gap-y-1">
-                  <span className="font-semibold text-emerald-700">Client list contains check #{checkNo}</span>
-                  <span>Amount: {currencyFormatter.format(Number(outstandingItem.amount) || 0)}</span>
-                  <span>Payee: {outstandingItem.payee || '—'}</span>
-                </div>
-              ) : (
-                <span className="font-semibold text-amber-700">Not found on client list (based on check number)</span>
-              )}
-            </div>
-
-            <div className="flex flex-wrap gap-4 items-center">
-              <label className="inline-flex items-center gap-2 text-sm">
-                <input
-                  type="radio"
-                  name={`decision-${checkNo}`}
-                  checked={decision === 'found'}
-                  onChange={() => setDecision(checkNo, 'found')}
-                  disabled={isLocked}
-                />
-                Found on list
-              </label>
-              <label className="inline-flex items-center gap-2 text-sm">
-                <input
-                  type="radio"
-                  name={`decision-${checkNo}`}
-                  checked={decision === 'missing'}
-                  onChange={() => setDecision(checkNo, 'missing')}
-                  disabled={isLocked}
-                />
-                Not found (exception)
-              </label>
-            </div>
-
-            {decision === 'missing' ? (
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500">Exception Note (required)</label>
-                <textarea
-                  rows={3}
-                  value={exceptionNotes[checkNo] || ''}
-                  onChange={(e) => setNote(checkNo, e.target.value)}
-                  disabled={isLocked}
-                  className="mt-2 w-full rounded-md border border-gray-200 p-2 text-sm"
-                  placeholder="What did you observe? What’s the likely explanation (recorded late, void/reissue, incomplete listing)?"
-                />
-              </div>
+        {!hasCheckCopy || !hasWrittenDate || !hasYearEnd ? (
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+            {!hasCheckCopy || !hasWrittenDate ? (
+              <p>Check copy is missing or still generating for this selection.</p>
+            ) : null}
+            {!hasYearEnd ? (
+              <p>Year-end date is missing. Ask your instructor to set it in Cash Context.</p>
             ) : null}
           </div>
         ) : null}
+
+        <div className="rounded-md border border-gray-100 bg-white p-3 space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Conclusion</p>
+          <div className="space-y-2 text-sm text-gray-800">
+            {options.map((option) => (
+              <label key={option.value} className="flex items-start gap-2">
+                <input
+                  type="radio"
+                  name={`classification-${checkNo}`}
+                  checked={classification === option.value}
+                  onChange={() => setClassificationDecision(checkNo, option.value)}
+                  disabled={classificationDisabled}
+                />
+                <span>
+                  <span className="font-semibold">{option.label}</span>
+                  <span className="block text-xs text-gray-500">{option.hint}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+          {classificationDisabled ? (
+            <p className="text-xs text-amber-700">Fix the missing register/year-end data before concluding.</p>
+          ) : null}
+        </div>
       </div>
     );
   };
@@ -936,13 +1118,49 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
       <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-2">
         <h2 className="text-2xl font-semibold text-gray-800">Step 3 — Trace & Conclude</h2>
         <p className="text-sm text-gray-500">
-          For each selection, confirm the written date from the check register. Only checks written on or before year-end are eligible to be on the 12/31 outstanding list.
+          For each selection, review the check copy and compare it to the 12/31 outstanding list, then choose the proper inclusion/exclusion conclusion.
         </p>
         <p className="text-xs text-gray-500">Progress: {percentComplete}% complete</p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <ArtifactViewer artifacts={Array.isArray(caseData?.cashArtifacts) ? caseData.cashArtifacts : []} />
+        <div className="space-y-4">
+          <CheckCopyViewer
+            referenceDocuments={Array.isArray(caseData?.referenceDocuments) ? caseData.referenceDocuments : []}
+            selectedCheckNos={selectedCheckNos}
+            activeCheckNo={activeCheckNo}
+          />
+          <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
+            <div className="border-b border-gray-100 px-4 py-3">
+              <h3 className="text-sm font-semibold text-gray-800">12/31 Outstanding Check Listing</h3>
+              <p className="text-xs text-gray-500">Use to confirm list inclusion, amount, and payee.</p>
+            </div>
+            <div className="max-h-[320px] overflow-y-auto">
+              {outstandingRows.length === 0 ? (
+                <p className="px-4 py-4 text-xs text-gray-500">No outstanding checks provided.</p>
+              ) : (
+                <table className="min-w-full divide-y divide-gray-100 text-xs">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-3 py-2 text-left font-semibold text-gray-600">Check #</th>
+                      <th className="px-3 py-2 text-left font-semibold text-gray-600">Payee</th>
+                      <th className="px-3 py-2 text-left font-semibold text-gray-600">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {outstandingRows.map((row) => (
+                      <tr key={`outstanding-${row.id || row.checkNo}`}>
+                        <td className="px-3 py-2 font-semibold text-gray-800">{row.checkNo || '—'}</td>
+                        <td className="px-3 py-2 text-gray-700">{row.payee || '—'}</td>
+                        <td className="px-3 py-2 text-gray-700">{currencyFormatter.format(Number(row.amount) || 0)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
+        </div>
         <div className="space-y-4">
           {selectedCheckNos.map(renderTestingRow)}
           <div className="flex items-center justify-between">
@@ -963,7 +1181,7 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
       <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-2">
         <h2 className="text-2xl font-semibold text-gray-900">Results — Outstanding Check Testing</h2>
         <p className="text-sm text-gray-600">
-          Sample size: <span className="font-semibold">{resultsSummary.sampleSize}</span> · Eligible: <span className="font-semibold">{resultsSummary.eligibleCount}</span> · Exceptions (true): <span className="font-semibold">{resultsSummary.exceptionCount}</span> · Missed: <span className="font-semibold">{resultsSummary.missedCount}</span> · False positives: <span className="font-semibold">{resultsSummary.falsePositiveCount}</span>
+          Sample size: <span className="font-semibold">{resultsSummary.sampleSize}</span> · Correct: <span className="font-semibold">{resultsSummary.correctCount}</span> · Incorrect: <span className="font-semibold">{resultsSummary.incorrectCount}</span> · Properly Included: <span className="font-semibold">{resultsSummary.properlyIncludedCount}</span> · Properly Excluded: <span className="font-semibold">{resultsSummary.properlyExcludedCount}</span> · Improperly Included: <span className="font-semibold">{resultsSummary.improperlyIncludedCount}</span> · Improperly Excluded: <span className="font-semibold">{resultsSummary.improperlyExcludedCount}</span>
         </p>
       </div>
 
@@ -974,7 +1192,8 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
               <th className="px-4 py-2 text-left font-semibold text-gray-700">Check #</th>
               <th className="px-4 py-2 text-left font-semibold text-gray-700">Written</th>
               <th className="px-4 py-2 text-left font-semibold text-gray-700">Cleared</th>
-              <th className="px-4 py-2 text-left font-semibold text-gray-700">Your Call</th>
+              <th className="px-4 py-2 text-left font-semibold text-gray-700">On 12/31 List</th>
+              <th className="px-4 py-2 text-left font-semibold text-gray-700">Your Conclusion</th>
               <th className="px-4 py-2 text-left font-semibold text-gray-700">Expected</th>
               <th className="px-4 py-2 text-left font-semibold text-gray-700">Result</th>
             </tr>
@@ -982,17 +1201,23 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
           <tbody className="divide-y divide-gray-100">
             {selectedCheckNos.map((checkNo) => {
               const info = evalForCheck(checkNo);
-              const reg = registerMap.get(checkNo);
+              const checkCopy = checkCopyMap.get(checkNo);
               const bank = bankPopulation.find((b) => b.checkNo === checkNo);
               const isCorrect =
-                info.correctDecision && info.studentDecision ? info.correctDecision === info.studentDecision : false;
+                info.correctClassification &&
+                info.studentClassification &&
+                info.correctClassification === info.studentClassification;
+              const onListLabel = info.onOutstandingList ? 'Yes' : 'No';
+              const studentLabel = CLASSIFICATION_LABELS[info.studentClassification] || info.studentClassification || '—';
+              const expectedLabel = CLASSIFICATION_LABELS[info.correctClassification] || info.correctClassification || '—';
               return (
                 <tr key={`result-${checkNo}`}>
                   <td className="px-4 py-2 font-semibold text-gray-900">{checkNo}</td>
-                  <td className="px-4 py-2 text-gray-700">{reg?.writtenDate || '—'}</td>
+                  <td className="px-4 py-2 text-gray-700">{checkCopy?.writtenDate || '—'}</td>
                   <td className="px-4 py-2 text-gray-700">{bank?.clearingDate || '—'}</td>
-                  <td className="px-4 py-2 text-gray-700">{info.studentDecision || '—'}</td>
-                  <td className="px-4 py-2 text-gray-700">{info.correctDecision || '—'}</td>
+                  <td className="px-4 py-2 text-gray-700">{onListLabel}</td>
+                  <td className="px-4 py-2 text-gray-700">{studentLabel}</td>
+                  <td className="px-4 py-2 text-gray-700">{expectedLabel}</td>
                   <td className={`px-4 py-2 font-semibold ${isCorrect ? 'text-emerald-700' : 'text-amber-700'}`}>
                     {isCorrect ? 'Correct' : 'Review'}
                   </td>

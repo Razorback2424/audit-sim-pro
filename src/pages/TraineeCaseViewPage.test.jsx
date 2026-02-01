@@ -4,6 +4,7 @@ import TraineeCaseViewPage from './TraineeCaseViewPage';
 import { subscribeToCase } from '../services/caseService';
 import { saveSubmission, subscribeToSubmission } from '../services/submissionService';
 import { saveProgress, subscribeProgressForCases } from '../services/progressService';
+import { fetchRecipeProgress, saveRecipeProgress } from '../services/recipeProgressService';
 import { getDownloadURL } from 'firebase/storage';
 
 const mockFetch = jest.fn(() =>
@@ -45,6 +46,11 @@ jest.mock('../services/submissionService', () => ({
 jest.mock('../services/progressService', () => ({
   saveProgress: jest.fn(),
   subscribeProgressForCases: jest.fn(() => jest.fn()),
+}));
+
+jest.mock('../services/recipeProgressService', () => ({
+  fetchRecipeProgress: jest.fn(),
+  saveRecipeProgress: jest.fn(),
 }));
 
 jest.mock('../components/trainee/AuditItemCardFactory', () => {
@@ -265,7 +271,10 @@ describe('TraineeCaseViewPage', () => {
     saveSubmission.mockReset();
     subscribeToSubmission.mockReset();
     saveProgress.mockReset();
+    fetchRecipeProgress.mockReset();
+    saveRecipeProgress.mockReset();
     saveProgress.mockResolvedValue();
+    fetchRecipeProgress.mockResolvedValue({ recipeId: 'case-1', passedVersion: 0, passedAt: null });
     consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     getDownloadURL.mockReset();
     subscribeProgressForCases.mockImplementation((_params, onNext) => {
@@ -307,6 +316,23 @@ describe('TraineeCaseViewPage', () => {
     const [improperlyExcluded] = await screen.findAllByLabelText(/Improperly Excluded/i);
     expect(properlyIncluded).toBeEnabled();
     expect(improperlyExcluded).toBeEnabled();
+  });
+
+  test('skips gate when recipe progress is already passed', async () => {
+    fetchRecipeProgress.mockResolvedValue({ recipeId: 'mod-1', passedVersion: 2, passedAt: null });
+
+    renderCase({
+      caseName: 'Case',
+      moduleId: 'mod-1',
+      instruction: { ...baseInstruction, version: 2 },
+      disbursements: [
+        { paymentId: 'p1', payee: 'Vendor', amount: '100', paymentDate: '2024-01-01', downloadURL: 'https://example.com' },
+      ],
+    });
+
+    await screen.findByRole('heading', { name: /Step 1 — Instruction/i, level: 2 });
+    await userEvent.click(screen.getByRole('button', { name: /Return to Simulation/i }));
+    await screen.findByRole('heading', { name: /Step 2 — Select Disbursements/i, level: 2 });
   });
 
   test('uses cash-specific classification copy for cash audit area', async () => {
@@ -517,7 +543,7 @@ describe('TraineeCaseViewPage', () => {
       disbursements: [
         {
           paymentId: 'p1',
-          payee: 'Promotador',
+          payee: 'Seed Alpha',
           amount: '125892.57',
           paymentDate: '2024-01-01',
           downloadURL: 'https://example.com/invoice.pdf',
@@ -541,7 +567,7 @@ describe('TraineeCaseViewPage', () => {
 
     await screen.findByRole('heading', { name: /Audit Completion Report/i });
     expect(screen.getByText(/You missed 1 critical item/i)).toBeInTheDocument();
-    expect(screen.getByText(/Promotador/i)).toBeInTheDocument();
+    expect(screen.getByText(/Seed Alpha/i)).toBeInTheDocument();
     expect(screen.getByText(/\$125,892\.57/)).toBeInTheDocument();
     expect(screen.getByText(/Your decision/i)).toBeInTheDocument();
     expect(screen.getByText(/Properly Included/i)).toBeInTheDocument();
@@ -555,7 +581,7 @@ describe('TraineeCaseViewPage', () => {
       disbursements: [
         {
           paymentId: 'p1',
-          payee: 'Promotador',
+          payee: 'Seed Alpha',
           amount: '100',
           paymentDate: '2024-01-01',
           downloadURL: 'https://example.com/invoice.pdf',

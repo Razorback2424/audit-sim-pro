@@ -18,7 +18,8 @@ import {
   Timestamp,
   getCountFromServer,
 } from 'firebase/firestore';
-import { db, FirestorePaths, appId, auth } from '../AppCore';
+import { db, FirestorePaths, appId, auth, functions } from '../AppCore';
+import { httpsCallable } from 'firebase/functions';
 import { getNow } from '../utils/dates';
 import { toCaseModel } from '../models/case';
 import {
@@ -183,6 +184,40 @@ const normalizeStringArray = (value) =>
 const normalizeNumberOrNull = (value) => {
   const num = Number(value);
   return Number.isFinite(num) ? num : null;
+};
+
+const isPlainObject = (value) =>
+  Object.prototype.toString.call(value) === '[object Object]';
+
+const stripUndefinedDeep = (value) => {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => stripUndefinedDeep(entry))
+      .filter((entry) => entry !== undefined);
+  }
+  if (isPlainObject(value)) {
+    const next = {};
+    Object.entries(value).forEach(([key, entry]) => {
+      if (entry === undefined) return;
+      const cleaned = stripUndefinedDeep(entry);
+      if (cleaned !== undefined) {
+        next[key] = cleaned;
+      }
+    });
+    return next;
+  }
+  return value;
+};
+
+const normalizePrimarySkill = (value, { moduleId, moduleTitle, title, caseName }) => {
+  const skill = toTrimmedString(value);
+  if (skill) return skill;
+  const label = `${toTrimmedString(moduleTitle || title || caseName)} ${toTrimmedString(moduleId)}`.trim();
+  const isSurl = /surl/i.test(label);
+  if (isSurl) {
+    return 'SURL';
+  }
+  return skill;
 };
 
 const extractPrivateCaseKeyEntries = (items = []) => {
@@ -713,6 +748,11 @@ const sanitizeCaseWriteData = (rawData = {}, { isCreate = false } = {}) => {
   sanitized.auditItems = sanitizedItems;
   delete sanitized.disbursements;
   sanitized.referenceDocuments = normalizeReferenceDocuments(sanitized.referenceDocuments);
+  if (sanitized.workpaper && typeof sanitized.workpaper === 'object') {
+    sanitized.workpaper = { ...sanitized.workpaper };
+  } else if ('workpaper' in sanitized) {
+    delete sanitized.workpaper;
+  }
 
   if (typeof sanitized.publicVisible !== 'boolean') {
     sanitized.publicVisible = true;
@@ -736,8 +776,14 @@ const sanitizeCaseWriteData = (rawData = {}, { isCreate = false } = {}) => {
   sanitized.pathDescription = toTrimmedString(sanitized.pathDescription);
   sanitized.tier = normalizeTier(sanitized.tier);
   sanitized.moduleId = toOptionalString(sanitized.moduleId);
+  sanitized.recipeVersion = normalizeNumberOrNull(sanitized.recipeVersion);
   sanitized.moduleTitle = toTrimmedString(sanitized.moduleTitle) || toTrimmedString(sanitized.title);
-  sanitized.primarySkill = toTrimmedString(sanitized.primarySkill);
+  sanitized.primarySkill = normalizePrimarySkill(sanitized.primarySkill, {
+    moduleId: sanitized.moduleId,
+    moduleTitle: sanitized.moduleTitle,
+    title: sanitized.title,
+    caseName: sanitized.caseName,
+  });
   sanitized.secondarySkills = normalizeStringArray(sanitized.secondarySkills);
   sanitized.estimatedMinutes = normalizeNumberOrNull(sanitized.estimatedMinutes);
   sanitized.orderIndex = normalizeNumberOrNull(sanitized.orderIndex);
@@ -766,12 +812,12 @@ const sanitizeCaseWriteData = (rawData = {}, { isCreate = false } = {}) => {
     sanitized.createdAt = sanitized.createdAt ?? serverTimestamp();
   }
 
-  const caseKeysDoc = {
+  const caseKeysDoc = stripUndefinedDeep({
     items: privateEntries,
     updatedAt: serverTimestamp(),
-  };
+  });
 
-  return { caseData: sanitized, caseKeysDoc };
+  return { caseData: stripUndefinedDeep(sanitized), caseKeysDoc };
 };
 
 const buildCaseRepairPatch = (data = {}) => {
@@ -979,7 +1025,7 @@ export const subscribeToCases = (onData, onError) => {
 };
 
 export const subscribeToActiveCases = (onData, onError) => {
-  const q = query(collection(db, FirestorePaths.CASES_COLLECTION()), where('_deleted', '!=', true));
+  const q = query(collection(db, FirestorePaths.CASES_COLLECTION()), where('_deleted', '==', false));
   return onSnapshot(q, (snap) => {
     const data = snap.docs.map((d) => toNormalizedCaseModel(d.id, d.data()));
     onData(data);
@@ -1029,6 +1075,76 @@ export const createCase = async (data) => {
   };
   try {
     console.info('[caseService] createCase: begin', debugContext);
+    console.debug('[caseService] createCase: payload snapshot', {
+      visibleToUserIds: caseData?.visibleToUserIds,
+      _deleted: caseData?._deleted,
+      caseLevel: caseData?.caseLevel,
+      auditArea: caseData?.auditArea,
+      moduleId: caseData?.moduleId,
+      pathId: caseData?.pathId,
+      tier: caseData?.tier,
+      hasInstruction: Boolean(caseData?.instruction),
+      referenceDocumentsCount: Array.isArray(caseData?.referenceDocuments)
+        ? caseData.referenceDocuments.length
+        : 0,
+      invoiceMappingsCount: Array.isArray(caseData?.invoiceMappings)
+        ? caseData.invoiceMappings.length
+        : 0,
+    });
+    const payloadSnapshot = {
+      visibleToUserIds: caseData?.visibleToUserIds,
+      _deleted: caseData?._deleted,
+      caseLevel: caseData?.caseLevel,
+      auditArea: caseData?.auditArea,
+      moduleId: caseData?.moduleId,
+      pathId: caseData?.pathId,
+      tier: caseData?.tier,
+      hasInstruction: Boolean(caseData?.instruction),
+      referenceDocumentsCount: Array.isArray(caseData?.referenceDocuments)
+        ? caseData.referenceDocuments.length
+        : 0,
+      invoiceMappingsCount: Array.isArray(caseData?.invoiceMappings)
+        ? caseData.invoiceMappings.length
+        : 0,
+    };
+    console.debug('[caseService] createCase: payload snapshot json', JSON.stringify(payloadSnapshot));
+    const visibleToUserIds = Array.isArray(caseData?.visibleToUserIds) ? caseData.visibleToUserIds : [];
+    const currentUid = auth?.currentUser?.uid || null;
+    console.debug('[caseService] createCase: rule check', {
+      authPresent: Boolean(auth?.currentUser),
+      uid: currentUid,
+      publicVisible: caseData?.publicVisible,
+      deleted: caseData?._deleted,
+      status: caseData?.status,
+      statusValid: VALID_CASE_STATUSES.includes(caseData?.status),
+      visibleToUserIdsCount: visibleToUserIds.length,
+      visibleToUserIdsIncludesUid: currentUid ? visibleToUserIds.includes(currentUid) : false,
+      auditItemsCount: Array.isArray(caseData?.auditItems) ? caseData.auditItems.length : 0,
+      auditItemTypeSample: caseData?.auditItems?.[0]?.type,
+      auditItemIdSample: caseData?.auditItems?.[0]?.id,
+      updatedAtType: typeof caseData?.updatedAt,
+      createdAtType: typeof caseData?.createdAt,
+      updatedAtIsTimestamp: caseData?.updatedAt instanceof Timestamp,
+      createdAtIsTimestamp: caseData?.createdAt instanceof Timestamp,
+    });
+    const ruleCheckSnapshot = {
+      authPresent: Boolean(auth?.currentUser),
+      uid: currentUid,
+      publicVisible: caseData?.publicVisible,
+      deleted: caseData?._deleted,
+      status: caseData?.status,
+      statusValid: VALID_CASE_STATUSES.includes(caseData?.status),
+      visibleToUserIdsCount: visibleToUserIds.length,
+      visibleToUserIdsIncludesUid: currentUid ? visibleToUserIds.includes(currentUid) : false,
+      auditItemsCount: Array.isArray(caseData?.auditItems) ? caseData.auditItems.length : 0,
+      auditItemTypeSample: caseData?.auditItems?.[0]?.type,
+      auditItemIdSample: caseData?.auditItems?.[0]?.id,
+      updatedAtType: typeof caseData?.updatedAt,
+      createdAtType: typeof caseData?.createdAt,
+      updatedAtIsTimestamp: caseData?.updatedAt instanceof Timestamp,
+      createdAtIsTimestamp: caseData?.createdAt instanceof Timestamp,
+    };
+    console.debug('[caseService] createCase: rule check json', JSON.stringify(ruleCheckSnapshot));
     const docRef = await addDoc(collectionRef, caseData);
     await setDoc(doc(db, FirestorePaths.CASE_KEYS_DOCUMENT(docRef.id)), caseKeysDoc);
     console.info('[caseService] createCase: success', { caseId: docRef.id });
@@ -1094,6 +1210,15 @@ export const updateCase = async (caseId, data) => {
 export const markCaseDeleted = async (caseId) => {
   const ref = doc(db, FirestorePaths.CASE_DOCUMENT(caseId));
   await setDoc(ref, { _deleted: true, updatedAt: serverTimestamp() }, { merge: true });
+};
+
+export const deleteRetakeAttempt = async ({ caseId }) => {
+  if (!caseId) {
+    throw new Error('deleteRetakeAttempt requires a caseId.');
+  }
+  const callable = httpsCallable(functions, 'deleteRetakeAttempt');
+  const result = await callable({ appId, caseId });
+  return result?.data || null;
 };
 
 const toMillis = (timestamp) => {
@@ -1196,7 +1321,7 @@ export const buildStudentCasesQuery = ({
   const casesCollection = collection(db, FirestorePaths.CASES_COLLECTION());
   const now = getNow();
   let filterConstraint = and(
-    where('_deleted', '!=', true),
+    where('_deleted', '==', false),
     or(where('publicVisible', '==', true), where('visibleToUserIds', 'array-contains', uid))
   );
 

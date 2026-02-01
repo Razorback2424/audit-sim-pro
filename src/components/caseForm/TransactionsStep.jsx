@@ -387,13 +387,27 @@ export default function TransactionsStep({
               <p className="text-xs text-gray-500">Tolerable misstatement and sampling expectations for additions/disposals.</p>
             </div>
           </div>
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-3 md:grid-cols-5">
             <Input
               type="number"
               inputMode="decimal"
               placeholder="Tolerable Misstatement"
               value={faRisk.tolerableMisstatement}
               onChange={(e) => setFaRisk((prev) => ({ ...prev, tolerableMisstatement: e.target.value }))}
+            />
+            <Input
+              type="number"
+              inputMode="decimal"
+              placeholder="Capitalization Threshold"
+              value={faRisk.capitalizationThreshold}
+              onChange={(e) => setFaRisk((prev) => ({ ...prev, capitalizationThreshold: e.target.value }))}
+            />
+            <Input
+              type="number"
+              inputMode="decimal"
+              placeholder="Weighted Avg Life (years)"
+              value={faRisk.weightedAverageLife}
+              onChange={(e) => setFaRisk((prev) => ({ ...prev, weightedAverageLife: e.target.value }))}
             />
             <Select
               value={faRisk.strategy}
@@ -430,10 +444,19 @@ export default function TransactionsStep({
               <div key={item._tempId} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm space-y-3">
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   <Input
-                    placeholder="Vendor / Description"
+                    placeholder="Vendor"
                     value={item.vendor}
                     onChange={(e) =>
                       setFaAdditions((prev) => prev.map((row, i) => (i === index ? { ...row, vendor: e.target.value } : row)))
+                    }
+                  />
+                  <Input
+                    placeholder="Asset description"
+                    value={item.description}
+                    onChange={(e) =>
+                      setFaAdditions((prev) =>
+                        prev.map((row, i) => (i === index ? { ...row, description: e.target.value } : row))
+                      )
                     }
                   />
                   <Input
@@ -460,6 +483,28 @@ export default function TransactionsStep({
                     value={item.glAccount}
                     onChange={(e) =>
                       setFaAdditions((prev) => prev.map((row, i) => (i === index ? { ...row, glAccount: e.target.value } : row)))
+                    }
+                  />
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    placeholder="Capitalization threshold"
+                    value={item.amountThreshold}
+                    onChange={(e) =>
+                      setFaAdditions((prev) =>
+                        prev.map((row, i) => (i === index ? { ...row, amountThreshold: e.target.value } : row))
+                      )
+                    }
+                  />
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    placeholder="Useful life (years)"
+                    value={item.usefulLife}
+                    onChange={(e) =>
+                      setFaAdditions((prev) =>
+                        prev.map((row, i) => (i === index ? { ...row, usefulLife: e.target.value } : row))
+                      )
                     }
                   />
                   <Select
@@ -541,6 +586,15 @@ export default function TransactionsStep({
                     }
                   />
                   <Input
+                    placeholder="Buyer / Counterparty"
+                    value={item.vendor}
+                    onChange={(e) =>
+                      setFaDisposals((prev) =>
+                        prev.map((row, i) => (i === index ? { ...row, vendor: e.target.value } : row))
+                      )
+                    }
+                  />
+                  <Input
                     type="number"
                     inputMode="decimal"
                     placeholder="Proceeds"
@@ -559,6 +613,28 @@ export default function TransactionsStep({
                     onChange={(e) =>
                       setFaDisposals((prev) =>
                         prev.map((row, i) => (i === index ? { ...row, nbv: e.target.value } : row))
+                      )
+                    }
+                  />
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    placeholder="Gain/Loss per books"
+                    value={item.gainLossPerBooks}
+                    onChange={(e) =>
+                      setFaDisposals((prev) =>
+                        prev.map((row, i) => (i === index ? { ...row, gainLossPerBooks: e.target.value } : row))
+                      )
+                    }
+                  />
+                  <Input
+                    type="number"
+                    inputMode="decimal"
+                    placeholder="Expected gain/loss"
+                    value={item.expectedGainLoss}
+                    onChange={(e) =>
+                      setFaDisposals((prev) =>
+                        prev.map((row, i) => (i === index ? { ...row, expectedGainLoss: e.target.value } : row))
                       )
                     }
                   />

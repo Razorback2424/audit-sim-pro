@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Users, Briefcase, User, Loader2 } from 'lucide-react';
+import { Users, Briefcase, User, Crown, Loader2 } from 'lucide-react';
 import { Button, useAuth, useUser, useRoute } from '../AppCore';
 
 export default function RoleSelectionPage() {
@@ -45,6 +45,9 @@ export default function RoleSelectionPage() {
         <h1 className="text-3xl font-bold text-gray-800 mb-6">Select Your Role</h1>
         <p className="text-gray-600 mb-8">Choose how you&apos;ll be using AuditSim Pro.</p>
         <div className="space-y-4">
+          <Button onClick={() => handleSelectRole('owner')} className="w-full py-3 text-lg" isLoading={isSettingRole} disabled={isSettingRole}>
+            <Crown size={20} className="inline mr-2" /> Owner
+          </Button>
           <Button onClick={() => handleSelectRole('admin')} className="w-full py-3 text-lg" isLoading={isSettingRole} disabled={isSettingRole}>
             <Briefcase size={20} className="inline mr-2" /> Administrator / Instructor
           </Button>

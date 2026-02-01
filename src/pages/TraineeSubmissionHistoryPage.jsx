@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Button, useRoute, useAuth, useModal, appId } from '../AppCore';
 import { listUserSubmissions } from '../services/submissionService';
 import { fetchCase } from '../services/caseService';
-import { fetchProgressForCases } from '../services/progressService';
+import { fetchProgressForCases, saveProgress } from '../services/progressService';
 
 const formatTimestamp = (value) => {
   if (!value) return 'N/A';
@@ -215,7 +215,7 @@ export default function TraineeSubmissionHistoryPage() {
 
   const hasHistory = history.length > 0;
 
-  const handleRetakeClick = async (caseId, latestSubmittedAt) => {
+  const handleRetakeClick = async (caseId) => {
     if (!caseId) return;
     if (!userId) {
       navigate('/login');
@@ -223,6 +223,30 @@ export default function TraineeSubmissionHistoryPage() {
     }
 
     try {
+      const resetCaseProgress = async () => {
+        await saveProgress({
+          appId,
+          uid: userId,
+          caseId,
+          patch: {
+            percentComplete: 0,
+            state: 'not_started',
+            step: 'selection',
+            draft: {
+              selectedPaymentIds: [],
+              classificationDraft: {},
+              fixedAssetDraft: {},
+              cashLinkMap: {},
+              cashAdjustments: [],
+              cashSummary: {},
+            },
+            hasSuccessfulAttempt: false,
+          },
+          forceOverwrite: true,
+          clearActiveAttempt: true,
+        });
+      };
+
       const progressMap = await fetchProgressForCases({ appId, uid: userId, caseIds: [caseId] });
       const progress = progressMap.get(caseId);
       const percentComplete = Number(progress?.percentComplete || 0);
@@ -236,12 +260,13 @@ export default function TraineeSubmissionHistoryPage() {
       const hasDraft = !isSubmitted && meaningfulDraft;
 
       if (!hasDraft) {
-        navigate(`/trainee/case/${caseId}?retake=true`);
+        await resetCaseProgress();
+        navigate(`/trainee/case/${caseId}`);
         return;
       }
 
       showModal(
-        'You already have a draft in progress for this case. Continue where you left off or start over?',
+        'You already have a draft in progress for this case. Continue where you left off or restart the case?',
         'Draft in progress',
         (close) => (
           <>
@@ -249,32 +274,18 @@ export default function TraineeSubmissionHistoryPage() {
               Return to draft
             </Button>
             <Button
-              variant="danger"
+              variant="primary"
               onClick={() => {
                 close();
-                showModal(
-                  'Starting over will delete your current progress for this case. Are you sure you want to restart?',
-                  'Confirm restart',
-                  (hide) => (
-                    <>
-                      <Button variant="secondary" onClick={hide}>
-                        Keep my draft
-                      </Button>
-                      <Button
-                        variant="primary"
-                        onClick={() => {
-                          hide();
-                          navigate(`/trainee/case/${caseId}?retake=true`);
-                        }}
-                      >
-                        Yes, start over
-                      </Button>
-                    </>
-                  )
-                );
+                resetCaseProgress()
+                  .then(() => navigate(`/trainee/case/${caseId}`))
+                  .catch((err) => {
+                    console.error('Failed to restart case:', err);
+                    showModal('Could not restart this case right now. Please try again.', 'Retake unavailable');
+                  });
               }}
             >
-              Start over
+              Restart case
             </Button>
           </>
         )
@@ -350,7 +361,10 @@ export default function TraineeSubmissionHistoryPage() {
                     <p className="text-sm text-gray-500">Case ID: {entry.caseId}</p>
                   </div>
                   <div className="flex items-center gap-2">
-                    <Button variant="primary" onClick={() => handleRetakeClick(entry.caseId, latestAttempt?.submittedAt)}>
+                    <Button
+                      variant="primary"
+                      onClick={() => handleRetakeClick(entry.caseId)}
+                    >
                       Retake Case
                     </Button>
                   </div>

@@ -70,8 +70,33 @@ describe('submissionService', () => {
   });
 
   test('saveSubmission calls setDoc', async () => {
+    getDoc.mockResolvedValue({ data: () => ({ attempts: [] }) });
     await saveSubmission('u1', 'c1', { a: 1 });
     expect(setDoc).toHaveBeenCalled();
+  });
+
+  test('saveSubmission normalizes attempt metadata', async () => {
+    getDoc.mockResolvedValue({ data: () => ({ attempts: [{}, {}] }) });
+    await saveSubmission('u1', 'c1', {
+      caseId: 'c1',
+      caseName: 'Case',
+      attemptSummary: {
+        score: 90,
+        totalConsidered: 5,
+        missedExceptionsCount: 0,
+        falsePositivesCount: 0,
+        wrongClassificationCount: 0,
+        criticalIssuesCount: 0,
+      },
+      submittedAt: Timestamp.now(),
+    });
+
+    const [, payload] = setDoc.mock.calls[0];
+    expect(payload.attempts.attemptIndex).toBe(3);
+    expect(payload.attempts.attemptType).toBe('practice');
+    expect(payload.attempts.attemptSummary.attemptIndex).toBe(3);
+    expect(payload.attempts.attemptSummary.attemptType).toBe('practice');
+    expect(payload.attempts.attemptSummary.isBaseline).toBe(false);
   });
 
   test('fetchSubmissionsForCase returns submissions', async () => {

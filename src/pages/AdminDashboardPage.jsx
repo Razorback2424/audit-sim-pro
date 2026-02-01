@@ -1,10 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  FilePlus,
-  Edit3,
   ListFilter,
   List,
-  Trash2,
   Search,
   LayoutGrid,
   ChevronLeft,
@@ -15,7 +12,6 @@ import {
 } from 'lucide-react';
 import { Button, Input, Select, useRoute, useModal, useUser } from '../AppCore';
 import {
-  markCaseDeleted,
   repairLegacyCases,
   subscribeToAdminCaseSummary,
   subscribeToAdminCaseAlerts,
@@ -27,12 +23,15 @@ import {
 import { auditOrphanedInvoices } from '../services/storageAuditService';
 import { subscribeToRecentSubmissionActivity } from '../services/submissionService';
 import { fetchUsersWithProfiles } from '../services/userService';
+import { listCaseRecipes } from '../generation/recipeRegistry';
+import { fetchRecipe } from '../services/recipeService';
+import { seedCasePool } from '../services/attemptService';
 import AdvancedToolsMenu from '../components/admin/AdvancedToolsMenu';
 import DashboardMetrics from '../components/admin/DashboardMetrics';
 import SetupAlerts from '../components/admin/SetupAlerts';
 import RecentActivity from '../components/admin/RecentActivity';
 import QuickActions from '../components/admin/QuickActions';
-import { AUDIT_AREA_VALUES } from '../models/caseConstants';
+import { AUDIT_AREA_VALUES, getCaseLevelLabel } from '../models/caseConstants';
 
 const STATUS_OPTIONS = [
   { value: 'assigned', label: 'Assigned' },
@@ -48,6 +47,24 @@ const VIEW_OPTIONS = [
 ];
 
 const PAGE_SIZE_OPTIONS = [6, 12, 24, 48];
+
+const TIER_LABELS = {
+  foundations: 'Basics',
+  core: 'Core',
+  advanced: 'Advanced',
+};
+
+const humanizeToken = (value = '') =>
+  value
+    .split(/[-_]/g)
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(' ');
+
+const formatTierLabel = (tier) => TIER_LABELS[tier] || humanizeToken(tier) || 'Tier';
+const formatPathLabel = (pathId) => humanizeToken(pathId) || 'Path';
+const formatLevelLabel = (caseLevel, tier) =>
+  caseLevel ? getCaseLevelLabel(caseLevel) : formatTierLabel(tier);
 
 const STATUS_BADGE_VARIANTS = {
   submitted: 'bg-green-100 text-green-700',
@@ -97,6 +114,22 @@ const getAudienceLabel = (caseData) => {
   return 'All signed-in trainees';
 };
 
+const isRecipeConfigured = (detail) => {
+  const instruction = detail?.instruction || {};
+  const gateOptions = Array.isArray(instruction?.gateCheck?.options)
+    ? instruction.gateCheck.options
+    : [];
+  const hasGateQuestion = typeof instruction?.gateCheck?.question === 'string' && instruction.gateCheck.question.trim();
+  const hasCorrectOption = gateOptions.some((opt) => opt && (opt.correct || opt.isCorrect));
+  const videoValue =
+    typeof instruction?.visualAsset?.source_id === 'string'
+      ? instruction.visualAsset.source_id.trim()
+      : typeof instruction?.visualAsset?.url === 'string'
+      ? instruction.visualAsset.url.trim()
+      : '';
+  return Boolean(hasGateQuestion && gateOptions.length > 0 && hasCorrectOption && videoValue);
+};
+
 export default function AdminDashboardPage() {
   const { navigate, query, setQuery } = useRoute();
   const { showModal } = useModal();
@@ -116,6 +149,9 @@ export default function AdminDashboardPage() {
   });
   const [alerts, setAlerts] = useState([]);
   const [recentActivity, setRecentActivity] = useState([]);
+  const [recipeDetails, setRecipeDetails] = useState([]);
+  const [recipesLoading, setRecipesLoading] = useState(true);
+  const [seedingRecipeIds, setSeedingRecipeIds] = useState(() => new Set());
   const [loadingSummary, setLoadingSummary] = useState(true);
   const [loadingUsers, setLoadingUsers] = useState(true);
   const [loadingAlerts, setLoadingAlerts] = useState(true);
@@ -132,7 +168,6 @@ export default function AdminDashboardPage() {
   });
   const [searchInput, setSearchInput] = useState(() => (query?.search ?? '').trim());
   const [debouncedSearch, setDebouncedSearch] = useState(() => (query?.search ?? '').trim());
-  const [selectedCaseIds, setSelectedCaseIds] = useState([]);
   const [viewMode, setViewMode] = useState(() => {
     try {
       const stored = window.localStorage.getItem('auditsim.adminDashboard.viewMode');
@@ -152,7 +187,36 @@ export default function AdminDashboardPage() {
       return 12;
     }
   });
-  const isAdmin = role === 'admin';
+  const isAdmin = role === 'admin' || role === 'owner';
+  const handleSeedPool = useCallback(
+    async ({ moduleId, count }) => {
+      if (!moduleId) return;
+      if (seedingRecipeIds.has(moduleId)) return;
+      setSeedingRecipeIds((prev) => {
+        const next = new Set(prev);
+        next.add(moduleId);
+        return next;
+      });
+      try {
+        const result = await seedCasePool({ moduleId, count });
+        const createdCount = Number(result?.created || 0);
+        showModal(
+          `Seeded ${createdCount || count} case${createdCount === 1 ? '' : 's'} for this recipe.`,
+          'Case pool seeded'
+        );
+      } catch (err) {
+        console.error('[AdminDashboard] Failed to seed case pool', err);
+        showModal(err?.message || 'Unable to seed the case pool.', 'Seeding error');
+      } finally {
+        setSeedingRecipeIds((prev) => {
+          const next = new Set(prev);
+          next.delete(moduleId);
+          return next;
+        });
+      }
+    },
+    [seedingRecipeIds, showModal]
+  );
   const handleNavigate = useCallback(
     (target) => {
       if (!target || typeof target !== 'string') return;
@@ -204,6 +268,7 @@ export default function AdminDashboardPage() {
     setSearchInput((query?.search ?? '').trim());
   }, [query?.search]);
 
+
   useEffect(() => {
     const normalized = debouncedSearch ? debouncedSearch : undefined;
     const current = (query?.search ?? '').trim() || undefined;
@@ -220,10 +285,6 @@ export default function AdminDashboardPage() {
       console.warn('[AdminDashboard] Failed to persist view mode:', err);
     }
   }, [viewMode]);
-
-  useEffect(() => {
-    setSelectedCaseIds([]);
-  }, [casesState.items, casesState.page]);
 
   useEffect(() => {
     try {
@@ -259,6 +320,7 @@ export default function AdminDashboardPage() {
     const valid = CASE_SORT_CHOICES.find((option) => option.value === query.sort);
     return valid ? valid.value : DEFAULT_CASE_SORT;
   }, [query?.sort]);
+
 
   const currentPage = useMemo(() => {
     const parsed = Number.parseInt(query?.page ?? '', 10);
@@ -327,7 +389,7 @@ export default function AdminDashboardPage() {
   ]);
 
   useEffect(() => {
-    if (loadingRole || role !== 'admin') {
+    if (loadingRole || !isAdmin) {
       if (!loadingRole) {
         setLoadingSummary(false);
       }
@@ -354,7 +416,50 @@ export default function AdminDashboardPage() {
   }, [showModal, role, loadingRole]);
 
   useEffect(() => {
-    if (loadingRole || role !== 'admin') {
+    if (loadingRole || !isAdmin) {
+      if (!loadingRole) {
+        setRecipesLoading(false);
+      }
+      return;
+    }
+    let cancelled = false;
+    const loadRecipeDetails = async () => {
+      try {
+        setRecipesLoading(true);
+        const coded = listCaseRecipes();
+        const entries = await Promise.all(
+          coded.map(async (recipe) => {
+            const detail = await fetchRecipe(recipe.id).catch(() => null);
+            return {
+              ...recipe,
+              detail,
+              isConfigured: isRecipeConfigured(detail),
+              recipeVersion: detail?.recipeVersion || recipe.version || 1,
+            };
+          })
+        );
+        if (!cancelled) {
+          setRecipeDetails(entries);
+        }
+      } catch (error) {
+        console.error('Error loading recipe details:', error);
+        if (!cancelled) {
+          setRecipeDetails([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setRecipesLoading(false);
+        }
+      }
+    };
+    loadRecipeDetails();
+    return () => {
+      cancelled = true;
+    };
+  }, [loadingRole, role]);
+
+  useEffect(() => {
+    if (loadingRole || !isAdmin) {
       if (!loadingRole) {
         setLoadingUsers(false);
       }
@@ -383,7 +488,7 @@ export default function AdminDashboardPage() {
   }, [showModal, role, loadingRole]);
 
   useEffect(() => {
-    if (loadingRole || role !== 'admin') {
+    if (loadingRole || !isAdmin) {
       if (!loadingRole) {
         setLoadingAlerts(false);
       }
@@ -410,7 +515,7 @@ export default function AdminDashboardPage() {
   }, [showModal, role, loadingRole]);
 
   useEffect(() => {
-    if (loadingRole || role !== 'admin') {
+    if (loadingRole || !isAdmin) {
       return;
     }
 
@@ -589,94 +694,6 @@ export default function AdminDashboardPage() {
     }
   };
 
-  const deleteCase = async (caseId) => {
-    showModal(
-      <>
-        <p className="text-gray-700">Are you sure you want to delete this case? This action marks it as deleted but does not permanently remove data immediately.</p>
-      </>,
-      'Confirm Deletion',
-      (hideModal) => (
-        <>
-          <Button onClick={hideModal} variant="secondary">Cancel</Button>
-          <Button
-            onClick={async () => {
-              hideModal();
-              try {
-                await markCaseDeleted(caseId);
-                showModal('Case marked for deletion.', 'Success');
-                setRefreshToken((value) => value + 1);
-              } catch (error) {
-                console.error('Error deleting case:', error);
-                showModal('Error deleting case: ' + error.message, 'Error');
-              }
-            }}
-            variant="danger"
-            className="ml-2"
-          >
-            Confirm Delete
-          </Button>
-        </>
-      )
-    );
-  };
-
-  const selectedCount = selectedCaseIds.length;
-  const currentPageIds = casesState.items.map((item) => item.id);
-  const allSelected = currentPageIds.length > 0 && currentPageIds.every((id) => selectedCaseIds.includes(id));
-  const someSelected = selectedCount > 0 && !allSelected;
-
-  const toggleSelectCase = (caseId) => {
-    setSelectedCaseIds((prev) => {
-      if (prev.includes(caseId)) {
-        return prev.filter((id) => id !== caseId);
-      }
-      return [...prev, caseId];
-    });
-  };
-
-  const toggleSelectAll = () => {
-    setSelectedCaseIds((prev) => {
-      if (allSelected) {
-        return prev.filter((id) => !currentPageIds.includes(id));
-      }
-      const merged = new Set([...prev, ...currentPageIds]);
-      return Array.from(merged);
-    });
-  };
-
-  const handleBulkDelete = () => {
-    if (selectedCaseIds.length === 0) return;
-    showModal(
-      <p className="text-gray-700">
-        Delete {selectedCaseIds.length} selected case{selectedCaseIds.length === 1 ? '' : 's'}? This will mark them as deleted.
-      </p>,
-      'Confirm Bulk Delete',
-      (hideModal) => (
-        <>
-          <Button onClick={hideModal} variant="secondary">Cancel</Button>
-          <Button
-            onClick={async () => {
-              hideModal();
-              try {
-                await Promise.all(selectedCaseIds.map((caseId) => markCaseDeleted(caseId)));
-                showModal('Selected cases marked for deletion.', 'Success');
-                setSelectedCaseIds([]);
-                setRefreshToken((value) => value + 1);
-              } catch (error) {
-                console.error('Error deleting cases:', error);
-                showModal('Error deleting cases: ' + error.message, 'Error');
-              }
-            }}
-            variant="danger"
-            className="ml-2"
-          >
-            Delete selected
-          </Button>
-        </>
-      )
-    );
-  };
-
   const totalCases = casesState.total;
   const effectivePage = casesState.page;
   const effectivePageSize = casesState.pageSize || pageSize;
@@ -799,14 +816,13 @@ export default function AdminDashboardPage() {
         <p className="text-sm text-gray-600">
           {debouncedSearch || filtersActive
             ? 'Adjust your search or filters to see more results.'
-            : 'Get started by creating a new audit case for trainees.'}
+            : 'Trainee attempts will appear here once they start modules.'}
         </p>
       </div>
       <div className="flex justify-center gap-2">
         {(debouncedSearch || filtersActive) && (
           <Button onClick={clearFilters} variant="secondary">Clear filters</Button>
         )}
-        <Button onClick={() => navigate('/admin/create-case')} variant="primary">Create case</Button>
       </div>
     </div>
   );
@@ -892,17 +908,8 @@ export default function AdminDashboardPage() {
               </dl>
             </div>
             <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <Button onClick={() => navigate(`/admin/case-overview/${caseData.id}`)} variant="secondary" className="justify-center">
-                <Edit3 size={16} className="mr-2" /> View case
-              </Button>
               <Button onClick={() => navigate(`/admin/case-submissions/${caseData.id}`)} variant="secondary" className="justify-center">
                 <ListFilter size={16} className="mr-2" /> View submissions
-              </Button>
-              <Button onClick={() => navigate(`/admin/edit-case/${caseData.id}`)} variant="secondary" className="justify-center">
-                <Edit3 size={16} className="mr-2" /> Edit case
-              </Button>
-              <Button onClick={() => deleteCase(caseData.id)} variant="danger" className="justify-center">
-                <Trash2 size={16} className="mr-2" /> Delete case
               </Button>
             </div>
           </div>
@@ -913,17 +920,8 @@ export default function AdminDashboardPage() {
 
   const renderCaseList = () => (
     <div className="bg-white rounded-lg shadow divide-y divide-gray-100">
-      <div className="grid grid-cols-[2.5rem_4fr_2fr_3fr_2fr_2.5fr] items-center gap-3 px-4 py-3 text-xs uppercase tracking-wide text-gray-500">
-        <input
-          type="checkbox"
-          checked={allSelected}
-          ref={(el) => {
-            if (el) el.indeterminate = someSelected;
-          }}
-          onChange={toggleSelectAll}
-          aria-label="Select all cases on this page"
-        />
-        <span>Case</span>
+      <div className="grid grid-cols-[4fr_2fr_3fr_2fr_2.5fr] items-center gap-3 px-4 py-3 text-xs uppercase tracking-wide text-gray-500">
+        <span>Attempt</span>
         <span>Status</span>
         <span>Audience</span>
         <span>Updated</span>
@@ -935,20 +933,13 @@ export default function AdminDashboardPage() {
         const updatedLabel = formatDateLabel(caseData.updatedAt || caseData.createdAt);
         const caseAlerts = alertsByCaseId.get(caseData.id) || [];
         const hasAlerts = caseAlerts.length > 0;
-        const isSelected = selectedCaseIds.includes(caseData.id);
         return (
           <div
             key={caseData.id}
-            className={`grid grid-cols-[2.5rem_4fr_2fr_3fr_2fr_2.5fr] items-center gap-3 px-4 py-3 ${
+            className={`grid grid-cols-[4fr_2fr_3fr_2fr_2.5fr] items-center gap-3 px-4 py-3 ${
               hasAlerts ? 'bg-amber-50' : 'bg-white'
             }`}
           >
-            <input
-              type="checkbox"
-              checked={isSelected}
-              onChange={() => toggleSelectCase(caseData.id)}
-              aria-label={`Select ${caseData.caseName || 'case'}`}
-            />
             <div>
               <div className="flex items-center gap-2 font-semibold text-gray-900">
                 <span>{caseData.caseName || 'Untitled case'}</span>
@@ -969,14 +960,8 @@ export default function AdminDashboardPage() {
             <div className="text-sm text-gray-700">{audienceLabel}</div>
             <div className="text-sm text-gray-700">{updatedLabel}</div>
             <div className="flex items-center justify-end gap-2 flex-nowrap">
-              <Button onClick={() => navigate(`/admin/case-overview/${caseData.id}`)} variant="secondary" className="px-3 py-1 text-xs">
-                View
-              </Button>
-              <Button onClick={() => navigate(`/admin/edit-case/${caseData.id}`)} variant="secondary" className="px-3 py-1 text-xs">
-                Edit
-              </Button>
-              <Button onClick={() => deleteCase(caseData.id)} variant="danger" className="px-3 py-1 text-xs">
-                Delete
+              <Button onClick={() => navigate(`/admin/case-submissions/${caseData.id}`)} variant="secondary" className="px-3 py-1 text-xs">
+                Submissions
               </Button>
             </div>
           </div>
@@ -991,14 +976,6 @@ export default function AdminDashboardPage() {
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <h1 className="text-3xl font-bold text-gray-800">Admin Dashboard</h1>
           <div className="flex flex-wrap items-center gap-3">
-            <Button
-              onClick={() => navigate('/admin/create-case')}
-              variant="primary"
-              className="px-6 py-3 text-base shadow-lg"
-            >
-              <FilePlus size={20} className="mr-2" />
-              Create case
-            </Button>
             <AdvancedToolsMenu
               canAccess={isAdmin}
               loadingAccess={loadingRole}
@@ -1017,11 +994,69 @@ export default function AdminDashboardPage() {
           <RecentActivity activity={recentActivity} loading={loadingActivity} onNavigate={handleNavigate} />
           <QuickActions onNavigate={handleNavigate} />
         </div>
+        <section id="recipe-seeding" className="bg-white border border-gray-200 rounded-lg shadow-sm p-5 space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-semibold text-gray-800">Recipes & case pool</h2>
+              <p className="text-sm text-gray-600">
+                Configure instruction and seed the initial case pool for each recipe.
+              </p>
+            </div>
+          </div>
+          {recipesLoading ? (
+            <div className="text-sm text-gray-500">Loading recipe details…</div>
+          ) : recipeDetails.length === 0 ? (
+            <div className="text-sm text-gray-500">No coded recipes found.</div>
+          ) : (
+            <div className="space-y-3">
+              {recipeDetails.map((recipe) => (
+                <div
+                  key={recipe.id}
+                  className={`flex flex-col gap-2 rounded-lg border p-4 sm:flex-row sm:items-center sm:justify-between ${
+                    recipe.isConfigured ? 'border-gray-200 bg-white' : 'border-rose-200 bg-rose-50'
+                  }`}
+                >
+                  <div>
+                    <div className="text-sm font-semibold text-gray-900">
+                      {recipe.moduleTitle || recipe.label || recipe.id}
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      {formatPathLabel(recipe.pathId)} · {formatLevelLabel(recipe.caseLevel, recipe.tier)} · {recipe.auditArea || 'area'}
+                    </div>
+                    <div className="text-xs text-gray-400 mt-1">v{recipe.recipeVersion || 1}</div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={() => navigate(`/admin/edit-recipe/${recipe.id}`)}
+                    >
+                      {recipe.isConfigured ? 'Edit details' : 'Add details'}
+                    </Button>
+                    <Button
+                      variant="primary"
+                      onClick={() => handleSeedPool({ moduleId: recipe.id, count: 10 })}
+                      isLoading={seedingRecipeIds.has(recipe.id)}
+                    >
+                      Seed 10 cases
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={() => handleSeedPool({ moduleId: recipe.id, count: 1 })}
+                      isLoading={seedingRecipeIds.has(recipe.id)}
+                    >
+                      Seed 1
+                    </Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
         <section id="cases" className="space-y-4">
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-2">
-              <h2 className="text-2xl font-semibold text-gray-800">Cases</h2>
-              <p className="text-sm text-gray-600">Search, filter, and organize cases for your trainees.</p>
+              <h2 className="text-2xl font-semibold text-gray-800">Attempts</h2>
+              <p className="text-sm text-gray-600">Review trainee attempts generated from coded recipes.</p>
             </div>
             <div className="bg-white rounded-lg shadow-md p-4 md:p-6 space-y-6">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
@@ -1031,9 +1066,9 @@ export default function AdminDashboardPage() {
                     type="search"
                     value={searchInput}
                     onChange={(event) => setSearchInput(event.target.value)}
-                    placeholder="Search cases by name or ID"
+                    placeholder="Search attempts by name or ID"
                     className="pl-10"
-                    aria-label="Search cases"
+                    aria-label="Search attempts"
                   />
                   {searchInput && (
                     <button
@@ -1079,21 +1114,9 @@ export default function AdminDashboardPage() {
                     })}
                   </div>
                   <div className="flex items-center gap-2">
-                    {selectedCount > 0 ? (
-                      <>
-                        <span className="text-sm text-gray-600">{selectedCount} selected</span>
-                        <Button onClick={handleBulkDelete} variant="danger" className="px-3 py-2 text-sm">
-                          Delete selected
-                        </Button>
-                        <Button onClick={() => setSelectedCaseIds([])} variant="secondary" className="px-3 py-2 text-sm">
-                          Clear
-                        </Button>
-                      </>
-                    ) : (
-                      <span className="text-xs text-gray-500">
-                        {viewMode === 'list' ? 'Select cases to bulk delete.' : 'Switch to list view to select multiple.'}
-                      </span>
-                    )}
+                    <span className="text-xs text-gray-500">
+                      Bulk actions are disabled for generated attempts.
+                    </span>
                   </div>
                 </div>
               </div>

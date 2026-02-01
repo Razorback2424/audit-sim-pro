@@ -1,14 +1,21 @@
 import React from 'react';
-import { FilePlus, Users, AlertTriangle, ClipboardList } from 'lucide-react';
+import { Users, AlertTriangle, ClipboardList, FolderKanban, FileText, Inbox } from 'lucide-react';
 import { Button } from '../../AppCore';
 
 const ACTIONS = [
   {
-    key: 'create-case',
-    label: 'Create a case',
-    description: 'Start a new simulation with tailored documents.',
-    icon: FilePlus,
-    path: '/admin/create-case',
+    key: 'manage-cases',
+    label: 'Manage cases',
+    description: 'Review active cases and delete stale drafts.',
+    icon: FolderKanban,
+    path: '/admin/cases',
+  },
+  {
+    key: 'seed-case-pool',
+    label: 'Seed case pool',
+    description: 'Generate the initial set of cases for each recipe.',
+    icon: Inbox,
+    path: '/admin#recipe-seeding',
   },
   {
     key: 'manage-users',
@@ -29,7 +36,14 @@ const ACTIONS = [
     label: 'Check submissions',
     description: 'Monitor trainee work across cases.',
     icon: ClipboardList,
-    path: '/admin/case-submissions',
+    path: '/admin#cases',
+  },
+  {
+    key: 'debug-docs',
+    label: 'Manage debug docs',
+    description: 'Generate and review standalone reference docs.',
+    icon: FileText,
+    path: '/admin/debug-docs',
   },
 ];
 
@@ -40,7 +54,7 @@ const QuickActions = ({ onNavigate }) => {
         <h2 className="text-xl font-semibold text-gray-800">Quick actions</h2>
         <button
           type="button"
-          onClick={() => onNavigate?.('/admin/case-overview')}
+          onClick={() => onNavigate?.('/admin/cases')}
           className="text-sm font-medium text-blue-600 hover:text-blue-700"
         >
           See all

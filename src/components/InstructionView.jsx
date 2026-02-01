@@ -19,7 +19,9 @@ const InstructionView = ({
   instructionData,
   onStartSimulation,
   ctaLabel = 'Begin Simulation',
+  gateRequired = true,
   className = '',
+  onGateAttempt,
 }) => {
   const [selectedOptionId, setSelectedOptionId] = useState('');
   const [feedback, setFeedback] = useState(null);
@@ -73,9 +75,11 @@ const InstructionView = ({
           gateCheck.success_message ||
           'Clear for takeoff. Enter the cockpit.',
       });
+      onGateAttempt?.({ correct: true, selectedOptionId });
       onStartSimulation?.();
     } else {
       setFeedback({ type: 'error', message: failureMessage });
+      onGateAttempt?.({ correct: false, selectedOptionId });
     }
   };
 
@@ -132,6 +136,14 @@ const InstructionView = ({
   };
 
   const feedbackConfig = feedback ? feedbackTone[feedback.type] || feedbackTone.warning : null;
+
+  const handlePrimaryAction = () => {
+    if (gateRequired) {
+      handleGateCheck();
+      return;
+    }
+    onStartSimulation?.();
+  };
 
   return (
     <div
@@ -192,6 +204,12 @@ const InstructionView = ({
               ))}
             </div>
 
+            {!gateRequired ? (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
+                Gate check cleared. You can return to the simulation without re-answering.
+              </div>
+            ) : null}
+
             {feedback && feedbackConfig ? (
               <div className={`flex items-start gap-3 rounded-lg border px-3 py-2 text-sm ${feedbackConfig.toneClass}`}>
                 <feedbackConfig.Icon size={18} className="mt-0.5" />
@@ -199,9 +217,20 @@ const InstructionView = ({
               </div>
             ) : null}
 
-            <Button onClick={handleGateCheck} className="w-full flex items-center justify-center gap-2">
-              <Play size={18} /> {ctaLabel}
-            </Button>
+            <div className="space-y-2">
+              <Button onClick={handlePrimaryAction} className="w-full flex items-center justify-center gap-2">
+                <Play size={18} /> {gateRequired ? ctaLabel : 'Return to Simulation'}
+              </Button>
+              {!gateRequired ? (
+                <Button
+                  variant="secondary"
+                  onClick={handleGateCheck}
+                  className="w-full flex items-center justify-center gap-2"
+                >
+                  Retake Gate Check
+                </Button>
+              ) : null}
+            </div>
           </div>
         </aside>
       </div>

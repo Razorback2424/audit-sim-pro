@@ -10,12 +10,14 @@ import { useAuth } from './AuthContext';
 import { useModal } from './ModalContext';
 import { cacheRole, getCachedRole } from '../services/roleService';
 import { fetchUserProfile, upsertUserProfile, ensureOrgIdForUser } from '../services/userService';
+import { fetchUserBilling, subscribeUserBilling } from '../services/billingService';
 import { db, FirestorePaths } from '../services/firebase';
 
 const ROLE_PRIORITY = {
   trainee: 1,
   instructor: 2,
   admin: 3,
+  owner: 4,
 };
 
 const normalizeRoleValue = (value) => {
@@ -39,6 +41,8 @@ const UserContext = createContext({
   role: null,
   loadingRole: true,
   userProfile: null,
+  billing: null,
+  loadingBilling: true,
   setRole: () => {},
 });
 
@@ -48,10 +52,13 @@ export const UserProvider = ({ children }) => {
   const [role, setRoleState] = useState(null);
   const [loadingRole, setLoadingRole] = useState(true);
   const [userProfile, setUserProfile] = useState(null);
+  const [billing, setBilling] = useState(null);
+  const [loadingBilling, setLoadingBilling] = useState(true);
 
   useEffect(() => {
     let active = true;
     let unsubscribeRole = null;
+    let unsubscribeBilling = null;
 
     const load = async () => {
       if (!currentUser || !currentUser.uid) {
@@ -59,6 +66,8 @@ export const UserProvider = ({ children }) => {
           setRoleState(null);
           setUserProfile(null);
           setLoadingRole(false);
+          setBilling(null);
+          setLoadingBilling(false);
           console.info('[UserProvider] No authenticated user; role reset.');
         }
         return;
@@ -177,6 +186,34 @@ export const UserProvider = ({ children }) => {
         console.error('[UserProvider] Profile fetch error:', err);
         if (active) setUserProfile(null);
       }
+
+      try {
+        setLoadingBilling(true);
+        const initialBilling = await fetchUserBilling({ uid: currentUser.uid });
+        if (active) {
+          setBilling(initialBilling);
+        }
+        unsubscribeBilling = subscribeUserBilling(
+          { uid: currentUser.uid },
+          (nextBilling) => {
+            if (!active) return;
+            setBilling(nextBilling);
+            setLoadingBilling(false);
+          },
+          (error) => {
+            if (!active) return;
+            console.error('[UserProvider] Billing subscription error:', error);
+            setBilling(initialBilling || null);
+            setLoadingBilling(false);
+          }
+        );
+      } catch (err) {
+        if (active) {
+          console.error('[UserProvider] Billing fetch error:', err);
+          setBilling(null);
+          setLoadingBilling(false);
+        }
+      }
     };
 
     load();
@@ -185,6 +222,9 @@ export const UserProvider = ({ children }) => {
       active = false;
       if (unsubscribeRole) {
         unsubscribeRole();
+      }
+      if (unsubscribeBilling) {
+        unsubscribeBilling();
       }
     };
   }, [currentUser]);
@@ -310,7 +350,7 @@ export const UserProvider = ({ children }) => {
   };
 
   return (
-    <UserContext.Provider value={{ role, loadingRole, userProfile, setRole }}>
+    <UserContext.Provider value={{ role, loadingRole, userProfile, billing, loadingBilling, setRole }}>
       {children}
     </UserContext.Provider>
   );

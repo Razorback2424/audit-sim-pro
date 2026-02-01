@@ -18,7 +18,7 @@ const Navbar = () => {
   const { role } = useUser();
 
   const dashboardPath = useMemo(() => {
-    if (role === 'admin') return '/admin';
+    if (role === 'admin' || role === 'owner') return '/admin';
     if (role === 'instructor') return '/instructor';
     if (role === 'trainee') return '/trainee';
     return '/home';
@@ -94,7 +94,7 @@ const Hero = () => {
       <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-center">
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-900/30 border border-blue-800 text-blue-300 text-xs font-medium mb-8">
           <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></span>
-          Now Available for Spring 2025 Semester
+          Live demo available now
         </div>
 
         <h1 className="text-5xl sm:text-7xl font-extrabold text-white tracking-tight leading-tight mb-6">
@@ -110,12 +110,15 @@ const Hero = () => {
 
         <div className="flex flex-col sm:flex-row gap-4 justify-center">
           <button
-            onClick={() => navigate('/register')}
+            onClick={() => navigate('/demo/surl')}
             className="flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-8 py-4 rounded-xl text-lg font-bold transition-all shadow-[0_0_20px_rgba(37,99,235,0.4)] hover:shadow-[0_0_30px_rgba(37,99,235,0.6)]"
           >
             Start Free Simulation <ArrowRight size={20} />
           </button>
-          <button className="flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white border border-slate-700 px-8 py-4 rounded-xl text-lg font-bold transition-all">
+          <button
+            onClick={() => navigate('/demo/surl')}
+            className="flex items-center justify-center gap-2 bg-slate-900 hover:bg-slate-800 text-white border border-slate-700 px-8 py-4 rounded-xl text-lg font-bold transition-all"
+          >
             <Play size={20} className="text-slate-400" /> Watch Demo
           </button>
         </div>
@@ -299,62 +302,69 @@ const Features = () => (
   </section>
 );
 
-const Pricing = () => (
-  <section id="pricing" className="py-24 bg-slate-900 border-t border-slate-800">
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-      <div className="text-center mb-16">
-        <h2 className="text-3xl sm:text-5xl font-bold text-white mb-6">Simple, Transparent Pricing</h2>
-        <p className="text-xl text-slate-400">Stop paying thousands for generic CPE. Pay for results.</p>
-      </div>
-
-      <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
-        <div className="bg-slate-950 border border-slate-800 rounded-2xl p-8 relative overflow-hidden group hover:border-blue-500/50 transition-colors">
-          <div className="absolute top-0 right-0 bg-blue-600/20 text-blue-400 px-3 py-1 rounded-bl-xl text-xs font-bold uppercase">
-            Most Popular
-          </div>
-          <h3 className="text-2xl font-bold text-white mb-2">Student Access</h3>
-          <div className="flex items-baseline gap-1 mb-6">
-            <span className="text-4xl font-bold text-white">$29</span>
-            <span className="text-slate-500">/ lifetime</span>
-          </div>
-          <p className="text-slate-400 mb-8">Perfect for students and new hires wanting to crush their first busy season.</p>
-          <ul className="space-y-4 mb-8">
-            {['SURL Module (Liabilities)', 'Cash Reconciliation Module', 'Fixed Asset Module', 'Immediate "Virtual Senior" Feedback'].map((item) => (
-              <li key={item} className="flex items-center gap-3 text-slate-300">
-                <CheckCircle2 className="text-blue-500 w-5 h-5 shrink-0" />
-                {item}
-              </li>
-            ))}
-          </ul>
-          <button className="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold py-3 rounded-xl transition-colors border border-slate-700">
-            Get Instant Access
-          </button>
+const Pricing = () => {
+  const navigate = useNavigate();
+  return (
+    <section id="pricing" className="py-24 bg-slate-900 border-t border-slate-800">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div className="text-center mb-16">
+          <h2 className="text-3xl sm:text-5xl font-bold text-white mb-6">Simple, Transparent Pricing</h2>
+          <p className="text-xl text-slate-400">Stop paying thousands for generic CPE. Pay for results.</p>
         </div>
 
-        <div className="bg-slate-800 border border-slate-700 rounded-2xl p-8">
-          <h3 className="text-2xl font-bold text-white mb-2">Firm License</h3>
-          <div className="flex items-baseline gap-1 mb-6">
-            <span className="text-4xl font-bold text-white">$2,500</span>
-            <span className="text-slate-500">/ year</span>
+        <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
+          <div className="bg-slate-950 border border-slate-800 rounded-2xl p-8 relative overflow-hidden group hover:border-blue-500/50 transition-colors">
+            <div className="absolute top-0 right-0 bg-blue-600/20 text-blue-400 px-3 py-1 rounded-bl-xl text-xs font-bold uppercase">
+              Most Popular
+            </div>
+            <h3 className="text-2xl font-bold text-white mb-2">Student Access</h3>
+            <div className="flex items-baseline gap-1 mb-6">
+              <span className="text-4xl font-bold text-white">$29</span>
+              <span className="text-slate-500">/ lifetime</span>
+            </div>
+            <p className="text-slate-400 mb-8">Perfect for students and new hires wanting to crush their first busy season.</p>
+            <ul className="space-y-4 mb-8">
+              {['SURL Module (Liabilities)', 'Cash Reconciliation Module', 'Fixed Asset Module', 'Immediate "Virtual Senior" Feedback'].map((item) => (
+                <li key={item} className="flex items-center gap-3 text-slate-300">
+                  <CheckCircle2 className="text-blue-500 w-5 h-5 shrink-0" />
+                  {item}
+                </li>
+              ))}
+            </ul>
+            <button
+              onClick={() => navigate('/checkout?plan=individual')}
+              className="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold py-3 rounded-xl transition-colors border border-slate-700"
+            >
+              Get Instant Access
+            </button>
           </div>
-          <p className="text-slate-400 mb-8">For regional firms who want to standardize onboarding and reduce review notes.</p>
-          <ul className="space-y-4 mb-8">
-            {['Up to 50 Trainee Accounts', 'Admin Dashboard & Reporting', 'Custom Case Logic', 'White-glove Onboarding'].map((item) => (
-              <li key={item} className="flex items-center gap-3 text-slate-300">
-                <CheckCircle2 className="text-emerald-500 w-5 h-5 shrink-0" />
-                {item}
-              </li>
-            ))}
-          </ul>
-          <button className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors shadow-lg">
-            Contact Sales
-          </button>
+
+          <div className="bg-slate-800 border border-slate-700 rounded-2xl p-8">
+            <h3 className="text-2xl font-bold text-white mb-2">Firm License</h3>
+            <div className="flex items-baseline gap-1 mb-6">
+              <span className="text-4xl font-bold text-white">$2,500</span>
+              <span className="text-slate-500">/ year</span>
+            </div>
+            <p className="text-slate-400 mb-8">For regional firms who want to standardize onboarding and reduce review notes.</p>
+            <ul className="space-y-4 mb-8">
+              {['Up to 50 Trainee Accounts', 'Admin Dashboard & Reporting', 'Custom Case Logic', 'White-glove Onboarding'].map((item) => (
+                <li key={item} className="flex items-center gap-3 text-slate-300">
+                  <CheckCircle2 className="text-emerald-500 w-5 h-5 shrink-0" />
+                  {item}
+                </li>
+              ))}
+            </ul>
+            <button className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-xl transition-colors shadow-lg">
+              Contact Sales
+            </button>
+          </div>
         </div>
       </div>
-    </div>
-  </section>
-);
+    </section>
+  );
+};
 
+const Footer
 const Footer = () => (
   <footer className="bg-slate-950 border-t border-slate-800 py-12">
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row justify-between items-center gap-6">

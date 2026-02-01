@@ -15,10 +15,17 @@ const buildGeneratedCaseName = ({ baseName, caseLevel }) => {
 export const buildCaseDraftFromRecipe = ({ recipeId, overrides = {} }) => {
   const recipe = getCaseRecipe(recipeId);
   const result = recipe.build({ overrides });
+  const recipeVersion = Number.isFinite(Number(recipe?.version)) ? Number(recipe.version) : 1;
 
   const disbursements = ensureArray(result.disbursements, [initialDisbursement()]);
   const referenceDocuments = ensureArray(result.referenceDocuments, [initialReferenceDocument()]);
   const instruction = result.instruction || initialInstruction();
+  const normalizedInstruction = {
+    ...instruction,
+    version: Number.isFinite(Number(instruction.version))
+      ? Number(instruction.version)
+      : recipeVersion,
+  };
   const resolvedCaseLevel = normalizeCaseLevel(
     result?.generationPlan?.caseLevel || result?.caseLevel || overrides?.caseLevel
   );
@@ -26,18 +33,24 @@ export const buildCaseDraftFromRecipe = ({ recipeId, overrides = {} }) => {
 
   return {
     recipeId,
+    moduleId: recipeId,
+    recipeVersion,
     caseName: buildGeneratedCaseName({ baseName: baseCaseName, caseLevel: resolvedCaseLevel }),
+    caseLevel: resolvedCaseLevel,
     auditArea: result.auditArea || DEFAULT_AUDIT_AREA,
     layoutType: result.layoutType || 'two_pane',
     layoutConfigRaw: result.layoutConfigRaw || '',
-    instruction,
+    instruction: normalizedInstruction,
     disbursements,
     referenceDocuments,
+    workpaper: result.workpaper || null,
+    workflow: result.workflow || null,
     cashContext: result.cashContext || null,
     cashOutstandingItems: result.cashOutstandingItems || null,
     cashCutoffItems: result.cashCutoffItems || null,
     cashRegisterItems: result.cashRegisterItems || null,
     cashReconciliationMap: result.cashReconciliationMap || null,
+    cashArtifacts: result.cashArtifacts || null,
     faSummary: result.faSummary || null,
     faRisk: result.faRisk || null,
     faAdditions: result.faAdditions || null,

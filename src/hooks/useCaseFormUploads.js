@@ -71,7 +71,7 @@ export function createCaseFormUploadHandlers({
     const resolvedOrgId = orgIdFromToken ?? userProfile?.orgId ?? null;
     const resolvedRole = role || 'unknown';
 
-    if (resolvedRole !== 'admin' && !resolvedOrgId) {
+    if (resolvedRole !== 'admin' && resolvedRole !== 'owner' && !resolvedOrgId) {
       const message =
         'Your account is missing an orgId. Please contact an admin to set your organization before uploading files.';
       showModal(message, 'Permission Needed');

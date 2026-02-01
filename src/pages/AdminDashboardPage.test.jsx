@@ -10,6 +10,8 @@ import {
 } from '../services/caseService';
 import { subscribeToRecentSubmissionActivity } from '../services/submissionService';
 import { fetchUsersWithProfiles } from '../services/userService';
+import { listCaseRecipes } from '../generation/recipeRegistry';
+import { fetchRecipe } from '../services/recipeService';
 
 const appCoreMocks = {};
 
@@ -30,6 +32,14 @@ jest.mock('../services/submissionService', () => ({
 
 jest.mock('../services/userService', () => ({
   fetchUsersWithProfiles: jest.fn(),
+}));
+
+jest.mock('../generation/recipeRegistry', () => ({
+  listCaseRecipes: jest.fn(),
+}));
+
+jest.mock('../services/recipeService', () => ({
+  fetchRecipe: jest.fn(),
 }));
 
 jest.mock('../AppCore', () => {
@@ -106,6 +116,19 @@ beforeEach(() => {
     return jest.fn();
   });
   fetchUsersWithProfiles.mockResolvedValue([]);
+  listCaseRecipes.mockReturnValue([
+    {
+      id: 'case.surl.seed.alpha.v1',
+      label: 'SURL Cutoff (Generated)',
+      moduleTitle: 'Basic SURL',
+      pathId: 'general',
+      tier: 'foundations',
+      auditArea: 'payables',
+      primarySkill: 'Cutoff',
+      version: 1,
+    },
+  ]);
+  fetchRecipe.mockResolvedValue(null);
 });
 
 test('renders admin dashboard heading', async () => {

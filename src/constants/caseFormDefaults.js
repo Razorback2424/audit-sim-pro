@@ -67,6 +67,7 @@ export const initialReconciliationMap = () => ({
 export const initialInstruction = () => ({
   title: '',
   moduleCode: '',
+  version: 1,
   hook: { headline: '', risk: '', body: '' },
   visualAsset: { type: 'VIDEO', source_id: '', alt: '' },
   heuristic: { rule_text: '', reminder: '' },
@@ -79,6 +80,45 @@ export const initialInstruction = () => ({
       { id: 'opt2', text: '', correct: true, feedback: '' },
     ],
   },
+});
+
+export const initialCompletenessGate = () => ({
+  enabled: false,
+  stepTitle: '',
+  description: '',
+  evidenceTitle: '',
+  evidenceDescription: '',
+  assessmentQuestion: '',
+  assessmentOptions: [
+    {
+      id: 'assess_yes',
+      text: '',
+      correct: false,
+      outcome: 'match',
+      feedback: '',
+    },
+    {
+      id: 'assess_no',
+      text: '',
+      correct: true,
+      outcome: 'mismatch',
+      feedback: '',
+    },
+  ],
+  actionMode: 'mismatch',
+  actionQuestion: '',
+  actionOptions: [
+    { id: 'opt1', text: '', correct: false, feedback: '' },
+    { id: 'opt2', text: '', correct: true, feedback: '' },
+  ],
+  successMessage: '',
+  failureMessage: '',
+  passedMessage: '',
+  skillTag: '',
+  requireOpenedDocs: false,
+  includeAllReferenceDocs: false,
+  referenceDocNames: [],
+  correctedReferenceDocNames: [],
 });
 
 export const initialMapping = () => ({
@@ -122,6 +162,8 @@ export const initialFaAddition = () => ({
   glAccount: '',
   natureOfExpenditure: '',
   properPeriod: '',
+  amountThreshold: '',
+  usefulLife: '',
 });
 
 export const initialFaDisposal = () => ({
@@ -130,6 +172,9 @@ export const initialFaDisposal = () => ({
   description: '',
   proceeds: '',
   nbv: '',
+  vendor: '',
+  gainLossPerBooks: '',
+  expectedGainLoss: '',
 });
 
 export const initialCashContext = () => ({

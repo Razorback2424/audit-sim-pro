@@ -19,21 +19,22 @@ export default function EvidenceList({ items, activeEvidenceId, onSelect, isEvid
               item.fileName ||
               (item.paymentId ? `Invoice for ${item.paymentId}` : `Invoice ${index + 1}`);
             const payeeLabel = item.payee || 'Unknown payee';
-            const documentLabel = `${invoiceLabel} — ${payeeLabel}`;
+            const documentLabel = item.documentLabel || `Invoice: ${invoiceLabel}`;
+            const ariaLabel = item.documentLabel ? documentLabel : `${invoiceLabel} — ${payeeLabel}`;
             const evidenceSatisfied = item.hasLinkedDocument || isEvidenceWorkflowLinked(item.paymentId);
             return (
               <button
                 key={evidenceId}
                 type="button"
                 onClick={() => onSelect(evidenceId)}
-                aria-label={`Evidence for ${documentLabel}`}
+                aria-label={`Evidence for ${ariaLabel}`}
                 className={`w-full text-left px-4 py-3 focus:outline-none transition-colors ${
                   isActive ? 'bg-blue-50 border-l-4 border-blue-500' : 'hover:bg-gray-50'
                 }`}
               >
                 <div className="flex items-center justify-between">
                   <span className={`text-sm font-semibold ${isActive ? 'text-blue-700' : 'text-gray-800'}`}>
-                    Invoice: {invoiceLabel}
+                    {documentLabel}
                   </span>
                   {!evidenceSatisfied && (
                     <span className="ml-3 inline-flex items-center text-[10px] font-semibold uppercase tracking-wider text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
@@ -41,9 +42,11 @@ export default function EvidenceList({ items, activeEvidenceId, onSelect, isEvid
                     </span>
                   )}
                 </div>
-                <div className="mt-1 text-xs text-gray-500">
-                  Payee: <strong className="text-gray-700 font-medium">{payeeLabel}</strong>
-                </div>
+                {!item.documentLabel ? (
+                  <div className="mt-1 text-xs text-gray-500">
+                    Payee: <strong className="text-gray-700 font-medium">{payeeLabel}</strong>
+                  </div>
+                ) : null}
               </button>
             );
           })

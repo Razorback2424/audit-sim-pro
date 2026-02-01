@@ -215,6 +215,8 @@ function useCaseForm({ params }) {
   const [yearEndValue, setYearEndValue] = useState('');
   const [yearEndError, setYearEndError] = useState('');
   const [caseLevel, setCaseLevel] = useState('basic');
+  const [moduleId, setModuleId] = useState('');
+  const [recipeVersion, setRecipeVersion] = useState(1);
   const [overrideDefaults, setOverrideDefaults] = useState(false);
   const [overrideDisbursementCount, setOverrideDisbursementCount] = useState('');
   const [overrideVendorCount, setOverrideVendorCount] = useState('');
@@ -259,6 +261,8 @@ function useCaseForm({ params }) {
   const [faSummary, setFaSummary] = useState([initialFaClass()]);
   const [faRisk, setFaRisk] = useState({
     tolerableMisstatement: '',
+    capitalizationThreshold: '',
+    weightedAverageLife: '',
     strategy: 'all_over_tm',
     sampleSize: '',
   });
@@ -388,6 +392,14 @@ function useCaseForm({ params }) {
   ]);
 
   useEffect(() => {
+    const normalizedVersion = Number.isFinite(Number(recipeVersion)) ? Number(recipeVersion) : 1;
+    setInstruction((prev) => {
+      if (Number(prev?.version) === normalizedVersion) return prev;
+      return { ...prev, version: normalizedVersion };
+    });
+  }, [recipeVersion]);
+
+  useEffect(() => {
     const { value, error } = normalizeYearEndInput(yearEndInput);
     setYearEndValue(value);
     setYearEndError(error);
@@ -413,6 +425,8 @@ function useCaseForm({ params }) {
     const hasAuditArea = draft.auditArea && draft.auditArea !== DEFAULT_AUDIT_AREA;
     const hasLevel = draft.caseLevel && draft.caseLevel !== 'basic';
     const hasYearEnd = Boolean(yearEndLabel);
+    const hasModuleId = Boolean((draft.moduleId || '').trim());
+    const hasRecipeVersion = Number(draft.recipeVersion || 1) > 1;
     const hasOverrideDefaults =
       draft.overrideDefaults ||
       Boolean((draft.overrideDisbursementCount || '').trim()) ||
@@ -512,6 +526,8 @@ function useCaseForm({ params }) {
       hasCashItems(draft.faDisposals, ['assetId', 'description', 'proceeds', 'nbv']) ||
       Boolean(
         (draft.faRisk?.tolerableMisstatement || '').trim() ||
+          (draft.faRisk?.capitalizationThreshold || '').trim() ||
+          (draft.faRisk?.weightedAverageLife || '').trim() ||
           (draft.faRisk?.sampleSize || '').trim() ||
           (draft.faRisk?.strategy && draft.faRisk.strategy !== 'all_over_tm')
       );
@@ -524,6 +540,8 @@ function useCaseForm({ params }) {
 
     return Boolean(
       draft.draftCaseId ||
+        hasModuleId ||
+        hasRecipeVersion ||
         hasCustomCaseName ||
         hasAuditArea ||
         hasLevel ||
@@ -587,6 +605,13 @@ function useCaseForm({ params }) {
           setCaseLevel(normalizedLevel);
         }
       }
+      if (typeof parsed.moduleId === 'string') {
+        setModuleId(parsed.moduleId);
+      }
+      if (parsed.recipeVersion !== undefined && parsed.recipeVersion !== null) {
+        const parsedVersion = Number(parsed.recipeVersion);
+        setRecipeVersion(Number.isFinite(parsedVersion) && parsedVersion > 0 ? parsedVersion : 1);
+      }
       if (typeof parsed.overrideDefaults === 'boolean') {
         setOverrideDefaults(parsed.overrideDefaults);
       }
@@ -623,6 +648,8 @@ function useCaseForm({ params }) {
     setYearEndValue('');
     setYearEndError('');
     setCaseLevel('basic');
+    setModuleId('');
+    setRecipeVersion(1);
     setOverrideDefaults(false);
     setOverrideDisbursementCount('');
     setOverrideVendorCount('');
@@ -850,6 +877,8 @@ function useCaseForm({ params }) {
       yearEndInput,
       yearEndValue,
       caseLevel,
+      moduleId,
+      recipeVersion,
       overrideDefaults,
       overrideDisbursementCount,
       overrideVendorCount,
@@ -909,6 +938,8 @@ function useCaseForm({ params }) {
     yearEndInput,
     yearEndValue,
     caseLevel,
+    moduleId,
+    recipeVersion,
     overrideDefaults,
     overrideDisbursementCount,
     overrideVendorCount,
@@ -1187,6 +1218,8 @@ function useCaseForm({ params }) {
       yearEndInput,
       yearEndValue,
       caseLevel,
+      moduleId,
+      recipeVersion,
       auditArea,
       layoutType,
       layoutConfigRaw,
@@ -1435,6 +1468,21 @@ function useCaseForm({ params }) {
             const normalizedLevel =
               typeof data.caseLevel === 'string' ? data.caseLevel.trim() : '';
             setCaseLevel(CASE_LEVEL_VALUES.includes(normalizedLevel) ? normalizedLevel : 'basic');
+            const resolvedModuleId =
+              typeof data.moduleId === 'string'
+                ? data.moduleId.trim()
+                : typeof data.recipeId === 'string'
+                ? data.recipeId.trim()
+                : '';
+            setModuleId(resolvedModuleId);
+            const resolvedRecipeVersion = Number(
+              data.recipeVersion ?? data.instruction?.version ?? 1
+            );
+            setRecipeVersion(
+              Number.isFinite(resolvedRecipeVersion) && resolvedRecipeVersion > 0
+                ? resolvedRecipeVersion
+                : 1
+            );
             const storedYearEndLabel =
               typeof data.yearEndLabel === 'string' && data.yearEndLabel.trim()
                 ? data.yearEndLabel.trim()
@@ -1534,7 +1582,7 @@ function useCaseForm({ params }) {
       showModal('No generation plan found for this case.', 'Generation');
       return;
     }
-    if (role && role !== 'admin' && role !== 'instructor') {
+    if (role && role !== 'admin' && role !== 'owner' && role !== 'instructor') {
       showModal('Only admins or instructors can generate reference documents.', 'Permission Needed');
       return;
     }
@@ -1563,7 +1611,7 @@ function useCaseForm({ params }) {
       const resolvedOrgId = orgIdFromToken ?? userProfile?.orgId ?? null;
       const resolvedRole = role || 'unknown';
 
-      if (resolvedRole !== 'admin' && !resolvedOrgId) {
+      if (resolvedRole !== 'admin' && resolvedRole !== 'owner' && !resolvedOrgId) {
         showModal(
           'Your account is missing an orgId. Please contact an admin to set your organization before generating documents.',
           'Permission Needed'
@@ -1611,6 +1659,8 @@ function useCaseForm({ params }) {
         createdBy: userId,
         _deleted: false,
         auditArea,
+        moduleId: moduleId || null,
+        recipeVersion: Number.isFinite(Number(recipeVersion)) ? Number(recipeVersion) : 1,
         caseGroupId: resolvedCaseGroupId,
       };
 
@@ -1712,6 +1762,8 @@ function useCaseForm({ params }) {
     disbursements,
     referenceDocuments,
     layoutType,
+    moduleId,
+    recipeVersion,
     formatGenerationError,
     pollGenerationUpdates,
     toSafeDate,
@@ -1882,6 +1934,11 @@ function useCaseForm({ params }) {
         setLayoutType(draft.layoutType);
         setLayoutConfigRaw(draft.layoutConfigRaw || '');
         setInstruction(draft.instruction);
+        setModuleId(draft.moduleId || draft.recipeId || '');
+        if (draft.recipeVersion !== undefined && draft.recipeVersion !== null) {
+          const parsedVersion = Number(draft.recipeVersion);
+          setRecipeVersion(Number.isFinite(parsedVersion) && parsedVersion > 0 ? parsedVersion : 1);
+        }
         setDisbursements(draft.disbursements);
         setReferenceDocuments(draft.referenceDocuments);
         if (draft.cashContext) setCashContext(draft.cashContext);
@@ -1932,6 +1989,10 @@ function useCaseForm({ params }) {
     caseLevel,
     setCaseLevel,
     caseLevelOptions: CASE_LEVEL_OPTIONS,
+    moduleId,
+    setModuleId,
+    recipeVersion,
+    setRecipeVersion,
     overrideDefaults,
     setOverrideDefaults,
     overrideDisbursementCount,

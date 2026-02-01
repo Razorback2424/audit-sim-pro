@@ -23,7 +23,15 @@ service cloud.firestore {
       );
     }
 
+    function isOwner() {
+      return hasRole('owner');
+    }
+
     function isAdmin() {
+      return hasRole('admin') || isOwner();
+    }
+
+    function isPlatformAdmin() {
       return hasRole('admin');
     }
 
@@ -74,39 +82,7 @@ service cloud.firestore {
       return item is map &&
              item.keys().hasAll(['id', 'type']) &&
              item.id is string &&
-             item.type in ['transaction', 'inventory_count', 'payroll_record'] &&
-             (
-               (item.type == 'transaction' && item.keys().hasAll(['payee', 'amount', 'paymentDate'])) ||
-               (item.type == 'inventory_count' && item.keys().hasAll(['location', 'count', 'unitCost'])) ||
-               true
-             ) &&
-             (!('payee' in item) || item.payee == null || item.payee is string) &&
-             (!('amount' in item) || item.amount == null || (item.amount is string || item.amount is number)) &&
-             (!('paymentDate' in item) || item.paymentDate == null || item.paymentDate is string) &&
-             (!('expectedClassification' in item) || item.expectedClassification == null || item.expectedClassification is string) &&
-             (!('answerKey' in item) || item.answerKey == null) &&
-             (!('hasAnswerKey' in item) || item.hasAnswerKey == null || item.hasAnswerKey is bool) &&
-             (!('trapType' in item) || item.trapType == null || item.trapType is list || item.trapType is string) &&
-             (!('shouldFlag' in item) || item.shouldFlag == null || item.shouldFlag is bool) &&
-             (!('requiredAssertions' in item) || item.requiredAssertions == null || item.requiredAssertions is list) &&
-             (!('correctAssertions' in item) || item.correctAssertions == null || item.correctAssertions is list) &&
-             (!('errorReasons' in item) || item.errorReasons == null || item.errorReasons is list) &&
-             (!('validator' in item) || item.validator == null || item.validator is map) &&
-             (!('groundTruths' in item) || item.groundTruths == null) &&
-             (!('storagePath' in item) || item.storagePath == null || item.storagePath is string) &&
-             (!('downloadURL' in item) || item.downloadURL == null || item.downloadURL is string) &&
-             (!('fileName' in item) || item.fileName == null || item.fileName is string) &&
-             (!('contentType' in item) || item.contentType == null || item.contentType is string) &&
-             (!('supportingDocuments' in item) || (
-               item.supportingDocuments is list &&
-               (
-                 item.supportingDocuments.size() == 0 ||
-                 isValidSupportingDocument(item.supportingDocuments[0])
-               )
-             )) &&
-             (!('description' in item) || item.description == null || item.description is string) &&
-             (!('notes' in item) || item.notes == null || item.notes is string) &&
-             (!('meta' in item) || item.meta == null || item.meta is map);
+             item.type in ['transaction', 'inventory_count', 'payroll_record'];
     }
 
     function isValidInvoiceMapping(m) {
@@ -147,7 +123,7 @@ service cloud.firestore {
     }
 
     function isValidCaseDocument() {
-      return request.resource.data.keys().hasAll(['publicVisible', 'status', '_deleted', 'updatedAt', 'createdAt']) &&
+      return request.resource.data.keys().hasAll(['publicVisible', 'status', '_deleted']) &&
              request.resource.data.publicVisible is bool &&
              request.resource.data._deleted is bool &&
              request.resource.data.status in ['assigned', 'in_progress', 'submitted', 'archived', 'draft'] &&
@@ -180,6 +156,48 @@ service cloud.firestore {
            ));
     }
 
+    function isValidTraineeCaseDocument() {
+      return request.resource.data.keys().hasAll(['publicVisible', 'status', '_deleted']) &&
+             request.resource.data.publicVisible is bool &&
+             request.resource.data._deleted is bool &&
+             request.resource.data.status in ['assigned', 'in_progress', 'submitted', 'archived', 'draft'] &&
+             (!('createdBy' in request.resource.data) || request.resource.data.createdBy == null || request.resource.data.createdBy is string) &&
+             (!('caseLevel' in request.resource.data) || request.resource.data.caseLevel == null || request.resource.data.caseLevel in ['basic', 'intermediate', 'advanced']) &&
+             (!('dueAt' in request.resource.data) || request.resource.data.dueAt == null || request.resource.data.dueAt is timestamp) &&
+             (!('opensAt' in request.resource.data) || request.resource.data.opensAt == null || request.resource.data.opensAt is timestamp) &&
+             (!('auditItems' in request.resource.data) || (
+               request.resource.data.auditItems is list &&
+               (
+                 request.resource.data.auditItems.size() == 0 ||
+                 isValidAuditItem(request.resource.data.auditItems[0])
+               )
+             )) &&
+             (!('disbursements' in request.resource.data) || (
+               request.resource.data.disbursements is list &&
+               (
+                 request.resource.data.disbursements.size() == 0 ||
+                 isValidAuditItem(request.resource.data.disbursements[0])
+               )
+             )) &&
+             (!('invoiceMappings' in request.resource.data) || (
+               request.resource.data.invoiceMappings is list &&
+             (
+               request.resource.data.invoiceMappings.size() == 0 ||
+               isValidInvoiceMapping(request.resource.data.invoiceMappings[0])
+             )
+           ));
+    }
+
+    function traineeCaseCreateAllowed() {
+      return request.auth != null &&
+        request.resource.data.publicVisible == false &&
+        request.resource.data._deleted == false &&
+        (request.resource.data.status in ['assigned', 'in_progress', 'submitted', 'archived', 'draft']) &&
+        request.resource.data.visibleToUserIds is list &&
+        request.resource.data.visibleToUserIds.size() == 1 &&
+        request.auth.uid in request.resource.data.visibleToUserIds;
+    }
+
     function isValidCaseKeyEntry(entry) {
       return entry is map &&
              (!('answerKey' in entry) || entry.answerKey == null || isValidAnswerKey(entry.answerKey)) &&
@@ -199,7 +217,7 @@ service cloud.firestore {
                  isValidCaseKeyEntry(data.items[data.items.keys()[0]])
                )
              )) &&
-             (!('updatedAt' in data) || data.updatedAt == request.time);
+             (!('updatedAt' in data) || data.updatedAt == request.time || data.updatedAt is timestamp);
     }
 
     function canAccessCaseKeys(appId, caseId) {
@@ -210,6 +228,11 @@ service cloud.firestore {
           exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)) &&
           get(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.orgId ==
             request.auth.token.orgId
+        ) ||
+        (
+          isTrainee() &&
+          exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)) &&
+          request.auth.uid in get(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds
         );
     }
 
@@ -222,7 +245,7 @@ service cloud.firestore {
              );
     }
 
-    // Role documents store whether a user is an admin or trainee
+    // Role documents store whether a user is an admin, owner, or trainee
     match /roles/{userId} {
       // Allow users to read their own role document (for display/initial setup)
       allow read: if request.auth != null && request.auth.uid == userId;
@@ -238,6 +261,10 @@ service cloud.firestore {
       allow get: if request.auth != null && (
         isAdmin() ||
         resource.data.publicVisible == true ||
+        (
+          resource.data.visibleToUserIds is list &&
+          request.auth.uid in resource.data.visibleToUserIds
+        ) ||
         (
           belongsToOrg(resource.data) &&
           (
@@ -256,6 +283,10 @@ service cloud.firestore {
             isInstructor() &&
             request.resource.data.orgId == request.auth.token.orgId &&
             isValidCaseDocument()
+          ) ||
+          (
+            traineeCaseCreateAllowed() &&
+            isValidTraineeCaseDocument()
           )
         );
       allow update: if request.auth != null &&
@@ -317,6 +348,12 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // User billing status (server-writable only)
+    match /artifacts/{appId}/users/{userId}/billing {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow create, update, delete: if false;
+    }
+
     match /{path=**}/caseSubmissions/{caseId} {
       allow read: if request.auth != null && isAdmin();
       allow create, update: if request.auth != null &&
@@ -334,6 +371,26 @@ service cloud.firestore {
       // validation
       allow create, update: if isValidProgressDocument(request.resource.data) &&
                                request.resource.data.updatedAt == request.time;
+    }
+
+    // Recipe progress (gate completion) is private to each user
+    match /artifacts/{appId}/student_progress/{uid}/recipes/{recipeId} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // Recipe documents provide module instructions/gates
+    match /artifacts/{appId}/public/data/recipes/{recipeId} {
+      allow read: if request.auth != null && (isAdmin() || isInstructor() || isTrainee());
+      allow create, update, delete: if request.auth != null && isAdmin();
+    }
+
+    // Billing summary snapshot (server-writable only)
+    match /artifacts/{appId}/billing/orgs/{orgId} {
+      allow read: if request.auth != null && (
+        (isOwner() && request.auth.token.orgId != null && request.auth.token.orgId == orgId) ||
+        isPlatformAdmin()
+      );
+      allow create, update, delete: if false;
     }
 
 

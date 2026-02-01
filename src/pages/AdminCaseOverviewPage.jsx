@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { storage, Button, useRoute, useModal } from '../AppCore';
-import { fetchCase } from '../services/caseService';
+import { fetchCase, markCaseDeleted } from '../services/caseService';
 import { getAuditAreaLabel, getCaseGroupLabel } from '../models/caseConstants';
 
 export default function AdminCaseOverviewPage({ params }) {
@@ -48,6 +48,22 @@ export default function AdminCaseOverviewPage({ params }) {
     }
   };
 
+  const handleDeleteCase = async () => {
+    if (!caseId) return;
+    const confirmed = window.confirm(
+      'Delete this case? This removes the attempt and its generated documents from trainee access.'
+    );
+    if (!confirmed) return;
+    try {
+      await markCaseDeleted(caseId);
+      showModal('Case deleted. You can generate a new attempt from the recipe.', 'Case Deleted');
+      navigate('/admin');
+    } catch (err) {
+      console.error('Error deleting case:', err);
+      showModal(err?.message || 'Unable to delete case.', 'Error');
+    }
+  };
+
   if (loading) return <div className="p-4 text-center">Loading case...</div>;
   if (!caseData) return <div className="p-4 text-center">Case not found.</div>;
 
@@ -72,8 +88,8 @@ export default function AdminCaseOverviewPage({ params }) {
         <div className="flex justify-between">
           <Button onClick={() => navigate('/admin')} variant="secondary" className="text-sm">&larr; Back</Button>
           <div className="space-x-2">
-            <Button onClick={() => navigate(`/admin/edit-case/${caseId}`)} variant="secondary" className="text-sm">Edit Case</Button>
             <Button onClick={() => navigate(`/admin/case-submissions/${caseId}`)} variant="secondary" className="text-sm">View Submissions</Button>
+            <Button onClick={handleDeleteCase} variant="danger" className="text-sm">Delete Case</Button>
           </div>
         </div>
         <div className="bg-white p-6 rounded-lg shadow">

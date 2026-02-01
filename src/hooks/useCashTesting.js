@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { Timestamp } from 'firebase/firestore';
 import { saveSubmission } from '../services/submissionService';
 import { saveProgress } from '../services/progressService';
@@ -33,6 +33,13 @@ export default function useCashTesting({
   setCashSummaryDraft,
   getDisbursementList,
 }) {
+  const attemptStartedAtRef = useRef(null);
+
+  useEffect(() => {
+    if (caseId) {
+      attemptStartedAtRef.current = Date.now();
+    }
+  }, [caseId]);
   useEffect(() => {
     if (isCashLayout) {
       setCashCanSubmit(false);
@@ -246,6 +253,9 @@ export default function useCashTesting({
     };
 
     const caseTitle = caseData.title || caseData.caseName || 'Audit Case';
+    const startedAtMs = attemptStartedAtRef.current;
+    const timeToCompleteSeconds =
+      startedAtMs ? Math.max(0, Math.round((Date.now() - startedAtMs) / 1000)) : null;
 
     try {
       cancelPendingSave();
@@ -258,6 +268,16 @@ export default function useCashTesting({
         disbursementClassifications: allocationPayload,
         expectedClassifications: {},
         workspaceNotes: workspacePayload,
+        attemptSummary: {
+          score: null,
+          totalConsidered: selectedIds.length,
+          missedExceptionsCount: 0,
+          falsePositivesCount: 0,
+          wrongClassificationCount: 0,
+          criticalIssuesCount: 0,
+          requiredDocsOpened: null,
+          timeToCompleteSeconds,
+        },
         status: 'submitted',
         submittedAt: Timestamp.now(),
         cashLinkMap,
@@ -282,7 +302,9 @@ export default function useCashTesting({
             cashAdjustments,
             cashSummary: cashSummaryDraft,
           },
+          hasSuccessfulAttempt: true,
         },
+        clearActiveAttempt: true,
       });
 
       setIsLocked(true);

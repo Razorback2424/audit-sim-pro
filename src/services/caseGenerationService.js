@@ -12,7 +12,7 @@ export const saveCaseGenerationPlan = async ({ caseId, plan }) => {
   await setDoc(ref, payload, { merge: true });
 };
 
-export const queueCaseGenerationJob = async ({ caseId, plan, appId }) => {
+export const queueCaseGenerationJob = async ({ caseId, plan, appId, phaseId }) => {
   if (!caseId || !plan) {
     throw new Error('Missing caseId or generation plan.');
   }
@@ -20,7 +20,7 @@ export const queueCaseGenerationJob = async ({ caseId, plan, appId }) => {
     throw new Error('Missing appId for generation job.');
   }
   const callable = httpsCallable(functions, 'queueCaseDocGeneration');
-  const result = await callable({ caseId, plan, appId });
+  const result = await callable({ caseId, plan, appId, phaseId: phaseId || null });
   return result?.data || null;
 };
 

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertOctagon, CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, RotateCcw } from 'lucide-react';
+import { CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, PlusCircle, RotateCcw } from 'lucide-react';
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { currencyFormatter } from '../../utils/formatters';
 import { storage } from '../../AppCore';
@@ -78,6 +78,47 @@ const extractBreakdown = (source) => {
   return breakdown;
 };
 
+const extractSplitValues = (source) => {
+  const raw = source && typeof source === 'object' ? source : {};
+  return CLASSIFICATION_KEYS.reduce((acc, key) => {
+    acc[key] = parseNumber(raw?.[key]);
+    return acc;
+  }, {});
+};
+
+const hasSplitExpectation = (item) => {
+  const answerKey = item?.answerKey && typeof item.answerKey === 'object' ? item.answerKey : null;
+  if (!answerKey) return false;
+  const breakdown = extractBreakdown(answerKey);
+  return breakdown.length > 1;
+};
+
+const compareSplitValues = (allocation, answerKey) => {
+  const actualSource =
+    allocation?.splitValues && typeof allocation.splitValues === 'object'
+      ? allocation.splitValues
+      : allocation;
+  const expectedSource = answerKey && typeof answerKey === 'object' ? answerKey : {};
+  const actual = extractSplitValues(actualSource);
+  const expected = extractSplitValues(expectedSource);
+  const tolerance = 0.01;
+  const mismatchedKeys = CLASSIFICATION_KEYS.filter(
+    (key) => Math.abs((actual[key] || 0) - (expected[key] || 0)) > tolerance
+  );
+  return { matches: mismatchedKeys.length === 0, mismatchedKeys };
+};
+
+const pickImproperKey = (breakdown) => {
+  const improperKeys = new Set(['improperlyIncluded', 'improperlyExcluded']);
+  const improper = (breakdown || []).filter(
+    ({ key, amount }) => improperKeys.has(key) && Math.abs(amount) > 0.01
+  );
+  if (improper.length === 0) return '';
+  if (improper.length === 1) return improper[0].key;
+  const sorted = [...improper].sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+  return sorted[0].key;
+};
+
 const extractDecisionFromAllocation = (allocation) => {
   if (!allocation || typeof allocation !== 'object') {
     return { primaryKey: '', breakdown: [] };
@@ -91,6 +132,13 @@ const extractDecisionFromAllocation = (allocation) => {
     return { primaryKey: explicitKey, breakdown };
   }
 
+  if (allocation.isException === true) {
+    const improperKey = pickImproperKey(breakdown);
+    if (improperKey) {
+      return { primaryKey: improperKey, breakdown };
+    }
+  }
+
   if (breakdown.length > 0) {
     return { primaryKey: breakdown[0].key, breakdown };
   }
@@ -101,8 +149,16 @@ const extractDecisionFromAllocation = (allocation) => {
 };
 
 const extractCorrectDecision = (item) => {
+  const explicitKey = typeof item?.answerKeySingleClassification === 'string' ? item.answerKeySingleClassification : '';
+  if (CLASSIFICATION_KEYS.includes(explicitKey)) {
+    return { primaryKey: explicitKey, breakdown: [] };
+  }
   const answerKey = item?.answerKey && typeof item.answerKey === 'object' ? item.answerKey : null;
   const breakdown = answerKey ? extractBreakdown(answerKey) : [];
+  const improperKey = pickImproperKey(breakdown);
+  if (improperKey) {
+    return { primaryKey: improperKey, breakdown };
+  }
   if (breakdown.length > 0) {
     return { primaryKey: breakdown[0].key, breakdown };
   }
@@ -115,11 +171,11 @@ const extractCorrectDecision = (item) => {
   return { primaryKey: '', breakdown: [] };
 };
 
-const DecoyTable = ({ items, studentAnswers }) => {
+const DecoyTable = ({ items }) => {
   if (items.length === 0) {
     return (
       <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-4 text-sm text-gray-500">
-        No decoy transactions were included in this submission.
+        No routine items were correctly handled.
       </div>
     );
   }
@@ -127,7 +183,7 @@ const DecoyTable = ({ items, studentAnswers }) => {
   return (
     <div className="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
       <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
-        <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Routine Transactions (Decoys)</h3>
+        <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wide">Correct Routine Transactions</h3>
       </div>
       <table className="min-w-full divide-y divide-gray-200">
         <thead className="bg-gray-50">
@@ -136,85 +192,88 @@ const DecoyTable = ({ items, studentAnswers }) => {
               Transaction
             </th>
             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Your Decision
+              Your Answer
             </th>
             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-              Result
+              Correct Answer
             </th>
           </tr>
         </thead>
         <tbody className="bg-white divide-y divide-gray-200">
-          {items.map((item) => {
-            const answer = studentAnswers[item.paymentId] || {};
-            const flagged = !!answer.isException;
-            const isFalsePositive = flagged;
-
-            return (
-              <tr key={item.paymentId}>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                  <div className="font-medium">{item.payee}</div>
-                  <div className="text-xs text-gray-500">{currencyFormatter.format(Number(item.amount) || 0)}</div>
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm">
-                  {flagged ? (
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
-                      Flagged Exception
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
-                      Passed
-                    </span>
-                  )}
-                </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm">
-                  {isFalsePositive ? (
-                    <div className="flex items-center text-amber-600">
-                      <AlertOctagon size={16} className="mr-1.5" />
-                      <span>False Positive (Inefficient)</span>
-                    </div>
-                  ) : (
-                    <div className="flex items-center text-emerald-600">
-                      <CheckCircle2 size={16} className="mr-1.5" />
-                      <span>Correct</span>
-                    </div>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
+          {items.map(({ item, studentDecision, correctDecision }) => (
+            <tr key={item.paymentId}>
+              <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                <div className="font-medium">{item.payee}</div>
+                <div className="text-xs text-gray-500">{currencyFormatter.format(Number(item.amount) || 0)}</div>
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap text-sm">
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-800">
+                  {keyToLabel(studentDecision?.primaryKey)}
+                </span>
+              </td>
+              <td className="px-6 py-4 whitespace-nowrap text-sm">
+                <div className="flex items-center text-emerald-600">
+                  <CheckCircle2 size={16} className="mr-1.5" />
+                  <span>{keyToLabel(correctDecision?.primaryKey)}</span>
+                </div>
+              </td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </div>
   );
 };
 
-export default function ResultsAnalysis({ disbursements, studentAnswers, onRequestRetake, onReturnToDashboard }) {
+export default function ResultsAnalysis({
+  disbursements,
+  studentAnswers,
+  gateResults,
+  referenceDocuments = [],
+  onRequestRetake,
+  onGenerateNewCase,
+  onReturnToDashboard,
+}) {
   const [activeIssueIndex, setActiveIssueIndex] = useState(0);
   const [showDecoys, setShowDecoys] = useState(false);
   const [highlightUrl, setHighlightUrl] = useState('');
   const [highlightLoading, setHighlightLoading] = useState(false);
   const [highlightError, setHighlightError] = useState('');
   const [highlightInlineNotSupported, setHighlightInlineNotSupported] = useState(false);
+  const tieOutGate = gateResults?.tieOut || null;
+  const selectionGate = gateResults?.selection || null;
 
-  const { traps, decoys, issues, falsePositiveCount, caughtTraps } = useMemo(() => {
+  const { traps, routineCorrect, issues, falsePositiveCount, caughtTraps } = useMemo(() => {
     const traps = [];
-    const decoys = [];
+    const routineCorrect = [];
     const issues = [];
     const caughtTraps = [];
     let falsePositiveCount = 0;
+    const selectedIds = new Set(
+      studentAnswers && typeof studentAnswers === 'object' ? Object.keys(studentAnswers) : []
+    );
+    const requiredIds = new Set(
+      Array.isArray(selectionGate?.requiredIds) ? selectionGate.requiredIds : []
+    );
 
     (disbursements || []).forEach((item) => {
+      if (!item || !item.paymentId) return;
       const isTrap = !!item.shouldFlag;
       const answer = studentAnswers[item.paymentId] || {};
+      const hasAnswer = selectedIds.has(item.paymentId);
+      const studentDecision = extractDecisionFromAllocation(answer);
+      const correctDecision = extractCorrectDecision(item);
+      const splitExpected = hasSplitExpectation(item);
+      const splitCheck = splitExpected ? compareSplitValues(answer, item.answerKey) : { matches: true };
 
       if (isTrap) {
         traps.push(item);
 
-        const studentDecision = extractDecisionFromAllocation(answer);
-        const correctDecision = extractCorrectDecision(item);
-
         const studentFlaggedException = answer?.isException === true;
         if (!studentFlaggedException) {
+          if (!hasAnswer && !requiredIds.has(item.paymentId)) {
+            return;
+          }
           issues.push({
             type: 'missed_exception',
             item,
@@ -235,6 +294,14 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
               studentDecision,
               correctDecision,
             });
+          } else if (splitExpected && !splitCheck.matches) {
+            issues.push({
+              type: 'split_mismatch',
+              item,
+              studentDecision,
+              correctDecision,
+              mismatchedKeys: splitCheck.mismatchedKeys,
+            });
           } else {
             caughtTraps.push({ item, studentDecision, correctDecision });
           }
@@ -242,30 +309,99 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
           caughtTraps.push({ item, studentDecision, correctDecision });
         }
       } else {
-        decoys.push(item);
-        if (answer?.isException) falsePositiveCount += 1;
+        if (!hasAnswer) return;
+        const studentFlaggedException = answer?.isException === true;
+        if (studentFlaggedException) {
+          falsePositiveCount += 1;
+          issues.push({
+            type: 'false_positive',
+            item,
+            studentDecision,
+            correctDecision,
+          });
+          return;
+        }
+
+        if (
+          correctDecision.primaryKey &&
+          normalize(studentDecision.primaryKey) === normalize(correctDecision.primaryKey)
+        ) {
+          if (splitExpected && !splitCheck.matches) {
+            issues.push({
+              type: 'wrong_routine_classification',
+              item,
+              studentDecision,
+              correctDecision,
+            });
+          } else {
+            routineCorrect.push({ item, studentDecision, correctDecision });
+          }
+          return;
+        }
+
+        if (correctDecision.primaryKey) {
+          issues.push({
+            type: 'wrong_routine_classification',
+            item,
+            studentDecision,
+            correctDecision,
+          });
+        }
       }
     });
 
-    return { traps, decoys, issues, falsePositiveCount, caughtTraps };
-  }, [disbursements, studentAnswers]);
+    return { traps, routineCorrect, issues, falsePositiveCount, caughtTraps };
+  }, [disbursements, selectionGate, studentAnswers]);
 
   const currentIssue = issues[activeIssueIndex] || null;
   const isDone = issues.length > 0 && activeIssueIndex >= issues.length;
-  const missedCount = issues.length;
+  const criticalIssues = issues.filter(
+    (issue) =>
+      issue.type === 'missed_exception' ||
+      issue.type === 'wrong_classification' ||
+      issue.type === 'split_mismatch'
+  );
+  const criticalMissCount = criticalIssues.length;
+  const routineIssueCount = Math.max(0, issues.length - criticalMissCount);
   const hasTraps = traps.length > 0;
   const showRetake = typeof onRequestRetake === 'function' && hasTraps;
+  const showGenerate = typeof onGenerateNewCase === 'function' && hasTraps;
   const showReturn = typeof onReturnToDashboard === 'function';
 
-  const hasRevealForItem = (item) =>
-    !!item?.highlightedDocument && !!(item.highlightedDocument.downloadURL || item.highlightedDocument.storagePath);
+  const invoiceDoc = useMemo(() => {
+    const item = currentIssue?.item;
+    if (!item) return null;
+    if (item.highlightedDocument) return item.highlightedDocument;
+    const supporting = Array.isArray(item.supportingDocuments) ? item.supportingDocuments : [];
+    if (supporting.length > 0) {
+      const doc = supporting.find((entry) => entry && (entry.storagePath || entry.downloadURL || entry.fileName));
+      if (doc) return doc;
+    }
+    if (item.storagePath || item.downloadURL || item.fileName) {
+      return {
+        storagePath: item.storagePath,
+        downloadURL: item.downloadURL,
+        fileName: item.fileName,
+        contentType: item.contentType,
+      };
+    }
+    return null;
+  }, [currentIssue]);
+
+  const apAgingDoc = useMemo(() => {
+    const docs = Array.isArray(referenceDocuments) ? referenceDocuments : [];
+    const corrected = docs.find((doc) => String(doc?.fileName || '').toLowerCase().includes('corrected'));
+    const templateMatch = docs.find((doc) => doc?.generationSpec?.templateId === 'refdoc.ap-aging.v1');
+    const nameMatch = docs.find((doc) => String(doc?.fileName || '').toLowerCase().includes('ap aging'));
+    return corrected || templateMatch || nameMatch || null;
+  }, [referenceDocuments]);
 
   useEffect(() => {
     setHighlightUrl('');
     setHighlightError('');
     setHighlightInlineNotSupported(false);
 
-    const doc = currentIssue?.item?.highlightedDocument;
+    const doc = invoiceDoc;
     if (!doc || (!doc.downloadURL && !doc.storagePath)) {
       setHighlightLoading(false);
       return;
@@ -297,7 +433,53 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
     return () => {
       cancelled = true;
     };
-  }, [currentIssue?.item?.highlightedDocument]);
+  }, [invoiceDoc]);
+
+  const [apAgingUrl, setApAgingUrl] = useState('');
+  const [apAgingLoading, setApAgingLoading] = useState(false);
+  const [apAgingError, setApAgingError] = useState('');
+  const [apAgingInlineUnsupported, setApAgingInlineUnsupported] = useState(false);
+
+  useEffect(() => {
+    setApAgingUrl('');
+    setApAgingError('');
+    setApAgingInlineUnsupported(false);
+
+    if (!apAgingDoc || (!apAgingDoc.downloadURL && !apAgingDoc.storagePath)) {
+      setApAgingLoading(false);
+      return;
+    }
+
+    const previewOk = isInlinePreviewable(
+      apAgingDoc.contentType,
+      apAgingDoc.fileName || apAgingDoc.storagePath || apAgingDoc.downloadURL
+    );
+    setApAgingInlineUnsupported(!previewOk);
+
+    let cancelled = false;
+    setApAgingLoading(true);
+
+    resolveDocumentUrl(apAgingDoc)
+      .then((url) => {
+        if (cancelled) return;
+        setApAgingUrl(url || '');
+        setApAgingError(url ? '' : 'AP aging document is not available.');
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error('[ResultsAnalysis] Failed to load AP aging preview', err);
+        setApAgingUrl('');
+        setApAgingError('Unable to load AP aging document.');
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setApAgingLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [apAgingDoc]);
 
   const goPrev = useCallback(() => {
     setActiveIssueIndex((prev) => Math.max(0, prev - 1));
@@ -312,9 +494,44 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
 
   return (
     <div className="max-w-4xl mx-auto space-y-8">
+      {tieOutGate || selectionGate ? (
+        <div className="rounded-xl border border-slate-200 bg-white shadow-sm px-6 py-5 space-y-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Gate Summary</div>
+          <div className="grid gap-3 md:grid-cols-2 text-sm text-gray-700">
+            {tieOutGate ? (
+              <div>
+                <span className="font-semibold">C&amp;A tie-out:</span>{' '}
+                {tieOutGate.passed ? 'Passed' : 'Not passed'}
+              </div>
+            ) : null}
+            {selectionGate ? (
+              <div>
+                <span className="font-semibold">Selection threshold:</span>{' '}
+                {currencyFormatter.format(Number(selectionGate.thresholdAmount || 0))}
+              </div>
+            ) : null}
+            {selectionGate ? (
+              <div>
+                <span className="font-semibold">Performance materiality:</span>{' '}
+                {currencyFormatter.format(Number(selectionGate.performanceMateriality || 0))}
+              </div>
+            ) : null}
+            {selectionGate ? (
+              <div>
+                <span className="font-semibold">Required picks:</span>{' '}
+                {Array.isArray(selectionGate.requiredIds) && selectionGate.requiredIds.length > 0
+                  ? selectionGate.requiredIds.join(', ')
+                  : 'None'}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      ) : null}
       <div
         className={`rounded-xl border shadow-sm px-6 py-5 ${
-          !hasTraps || missedCount === 0 ? 'bg-emerald-50/60 border-emerald-200' : 'bg-rose-50/60 border-rose-200'
+          !hasTraps || criticalMissCount === 0
+            ? 'bg-emerald-50/60 border-emerald-200'
+            : 'bg-rose-50/60 border-rose-200'
         }`}
       >
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
@@ -323,26 +540,32 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
             <h2 className="mt-1 text-2xl font-bold text-gray-900">
               {!hasTraps
                 ? 'No critical items were configured for this case.'
-                : missedCount === 0
-                ? 'Nice work! You caught all the errors in the selections made.'
-                : `You missed ${missedCount} critical ${missedCount === 1 ? 'item' : 'items'}.`}
+                : criticalMissCount === 0
+                ? routineIssueCount > 0
+                  ? 'Critical items were handled correctly.'
+                  : 'Nice work! You caught all the errors in the selections made.'
+                : `You missed ${criticalMissCount} critical ${criticalMissCount === 1 ? 'item' : 'items'}.`}
             </h2>
             {(() => {
               const baseMessage = !hasTraps
                 ? 'Ask your instructor to add critical risks (traps) to enable a full review walkthrough.'
-                : missedCount === 0
+                : criticalMissCount === 0
                 ? ''
                 : 'We’ll walk through each one step-by-step and show you exactly where it appears in the evidence.';
+              const routineNote =
+                routineIssueCount > 0
+                  ? `${baseMessage ? ' ' : ''}(${baseMessage ? 'You also missed' : 'You missed'} ${routineIssueCount} routine ${routineIssueCount === 1 ? 'item' : 'items'}.)`
+                  : '';
               const falsePositiveMessage =
                 falsePositiveCount > 0
-                  ? `${baseMessage ? ' ' : ''}(You also flagged ${falsePositiveCount} routine ${falsePositiveCount === 1 ? 'item' : 'items'}.)`
+                  ? `${baseMessage || routineNote ? ' ' : ''}(${baseMessage || routineNote ? 'You also flagged' : 'You flagged'} ${falsePositiveCount} routine ${falsePositiveCount === 1 ? 'item' : 'items'}.)`
                   : '';
-              const message = `${baseMessage}${falsePositiveMessage}`.trim();
+              const message = `${baseMessage}${routineNote}${falsePositiveMessage}`.trim();
               if (!message) return null;
               return <p className="mt-1 text-sm text-gray-700">{message}</p>;
             })()}
           </div>
-          {showRetake && missedCount === 0 && showReturn ? (
+          {showRetake && criticalMissCount === 0 && showReturn ? (
             <div className="flex flex-col sm:flex-row gap-2">
               <button
                 type="button"
@@ -351,24 +574,50 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
               >
                 Back to Dashboard
               </button>
-              <button
-                type="button"
-                onClick={onRequestRetake}
-                className="inline-flex items-center justify-center gap-2 rounded-md bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-800 focus:ring-offset-2"
-              >
-                <RotateCcw size={16} />
-                Retake Case
-              </button>
+              {showRetake ? (
+                <button
+                  type="button"
+                  onClick={onRequestRetake}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-800 focus:ring-offset-2"
+                >
+                  <RotateCcw size={16} />
+                  Retake Case
+                </button>
+              ) : null}
+              {showGenerate ? (
+                <button
+                  type="button"
+                  onClick={onGenerateNewCase}
+                  className="inline-flex items-center justify-center gap-2 rounded-md border border-gray-900 px-4 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-900 hover:text-white focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-offset-2"
+                >
+                  <PlusCircle size={16} />
+                  Generate New Case
+                </button>
+              ) : null}
             </div>
-          ) : showRetake ? (
-            <button
-              type="button"
-              onClick={onRequestRetake}
-              className="inline-flex items-center justify-center gap-2 rounded-md bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-800 focus:ring-offset-2"
-            >
-              <RotateCcw size={16} />
-              Try Again
-            </button>
+          ) : showRetake || showGenerate ? (
+            <div className="flex flex-col sm:flex-row gap-2">
+              {showRetake ? (
+                <button
+                  type="button"
+                  onClick={onRequestRetake}
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-800 focus:ring-offset-2"
+                >
+                  <RotateCcw size={16} />
+                  Try Again
+                </button>
+              ) : null}
+              {showGenerate ? (
+                <button
+                  type="button"
+                  onClick={onGenerateNewCase}
+                  className="inline-flex items-center justify-center gap-2 rounded-md border border-gray-900 px-4 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-900 hover:text-white focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-offset-2"
+                >
+                  <PlusCircle size={16} />
+                  Generate New Case
+                </button>
+              ) : null}
+            </div>
           ) : null}
         </div>
       </div>
@@ -413,19 +662,140 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
                   <div className="text-sm text-gray-700">Run the case again and apply the same reasoning in real time.</div>
                 </div>
               </div>
-              {typeof onRequestRetake === 'function' ? (
-                <button
-                  type="button"
-                  onClick={onRequestRetake}
-                  className="inline-flex items-center justify-center gap-2 rounded-md bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-800 focus:ring-offset-2"
-                >
-                  <RotateCcw size={16} />
-                  Try Again
-                </button>
+              {showRetake || showGenerate ? (
+                <div className="flex flex-col sm:flex-row gap-2">
+                  {showRetake ? (
+                    <button
+                      type="button"
+                      onClick={onRequestRetake}
+                      className="inline-flex items-center justify-center gap-2 rounded-md bg-gray-900 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-800 focus:ring-offset-2"
+                    >
+                      <RotateCcw size={16} />
+                      Try Again
+                    </button>
+                  ) : null}
+                  {showGenerate ? (
+                    <button
+                      type="button"
+                      onClick={onGenerateNewCase}
+                      className="inline-flex items-center justify-center gap-2 rounded-md border border-gray-900 px-4 py-2 text-sm font-semibold text-gray-900 hover:bg-gray-900 hover:text-white focus:outline-none focus:ring-2 focus:ring-gray-900 focus:ring-offset-2"
+                    >
+                      <PlusCircle size={16} />
+                      Generate New Case
+                    </button>
+                  ) : null}
+                </div>
               ) : null}
             </div>
           ) : currentIssue ? (
             <div className="px-6 py-6 space-y-5">
+              {(() => {
+                const isCritical =
+                  currentIssue.type === 'missed_exception' ||
+                  currentIssue.type === 'wrong_classification' ||
+                  currentIssue.type === 'split_mismatch';
+                if (!isCritical) return null;
+                return (
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+                      <div className="border-b border-gray-200 bg-gray-50 px-4 py-3 flex items-center justify-between">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Invoice evidence</div>
+                          <div className="text-sm text-gray-700">
+                            {invoiceDoc?.fileName || 'Invoice'}
+                          </div>
+                        </div>
+                        {highlightUrl ? (
+                          <a
+                            href={highlightUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:underline"
+                          >
+                            <ExternalLink size={14} />
+                            Open
+                          </a>
+                        ) : null}
+                      </div>
+                      <div className="bg-gray-100">
+                        {!invoiceDoc ? (
+                          <div className="px-6 py-10 text-center text-sm text-gray-600">
+                            No invoice is linked to this item.
+                          </div>
+                        ) : highlightLoading ? (
+                          <div className="px-6 py-10 text-center text-sm text-gray-600">Loading invoice…</div>
+                        ) : highlightError ? (
+                          <div className="px-6 py-10 text-center text-sm text-amber-700">{highlightError}</div>
+                        ) : highlightInlineNotSupported ? (
+                          <div className="px-6 py-10 text-center text-sm text-gray-600">
+                            Preview not available for this file type. Use “Open”.
+                          </div>
+                        ) : highlightUrl ? (
+                          <iframe
+                            title="Invoice evidence"
+                            src={highlightUrl}
+                            className="w-full"
+                            style={{ height: '420px' }}
+                          />
+                        ) : (
+                          <div className="px-6 py-10 text-center text-sm text-gray-600">
+                            Invoice preview not available.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
+                      <div className="border-b border-gray-200 bg-gray-50 px-4 py-3 flex items-center justify-between">
+                        <div>
+                          <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">AP aging</div>
+                          <div className="text-sm text-gray-700">
+                            {apAgingDoc?.fileName || 'AP Aging Summary'}
+                          </div>
+                        </div>
+                        {apAgingUrl ? (
+                          <a
+                            href={apAgingUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:underline"
+                          >
+                            <ExternalLink size={14} />
+                            Open
+                          </a>
+                        ) : null}
+                      </div>
+                      <div className="bg-gray-100">
+                        {!apAgingDoc ? (
+                          <div className="px-6 py-10 text-center text-sm text-gray-600">
+                            AP aging reference not found.
+                          </div>
+                        ) : apAgingLoading ? (
+                          <div className="px-6 py-10 text-center text-sm text-gray-600">Loading AP aging…</div>
+                        ) : apAgingError ? (
+                          <div className="px-6 py-10 text-center text-sm text-amber-700">{apAgingError}</div>
+                        ) : apAgingInlineUnsupported ? (
+                          <div className="px-6 py-10 text-center text-sm text-gray-600">
+                            Preview not available for this file type. Use “Open”.
+                          </div>
+                        ) : apAgingUrl ? (
+                          <iframe
+                            title="AP aging reference"
+                            src={apAgingUrl}
+                            className="w-full"
+                            style={{ height: '420px' }}
+                          />
+                        ) : (
+                          <div className="px-6 py-10 text-center text-sm text-gray-600">
+                            AP aging preview not available.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
                 <div>
                   <div className="flex flex-col gap-1">
@@ -498,54 +868,6 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
                   </div>
                 </div>
 
-                <div className="rounded-lg border border-gray-200 bg-white overflow-hidden">
-                  <div className="border-b border-gray-200 bg-gray-50 px-4 py-3 flex items-center justify-between">
-                    <div>
-                      <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Highlighted invoice</div>
-                      <div className="text-sm text-gray-700">
-                        {currentIssue.item?.highlightedDocument?.fileName || 'Highlighted evidence'}
-                      </div>
-                    </div>
-                    {highlightUrl ? (
-                      <a
-                        href={highlightUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 text-xs font-semibold text-blue-700 hover:underline"
-                      >
-                        <ExternalLink size={14} />
-                        Open
-                      </a>
-                    ) : null}
-                  </div>
-
-                  <div className="bg-gray-100">
-                    {!hasRevealForItem(currentIssue.item) ? (
-                      <div className="px-6 py-10 text-center text-sm text-gray-600">
-                        No highlighted invoice was provided for this item.
-                      </div>
-                    ) : highlightLoading ? (
-                      <div className="px-6 py-10 text-center text-sm text-gray-600">Loading highlighted invoice…</div>
-                    ) : highlightError ? (
-                      <div className="px-6 py-10 text-center text-sm text-amber-700">{highlightError}</div>
-                    ) : highlightInlineNotSupported ? (
-                      <div className="px-6 py-10 text-center text-sm text-gray-600">
-                        Preview not available for this file type. Use “Open”.
-                      </div>
-                    ) : highlightUrl ? (
-                      <iframe
-                        title="Highlighted invoice"
-                        src={highlightUrl}
-                        className="w-full"
-                        style={{ height: '520px' }}
-                      />
-                    ) : (
-                      <div className="px-6 py-10 text-center text-sm text-gray-600">
-                        Highlighted invoice not available.
-                      </div>
-                    )}
-                  </div>
-                </div>
             </div>
           ) : null}
         </div>
@@ -595,7 +917,7 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
         </div>
       ) : null}
 
-      {decoys.length > 0 ? (
+      {routineCorrect.length > 0 ? (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
           <button
             type="button"
@@ -604,11 +926,11 @@ export default function ResultsAnalysis({ disbursements, studentAnswers, onReque
           >
             <div>
               <div className="text-xs font-semibold uppercase tracking-wide text-gray-600">Optional</div>
-              <div className="text-sm font-semibold text-gray-900">Routine transactions</div>
+              <div className="text-sm font-semibold text-gray-900">Correct routine transactions</div>
             </div>
             <div className="text-sm font-semibold text-blue-700">{showDecoys ? 'Hide' : 'Show'}</div>
           </button>
-          {showDecoys ? <DecoyTable items={decoys} studentAnswers={studentAnswers} /> : null}
+          {showDecoys ? <DecoyTable items={routineCorrect} /> : null}
         </div>
       ) : null}
 

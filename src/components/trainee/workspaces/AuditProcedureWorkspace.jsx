@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Input, Textarea, Select } from '../../../AppCore';
+import { Input, Select } from '../../../AppCore';
 import { currencyFormatter } from '../../../utils/formatters';
 
 const DECISION = {
@@ -24,7 +24,6 @@ export default function AuditProcedureWorkspace({
   onClassificationChange = noop,
   onSplitAmountChange = noop,
   onRationaleChange = noop,
-  onNoteChange = noop,
   canMakeDecision = true,
   onDecisionBlocked = noop,
   isComplete,
@@ -85,12 +84,6 @@ export default function AuditProcedureWorkspace({
   useEffect(() => {
     setCurrentDecision(deriveDecision(allocation));
   }, [allocation]);
-
-  const workpaperNote = typeof allocation?.workpaperNote === 'string'
-    ? allocation.workpaperNote
-    : typeof allocation?.notes === 'string'
-    ? allocation.notes
-    : '';
 
   const resolveSplitValue = useCallback(
     (key) => {
@@ -236,22 +229,6 @@ export default function AuditProcedureWorkspace({
           ⚠️ Exception
         </button>
       </div>
-
-      {currentDecision === DECISION.EXCEPTION ? (
-        <div className="space-y-2">
-          <label className="block text-sm font-semibold text-gray-800">
-            Exception note <span className="text-rose-700">*</span>
-            <Textarea
-              className="mt-1"
-              rows={3}
-              value={workpaperNote}
-              onChange={(event) => (itemKey ? onNoteChange(itemKey, event.target.value) : null)}
-              disabled={isLocked}
-              placeholder="Why is this an exception?"
-            />
-          </label>
-        </div>
-      ) : null}
 
       {currentDecision === DECISION.PASS && !isSplit ? (
         <div className="space-y-2">

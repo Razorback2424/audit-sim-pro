@@ -14,6 +14,10 @@ export default function CaseBasicsStep({ basics }) {
     caseLevel,
     setCaseLevel,
     caseLevelOptions,
+    moduleId,
+    setModuleId,
+    recipeVersion,
+    setRecipeVersion,
     overrideDefaults,
     setOverrideDefaults,
     overrideDisbursementCount,
@@ -23,6 +27,15 @@ export default function CaseBasicsStep({ basics }) {
     overrideInvoicesPerVendor,
     setOverrideInvoicesPerVendor,
   } = basics;
+
+  const handleRecipeVersionChange = (value) => {
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      setRecipeVersion(1);
+      return;
+    }
+    setRecipeVersion(parsed);
+  };
 
   return (
     <div className="space-y-6">
@@ -83,6 +96,42 @@ export default function CaseBasicsStep({ basics }) {
           <p className="mt-1 text-xs text-gray-500">Higher levels increase trap sophistication.</p>
         </div>
       </div>
+
+      <section className="rounded-lg border border-gray-200 bg-white p-4">
+        <h3 className="mb-3 text-base font-semibold text-gray-800">Recipe identity</h3>
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div>
+            <label htmlFor="moduleId" className="block text-sm font-medium text-gray-700">
+              Recipe ID (moduleId)
+            </label>
+            <Input
+              id="moduleId"
+              value={moduleId}
+              onChange={(e) => setModuleId(e.target.value)}
+              placeholder="e.g. case.surl.seed.alpha.v1"
+              className="mt-2"
+            />
+            <p className="mt-1 text-xs text-gray-500">Stable ID used to group attempts across versions.</p>
+          </div>
+          <div>
+            <label htmlFor="recipeVersion" className="block text-sm font-medium text-gray-700">
+              Gate version
+            </label>
+            <Input
+              id="recipeVersion"
+              type="number"
+              min="1"
+              step="1"
+              value={recipeVersion}
+              onChange={(e) => handleRecipeVersionChange(e.target.value)}
+              className="mt-2"
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              Bump this when you change the briefing or gate question.
+            </p>
+          </div>
+        </div>
+      </section>
 
       <section className="rounded-lg border border-gray-200 bg-white p-4">
         <label className="flex items-center gap-3 text-sm font-medium text-gray-800">
