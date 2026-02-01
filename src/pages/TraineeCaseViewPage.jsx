@@ -1,16 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { Timestamp } from 'firebase/firestore';
-import { storage, Button, useRoute, useAuth, useModal, appId } from '../AppCore';
+import { storage, Button, useRoute, useAuth, useUser, useModal, appId } from '../AppCore';
 import { fetchCase, listStudentCases, subscribeToCase } from '../services/caseService';
 import { saveSubmission } from '../services/submissionService';
 import { fetchProgressForCases, saveProgress, subscribeProgressForCases } from '../services/progressService';
 import { fetchRecipeProgress, saveRecipeProgress } from '../services/recipeProgressService';
-import { generateAttemptFromRecipe } from '../services/attemptService';
+import { startCaseAttemptFromPool } from '../services/attemptService';
+import { isBillingPaid } from '../services/billingService';
 import { Send, Loader2, ExternalLink, Download } from 'lucide-react';
 import ResultsAnalysis from '../components/trainee/ResultsAnalysis';
 import AuditItemCardFactory from '../components/trainee/AuditItemCardFactory';
 import OutstandingCheckTestingModule from '../components/trainee/OutstandingCheckTestingModule';
+import FixedAssetTestingModule from '../components/trainee/FixedAssetTestingModule';
 import InstructionView from '../components/InstructionView';
 import { getCaseLevelLabel, normalizeCaseLevel } from '../models/caseConstants';
 import { computeDisbursementAttemptSummary } from '../utils/attemptSummary';
@@ -383,11 +385,20 @@ const getRecipeVersion = (caseData) => {
   );
 };
 
-export default function TraineeCaseViewPage({ params }) {
+export default function TraineeCaseViewPage({ params, demoMode = false }) {
   const { caseId } = params;
   const { navigate, query, setQuery } = useRoute();
   const { userId } = useAuth();
+  const { billing, loadingBilling } = useUser();
   const { showModal, hideModal } = useModal();
+  const demoCaseId = (process.env.REACT_APP_DEMO_SURL_CASE_ID || '').trim();
+  const isDemoCase = demoCaseId ? demoCaseId === caseId : false;
+  const isDemo =
+    Boolean(demoMode) ||
+    (typeof query?.demo === 'string'
+      ? ['1', 'true', 'yes'].includes(query.demo.toLowerCase())
+      : Boolean(query?.demo));
+  const canPersist = Boolean(userId) && !isDemo;
 
   const normalizePaymentId = useCallback((value) => {
     if (value === null || value === undefined) return '';
@@ -604,7 +615,7 @@ export default function TraineeCaseViewPage({ params }) {
 
   const resetForRetake = useCallback(
     async ({ clearRetakeQuery } = {}) => {
-      if (!caseId || !userId) return;
+      if (!caseId) return;
       if (retakeResettingRef.current) return;
 
       retakeResettingRef.current = true;
@@ -649,6 +660,22 @@ export default function TraineeCaseViewPage({ params }) {
       attemptStartedAtRef.current = null;
       setModulePassed(null);
       lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null, inlineNotSupported: false };
+
+      if (!canPersist) {
+        retakeResettingRef.current = false;
+        setIsRetakeResetting(false);
+        if (clearRetakeQuery && typeof setQuery === 'function') {
+          setQuery(
+            (prev) => {
+              const next = { ...prev };
+              delete next.retake;
+              return next;
+            },
+            { replace: true }
+          );
+        }
+        return;
+      }
 
       let didReset = false;
       try {
@@ -710,7 +737,7 @@ export default function TraineeCaseViewPage({ params }) {
     },
     [
       caseId,
-      userId,
+      canPersist,
       gateScope,
       setQuery,
       showModal,
@@ -720,75 +747,54 @@ export default function TraineeCaseViewPage({ params }) {
     ]
   );
 
-  const startRetakeAttempt = useCallback(
-    async ({ clearRetakeQuery, startAtStep } = {}) => {
-      if (!caseData?.moduleId || !userId) return false;
-      if (retakeResettingRef.current) return false;
-
-      retakeResettingRef.current = true;
-      setIsRetakeResetting(true);
-      try {
-        const newCaseId = await generateAttemptFromRecipe({
-          moduleId: caseData.moduleId,
-          uid: userId,
-          retakeAttempt: true,
-        });
-        if (startAtStep) {
-          const percentComplete = computePercentComplete(startAtStep, 0, 0);
-          await saveProgress({
-            appId,
-            uid: userId,
-            caseId: newCaseId,
-            patch: {
-              percentComplete,
-              state: deriveStateFromProgress(startAtStep, percentComplete),
-              step: startAtStep,
-              draft: {
-                selectedPaymentIds: [],
-                classificationDraft: {},
-                tieOutGate: null,
-                gateFailures: {
-                  instruction: false,
-                  tieOut: false,
-                  completeness: false,
-                  selection: false,
-                },
-              },
-            },
-          });
-        }
-        navigate(`/cases/${newCaseId}`);
-        return true;
-      } catch (err) {
-        console.error('Failed to generate a retake attempt:', err);
-        showModal('We ran into an issue preparing your retake. Please try again.', 'Retake Error');
-        if (clearRetakeQuery && typeof setQuery === 'function') {
-          setQuery(
-            (prev) => {
-              const next = { ...prev };
-              delete next.retake;
-              return next;
-            },
-            { replace: true }
-          );
-        }
-        return false;
-      } finally {
-        setIsRetakeResetting(false);
-        retakeResettingRef.current = false;
-      }
-    },
-    [caseData, navigate, setQuery, showModal, userId]
-  );
-
   const requestRetake = useCallback(() => {
     resetForRetake();
   }, [resetForRetake]);
 
-  const generateNewCase = useCallback(() => {
+  const generateNewCase = useCallback(async () => {
     if (!caseData?.moduleId) return;
-    startRetakeAttempt({ startAtStep: firstPostInstructionStep });
-  }, [caseData?.moduleId, firstPostInstructionStep, startRetakeAttempt]);
+    if (retakeResettingRef.current) return;
+    if (!canPersist) {
+      showModal('Demo mode uses a fixed case. Create an account to unlock additional cases.', 'Demo Mode');
+      return;
+    }
+    setIsRetakeResetting(true);
+    retakeResettingRef.current = true;
+    try {
+      const newCaseId = await startCaseAttemptFromPool({ moduleId: caseData.moduleId });
+      if (firstPostInstructionStep) {
+        const percentComplete = computePercentComplete(firstPostInstructionStep, 0, 0);
+        await saveProgress({
+          appId,
+          uid: userId,
+          caseId: newCaseId,
+          patch: {
+            percentComplete,
+            state: deriveStateFromProgress(firstPostInstructionStep, percentComplete),
+            step: firstPostInstructionStep,
+            draft: {
+              selectedPaymentIds: [],
+              classificationDraft: {},
+              tieOutGate: null,
+              gateFailures: {
+                instruction: false,
+                tieOut: false,
+                completeness: false,
+                selection: false,
+              },
+            },
+          },
+        });
+      }
+      navigate(`/cases/${newCaseId}`);
+    } catch (err) {
+      console.error('Failed to start a new case attempt:', err);
+      showModal('We ran into an issue starting a new case. Please try again.', 'Case Error');
+    } finally {
+      setIsRetakeResetting(false);
+      retakeResettingRef.current = false;
+    }
+  }, [caseData?.moduleId, firstPostInstructionStep, navigate, showModal, canPersist, userId]);
 
   const parseAmount = useCallback((value) => {
     if (value === '' || value === null || value === undefined) return 0;
@@ -887,9 +893,20 @@ export default function TraineeCaseViewPage({ params }) {
   }, [isLocked]);
 
   useEffect(() => {
-    if (!caseId || !userId) {
+    if (!caseId) {
       setLoading(false);
-      if (!caseId) navigate('/trainee');
+      if (!isDemo) navigate('/trainee');
+      return;
+    }
+    if (!isDemo && !isDemoCase && userId && !loadingBilling && !isBillingPaid(billing)) {
+      setLoading(false);
+      showModal('This case is locked until you upgrade your account.', 'Upgrade required');
+      navigate('/checkout?plan=individual');
+      return;
+    }
+    if (!userId && !isDemo) {
+      setLoading(false);
+      navigate('/login');
       return;
     }
 
@@ -902,15 +919,17 @@ export default function TraineeCaseViewPage({ params }) {
             typeof caseDoc.publicVisible === 'boolean'
               ? caseDoc.publicVisible
               : !(Array.isArray(caseDoc.visibleToUserIds) && caseDoc.visibleToUserIds.length > 0);
-          const isRostered = Array.isArray(caseDoc.visibleToUserIds) && caseDoc.visibleToUserIds.includes(userId);
+          const isRostered =
+            Boolean(userId) && Array.isArray(caseDoc.visibleToUserIds) && caseDoc.visibleToUserIds.includes(userId);
+          const fallbackPath = isDemo ? '/' : '/trainee';
           if (!isPublic && !isRostered) {
             showModal('You do not have permission to view this case.', 'Access Denied');
-            navigate('/trainee');
+            navigate(fallbackPath);
             return;
           }
           if (caseDoc.status === 'archived') {
             showModal('This case has been archived by an administrator.', 'Unavailable');
-            navigate('/trainee');
+            navigate(fallbackPath);
             return;
           }
           const opensAtMsRaw = caseDoc?.opensAt?.toMillis
@@ -921,13 +940,13 @@ export default function TraineeCaseViewPage({ params }) {
           const opensAtMs = opensAtMsRaw !== null && !Number.isNaN(opensAtMsRaw) ? opensAtMsRaw : null;
           if (opensAtMs && opensAtMs > Date.now()) {
             showModal('This case is not yet open for review. Please check back later.', 'Not Yet Available');
-            navigate('/trainee');
+            navigate(fallbackPath);
             return;
           }
           setCaseData(caseDoc);
         } else {
           showModal('Case not found or has been removed.', 'Error');
-          navigate('/trainee');
+          navigate(isDemo ? '/' : '/trainee');
         }
         setLoading(false);
       },
@@ -935,12 +954,12 @@ export default function TraineeCaseViewPage({ params }) {
         console.error('Error fetching case: ', error);
         showModal('Error fetching case: ' + error.message, 'Error');
         setLoading(false);
-        navigate('/trainee');
+        navigate(isDemo ? '/' : '/trainee');
       }
     );
 
     return () => unsubscribe();
-  }, [caseId, navigate, userId, showModal]);
+  }, [caseId, navigate, userId, showModal, isDemo, isDemoCase, billing, loadingBilling]);
 
   useEffect(() => {
     let active = true;
@@ -961,7 +980,7 @@ export default function TraineeCaseViewPage({ params }) {
   }, [caseId, activeStep]);
 
   useEffect(() => {
-    if (!caseData || !userId || !recipeGateId) return;
+    if (!caseData || !canPersist || !recipeGateId) return;
     let isActive = true;
 
     fetchRecipeProgress({ appId, uid: userId, recipeId: recipeGateId })
@@ -979,7 +998,7 @@ export default function TraineeCaseViewPage({ params }) {
     return () => {
       isActive = false;
     };
-  }, [caseData, userId, recipeGateId]);
+  }, [caseData, canPersist, recipeGateId]);
 
   useEffect(() => {
     if (!query?.retake) {
@@ -988,7 +1007,7 @@ export default function TraineeCaseViewPage({ params }) {
   }, [query]);
 
   useEffect(() => {
-    if (!caseId || !userId) return;
+    if (!caseId || !canPersist) return;
     const retakeValue = query?.retake;
     const retakeRequested =
       typeof retakeValue === 'string' ? retakeValue.toLowerCase() === 'true' : Boolean(retakeValue);
@@ -996,15 +1015,11 @@ export default function TraineeCaseViewPage({ params }) {
     if (!caseData) return;
 
     retakeHandledRef.current = true;
-    if (caseData?.moduleId) {
-      startRetakeAttempt({ clearRetakeQuery: true });
-      return;
-    }
     resetForRetake({ clearRetakeQuery: true });
-  }, [caseId, userId, query, caseData, resetForRetake, startRetakeAttempt]);
+  }, [caseId, canPersist, query, caseData, resetForRetake]);
 
   useEffect(() => {
-    if (!caseId || !userId) return;
+    if (!caseId || !canPersist) return;
 
     const unsubscribe = subscribeProgressForCases(
       { appId, uid: userId, caseIds: [caseId] },
@@ -1108,6 +1123,7 @@ export default function TraineeCaseViewPage({ params }) {
     return () => unsubscribe();
   }, [
     caseId,
+    canPersist,
     userId,
     normalizePaymentId,
     gatePassed,
@@ -1119,7 +1135,7 @@ export default function TraineeCaseViewPage({ params }) {
   ]);
 
   useEffect(() => {
-    if (!caseData || !userId) return;
+    if (!caseData || !canPersist) return;
     const level = normalizeCaseLevel(caseData?.caseLevel);
     if (level === 'basic') {
       setLevelGate({ locked: false, message: '' });
@@ -1173,7 +1189,7 @@ export default function TraineeCaseViewPage({ params }) {
     return () => {
       isActive = false;
     };
-  }, [caseData, userId, isProgressComplete]);
+  }, [caseData, canPersist, isProgressComplete]);
 
   useEffect(() => {
     if (!levelGate.locked || lockNoticeRef.current) return;
@@ -1364,6 +1380,18 @@ export default function TraineeCaseViewPage({ params }) {
       const hasSpec = doc.generationSpec || doc.generationSpecId;
       if (!hasSpec) return false;
       return !doc.storagePath && !doc.downloadURL;
+    });
+  }, [caseData]);
+
+  const hasMissingCashArtifacts = useMemo(() => {
+    const artifacts = Array.isArray(caseData?.cashArtifacts) ? caseData.cashArtifacts : [];
+    return artifacts.some((doc) => {
+      if (!doc || typeof doc !== 'object') return false;
+      const type = typeof doc.type === 'string' ? doc.type.trim() : '';
+      if (!type) return false;
+      const hasFileName = typeof doc.fileName === 'string' && doc.fileName.trim();
+      const hasLink = Boolean(doc.downloadURL || doc.storagePath);
+      return hasFileName && !hasLink;
     });
   }, [caseData]);
 
@@ -1917,9 +1945,18 @@ export default function TraineeCaseViewPage({ params }) {
     };
   }, [decisionBlockedHint]);
 
+  const isOutstandingCheckTesting = useMemo(
+    () => caseData?.auditArea === 'cash' && caseData?.cashContext?.moduleType === 'outstanding_check_testing',
+    [caseData]
+  );
+  const isFixedAssetCase = useMemo(
+    () => caseData?.auditArea === 'fixed_assets' || caseData?.workpaper?.layoutType === 'fixed_assets',
+    [caseData]
+  );
+
   const enqueueProgressSave = useCallback(
     (stepOverride) => {
-      if (!userId || !caseId) return;
+      if (!canPersist || !caseId || isOutstandingCheckTesting) return;
       const intendedStep = stepOverride || activeStepRef.current;
       setSaveStatus('saving');
       if (!attemptStartedAtRef.current) {
@@ -1965,13 +2002,21 @@ export default function TraineeCaseViewPage({ params }) {
           });
       }, 1000);
     },
-    [userId, caseId]
+    [canPersist, caseId, isOutstandingCheckTesting]
   );
 
   useEffect(() => {
-    if (!caseData || !userId || isLocked || activeStep === FLOW_STEPS.RESULTS || isRetakeResetting) return;
+    if (
+      !caseData ||
+      !canPersist ||
+      isLocked ||
+      activeStep === FLOW_STEPS.RESULTS ||
+      isRetakeResetting ||
+      isOutstandingCheckTesting
+    )
+      return;
     enqueueProgressSave();
-  }, [caseData, userId, isLocked, activeStep, enqueueProgressSave, isRetakeResetting]);
+  }, [caseData, canPersist, isLocked, activeStep, enqueueProgressSave, isRetakeResetting, isOutstandingCheckTesting]);
 
   const markGateFailure = useCallback(
     (gateKey) => {
@@ -1990,11 +2035,13 @@ export default function TraineeCaseViewPage({ params }) {
 
   const handleEnterSimulation = useCallback(() => {
     if (isLocked) return;
-    if (!gatePassed && recipeGateId && userId) {
+    if (!gatePassed && recipeGateId) {
       setRecipeProgress({ recipeId: recipeGateId, passedVersion: recipeVersion, passedAt: null });
-      saveRecipeProgress({ appId, uid: userId, recipeId: recipeGateId, passedVersion: recipeVersion }).catch((error) => {
-        console.error('Failed to save recipe progress:', error);
-      });
+      if (canPersist) {
+        saveRecipeProgress({ appId, uid: userId, recipeId: recipeGateId, passedVersion: recipeVersion }).catch((error) => {
+          console.error('Failed to save recipe progress:', error);
+        });
+      }
     }
     if (!attemptStartedAtRef.current) {
       attemptStartedAtRef.current = Date.now();
@@ -2002,7 +2049,7 @@ export default function TraineeCaseViewPage({ params }) {
     lastLocalChangeRef.current = Date.now();
     enqueueProgressSave(firstPostInstructionStep);
     setActiveStep(firstPostInstructionStep);
-  }, [gatePassed, recipeGateId, recipeVersion, userId, isLocked, enqueueProgressSave, firstPostInstructionStep]);
+  }, [gatePassed, recipeGateId, recipeVersion, canPersist, userId, isLocked, enqueueProgressSave, firstPostInstructionStep]);
 
   const updateActiveStep = useCallback(
     (stepKey) => {
@@ -2360,7 +2407,7 @@ export default function TraineeCaseViewPage({ params }) {
   };
 
   const handleSubmitTesting = async () => {
-    if (!caseData || !userId || selectedIds.length === 0) return;
+    if (!caseData || selectedIds.length === 0) return;
 
     const allocationPayload = {};
     const invalidAllocations = [];
@@ -2437,6 +2484,16 @@ export default function TraineeCaseViewPage({ params }) {
     );
     const hasSuccessfulAttempt = gatesFirstAttempt && gatesPassed && allClassificationsCorrect;
     setModulePassed(hasSuccessfulAttempt);
+
+    if (!canPersist) {
+      if (progressSaveTimeoutRef.current) {
+        clearTimeout(progressSaveTimeoutRef.current);
+      }
+      setIsLocked(true);
+      setActiveStep(FLOW_STEPS.RESULTS);
+      showModal('Demo complete. Create an account to save your results and unlock more cases.', 'Demo Complete');
+      return;
+    }
 
     try {
       if (progressSaveTimeoutRef.current) {
@@ -2575,12 +2632,42 @@ export default function TraineeCaseViewPage({ params }) {
     return <div className="p-4 text-center">This case is locked. {levelGate.message}</div>;
   }
   if (!caseData) return <div className="p-4 text-center">Case not found or you may not have access. Redirecting...</div>;
+  if (hasPendingGeneration || hasMissingCashArtifacts) {
+    return (
+      <div className="min-h-screen bg-gray-50 px-4 py-12">
+        <div className="mx-auto max-w-xl rounded-xl border border-amber-200 bg-amber-50 p-6 text-center shadow-sm">
+          <h1 className="text-2xl font-semibold text-amber-900">Case is still generating</h1>
+          <p className="mt-3 text-sm text-amber-900/80">
+            This case is still finishing its documents. Please wait a few minutes and try again.
+          </p>
+          <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-center">
+            <Button variant="secondary" onClick={() => navigate('/trainee')}>
+              Return to Dashboard
+            </Button>
+            <Button onClick={() => window.location.reload()}>
+              Refresh
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
-  const isOutstandingCheckTesting =
-    caseData?.auditArea === 'cash' && caseData?.cashContext?.moduleType === 'outstanding_check_testing';
   if (isOutstandingCheckTesting) {
     return (
       <OutstandingCheckTestingModule
+        caseId={caseId}
+        caseData={caseData}
+        userId={userId}
+        navigate={navigate}
+        showModal={showModal}
+      />
+    );
+  }
+
+  if (isFixedAssetCase) {
+    return (
+      <FixedAssetTestingModule
         caseId={caseId}
         caseData={caseData}
         userId={userId}

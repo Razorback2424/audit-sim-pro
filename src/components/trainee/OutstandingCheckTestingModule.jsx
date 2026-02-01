@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Timestamp } from 'firebase/firestore';
-import { Button, appId } from '../../AppCore';
+import { ref as storageRef, getDownloadURL } from 'firebase/storage';
+import { Button, appId, storage } from '../../AppCore';
 import { saveSubmission } from '../../services/submissionService';
 import { saveProgress, subscribeProgressForCases } from '../../services/progressService';
 import { fetchRecipeProgress, saveRecipeProgress } from '../../services/recipeProgressService';
@@ -31,7 +32,7 @@ const STEP_LABELS = {
 const STEP_DESCRIPTIONS = {
   [FLOW_STEPS.INSTRUCTION]: 'Review the materials and successfully answer the knowledge check questions to access the simulation.',
   [FLOW_STEPS.SELECTION]: 'Pick the checks you will test from January clearings.',
-  [FLOW_STEPS.TESTING]: 'Trace each selection to the register and the 12/31 outstanding list.',
+  [FLOW_STEPS.TESTING]: 'Conclude properly included/excluded based on register and 12/31 list.',
   [FLOW_STEPS.RESULTS]: 'See your recap and any exceptions.',
 };
 
@@ -39,7 +40,8 @@ const normalizeCheckNo = (value) => (value === null || value === undefined ? '' 
 
 const parseDate = (value) => {
   if (!value) return null;
-  const dt = new Date(value);
+  const normalized = String(value).replace(/^20X/, '202');
+  const dt = new Date(normalized);
   return Number.isNaN(dt.getTime()) ? null : dt;
 };
 
@@ -125,8 +127,36 @@ const shallowEqualRecord = (a, b) => {
 function ArtifactViewer({ artifacts = [] }) {
   const yearEnd = artifacts.find((doc) => doc?.type === 'cash_year_end_statement') || null;
   const cutoff = artifacts.find((doc) => doc?.type === 'cash_cutoff_statement') || null;
+  const [resolvedUrls, setResolvedUrls] = useState({ yearEnd: '', cutoff: '' });
 
-  const renderOne = (doc, title) => {
+  useEffect(() => {
+    let isActive = true;
+    const resolveUrls = async () => {
+      const resolveOne = async (doc) => {
+        if (!doc) return '';
+        if (doc.downloadURL) return doc.downloadURL;
+        if (doc.storagePath) {
+          try {
+            return await getDownloadURL(storageRef(storage, doc.storagePath));
+          } catch (err) {
+            console.warn('[ArtifactViewer] Failed to resolve storage path', err);
+            return '';
+          }
+        }
+        return '';
+      };
+      const [yearEndUrl, cutoffUrl] = await Promise.all([resolveOne(yearEnd), resolveOne(cutoff)]);
+      if (isActive) {
+        setResolvedUrls({ yearEnd: yearEndUrl, cutoff: cutoffUrl });
+      }
+    };
+    resolveUrls();
+    return () => {
+      isActive = false;
+    };
+  }, [cutoff, yearEnd]);
+
+  const renderOne = (doc, title, url) => {
     if (!doc) {
       return (
         <div className="rounded-md border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-center text-sm text-gray-600">
@@ -134,7 +164,6 @@ function ArtifactViewer({ artifacts = [] }) {
         </div>
       );
     }
-    const url = doc.downloadURL || '';
     return (
       <div className="rounded-md border border-gray-200 bg-white shadow-sm">
         <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2">
@@ -161,8 +190,98 @@ function ArtifactViewer({ artifacts = [] }) {
 
   return (
     <div className="space-y-4">
-      {renderOne(yearEnd, 'December (Year-End) Bank Statement')}
-      {renderOne(cutoff, 'January Cutoff Bank Statement')}
+      {yearEnd ? renderOne(yearEnd, 'December (Year-End) Bank Statement', resolvedUrls.yearEnd) : null}
+      {renderOne(cutoff, 'January Cutoff Bank Statement', resolvedUrls.cutoff)}
+    </div>
+  );
+}
+
+const parseCheckNumber = (doc) => {
+  if (!doc || typeof doc !== 'object') return '';
+  const fromSpec = doc?.generationSpec?.data?.checkNumber;
+  if (fromSpec) return String(fromSpec).trim();
+  const name = String(doc.fileName || '');
+  const match = name.match(/check copy\s+(\d+)/i);
+  return match ? match[1] : '';
+};
+
+const CLASSIFICATION_LABELS = {
+  properly_included: 'Properly Included',
+  properly_excluded: 'Properly Excluded',
+  improperly_included: 'Improperly Included',
+  improperly_excluded: 'Improperly Excluded',
+};
+
+function CheckCopyViewer({ referenceDocuments = [], selectedCheckNos = [], activeCheckNo = '' }) {
+  const [checkUrls, setCheckUrls] = useState({});
+
+  const checkDocMap = useMemo(() => {
+    const map = new Map();
+    (Array.isArray(referenceDocuments) ? referenceDocuments : []).forEach((doc) => {
+      const checkNo = parseCheckNumber(doc);
+      if (!checkNo) return;
+      map.set(checkNo, doc);
+    });
+    return map;
+  }, [referenceDocuments]);
+
+  useEffect(() => {
+    let isActive = true;
+    const resolveUrls = async () => {
+      const entries = await Promise.all(
+        (selectedCheckNos || []).map(async (checkNo) => {
+          const doc = checkDocMap.get(checkNo);
+          if (!doc) return [checkNo, ''];
+          if (doc.downloadURL) return [checkNo, doc.downloadURL];
+          if (doc.storagePath) {
+            try {
+              const url = await getDownloadURL(storageRef(storage, doc.storagePath));
+              return [checkNo, url];
+            } catch (err) {
+              console.warn('[CheckCopyViewer] Failed to resolve storage path', err);
+              return [checkNo, ''];
+            }
+          }
+          return [checkNo, ''];
+        })
+      );
+      if (isActive) {
+        const nextUrls = Object.fromEntries(entries);
+        setCheckUrls(nextUrls);
+      }
+    };
+    resolveUrls();
+    return () => {
+      isActive = false;
+    };
+  }, [checkDocMap, selectedCheckNos]);
+
+  const activeUrl = activeCheckNo ? checkUrls[activeCheckNo] || '' : '';
+  const activeDoc = activeCheckNo ? checkDocMap.get(activeCheckNo) : null;
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
+      <div className="border-b border-gray-100 px-4 py-3">
+        <h3 className="text-sm font-semibold text-gray-800">Check Copy Preview</h3>
+        <p className="text-xs text-gray-500">Click a check selection to preview its copy.</p>
+      </div>
+      <div className="border-t border-gray-100 bg-gray-50 min-h-[360px]">
+        {activeUrl ? (
+          <iframe
+            title={activeDoc?.fileName || 'Check copy'}
+            src={activeUrl}
+            className="h-[360px] w-full"
+          />
+        ) : (
+          <div className="px-4 py-6 text-sm text-gray-600">
+            {activeCheckNo
+              ? 'Preview is not ready yet. Please wait a moment.'
+              : (selectedCheckNos || []).length === 0
+                ? 'No checks selected yet.'
+                : 'Select a check to preview the PDF.'}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -219,29 +338,24 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
     return map;
   }, [caseData]);
 
-  const registerMap = useMemo(() => {
-    const raw = Array.isArray(caseData?.cashRegisterItems) ? caseData.cashRegisterItems : [];
+  const checkCopyMap = useMemo(() => {
+    const docs = Array.isArray(caseData?.referenceDocuments) ? caseData.referenceDocuments : [];
     const map = new Map();
-    raw.forEach((row, index) => {
-      const checkNo = normalizeCheckNo(row?.checkNo);
+    docs.forEach((doc) => {
+      const templateId = doc?.generationSpec?.templateId;
+      if (templateId && templateId !== 'refdoc.check-copy.v1') return;
+      const checkNo = parseCheckNumber(doc);
       if (!checkNo) return;
+      const data = doc?.generationSpec?.data || {};
       map.set(checkNo, {
-        id: checkNo,
         checkNo,
-        writtenDate: row?.writtenDate || '',
-        amount: row?.amount ?? '',
-        payee: row?.payee || '',
-        __index: index,
+        writtenDate: data?.date || '',
+        amount: data?.amountNumeric || data?.amount || '',
+        payee: data?.payee || '',
       });
     });
     return map;
   }, [caseData]);
-
-  const registerRows = useMemo(() => {
-    const rows = Array.from(registerMap.values());
-    rows.sort((a, b) => String(a.checkNo || '').localeCompare(String(b.checkNo || '')));
-    return rows;
-  }, [registerMap]);
 
   const outstandingRows = useMemo(() => {
     const rows = Array.from(outstandingList.values());
@@ -252,17 +366,11 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
   const [activeStep, setActiveStep] = useState(FLOW_STEPS.INSTRUCTION);
   const [recipeProgress, setRecipeProgress] = useState(null);
   const [selectedChecks, setSelectedChecks] = useState({});
-  const [registerConfirmed, setRegisterConfirmed] = useState({});
-  const [registerEligibility, setRegisterEligibility] = useState({});
-  const [registerAmountMatch, setRegisterAmountMatch] = useState({});
-  const [decisions, setDecisions] = useState({});
-  const [outstandingAmountMatch, setOutstandingAmountMatch] = useState({});
-  const [outstandingPayeeMatch, setOutstandingPayeeMatch] = useState({});
-  const [exceptionNotes, setExceptionNotes] = useState({});
-  const [exceptionCauses, setExceptionCauses] = useState({});
+  const [classificationByCheck, setClassificationByCheck] = useState({});
   const [isLocked, setIsLocked] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [furthestStepIndex, setFurthestStepIndex] = useState(0);
+  const [activeCheckNo, setActiveCheckNo] = useState('');
 
   const progressSaveTimeoutRef = useRef(null);
   const lastLocalChangeRef = useRef(0);
@@ -270,14 +378,7 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
   const selectionRef = useRef(selectedChecks);
   const selectedCheckNosRef = useRef([]);
   const completedCountRef = useRef(0);
-  const registerConfirmedRef = useRef(registerConfirmed);
-  const registerEligibilityRef = useRef(registerEligibility);
-  const registerAmountMatchRef = useRef(registerAmountMatch);
-  const decisionsRef = useRef(decisions);
-  const outstandingAmountMatchRef = useRef(outstandingAmountMatch);
-  const outstandingPayeeMatchRef = useRef(outstandingPayeeMatch);
-  const exceptionNotesRef = useRef(exceptionNotes);
-  const exceptionCausesRef = useRef(exceptionCauses);
+  const classificationRef = useRef(classificationByCheck);
   const isLockedRef = useRef(isLocked);
   const attemptStartedAtRef = useRef(null);
   const hasProgressRef = useRef(false);
@@ -309,111 +410,56 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
 
   const selectedCount = selectedCheckNos.length;
   const bankPopulationMissing = bankPopulation.length === 0;
-  const registerMissingForSelected = useMemo(
-    () => selectedCheckNos.filter((checkNo) => !registerMap.has(checkNo)),
-    [registerMap, selectedCheckNos]
-  );
+
+  useEffect(() => {
+    if (selectedCheckNos.length === 0) {
+      if (activeCheckNo) setActiveCheckNo('');
+      return;
+    }
+    if (!activeCheckNo || !selectedCheckNos.includes(activeCheckNo)) {
+      setActiveCheckNo(selectedCheckNos[0]);
+    }
+  }, [activeCheckNo, selectedCheckNos]);
 
   const evalForCheck = useCallback(
     (checkNo) => {
       const bankItem = bankPopulation.find((item) => item.checkNo === checkNo) || null;
-      const reg = registerMap.get(checkNo) || null;
-      const writtenDate = reg ? parseDate(reg.writtenDate) : null;
+      const checkCopy = checkCopyMap.get(checkNo) || null;
+      const writtenDate = checkCopy ? parseDate(checkCopy.writtenDate) : null;
       const eligible =
         yearEndDate && writtenDate ? compareDatesYMD(writtenDate, yearEndDate) <= 0 : null;
       const onOutstandingList = outstandingList.has(checkNo);
-      const correctDecision =
-        eligible === false ? 'out_of_scope' : eligible === true ? (onOutstandingList ? 'found' : 'missing') : '';
+      const correctClassification =
+        eligible === true
+          ? onOutstandingList
+            ? 'properly_included'
+            : 'improperly_excluded'
+          : eligible === false
+            ? onOutstandingList
+              ? 'improperly_included'
+              : 'properly_excluded'
+            : '';
 
-      const registerAmountMatches =
-        reg && bankItem ? Math.abs(Number(reg.amount || 0) - Number(bankItem.amount || 0)) <= 0.01 : null;
-      const outstandingItem = outstandingList.get(checkNo) || null;
-      const outstandingAmountMatches =
-        outstandingItem && bankItem
-          ? Math.abs(Number(outstandingItem.amount || 0) - Number(bankItem.amount || 0)) <= 0.01
-          : null;
-      const outstandingPayeeMatches =
-        outstandingItem && outstandingItem.payee && reg && reg.payee
-          ? outstandingItem.payee === reg.payee
-          : null;
-
-      const studentEligibility = registerEligibility[checkNo] || '';
-      const studentRegisterAmountMatch = registerAmountMatch[checkNo] || '';
-      const studentDecision = decisions[checkNo] || '';
-      const studentOutstandingAmountMatch = outstandingAmountMatch[checkNo] || '';
-      const studentOutstandingPayeeMatch = outstandingPayeeMatch[checkNo] || '';
-      const studentCause = exceptionCauses[checkNo] || '';
+      const studentClassification = classificationByCheck[checkNo] || '';
 
       return {
         checkNo,
         bankItem,
-        registerItem: reg,
         eligible,
         onOutstandingList,
-        correctDecision,
-        registerAmountMatches,
-        outstandingItem,
-        outstandingAmountMatches,
-        outstandingPayeeMatches,
-        studentEligibility,
-        studentRegisterAmountMatch,
-        studentDecision,
-        studentOutstandingAmountMatch,
-        studentOutstandingPayeeMatch,
-        studentCause,
+        correctClassification,
+        studentClassification,
       };
     },
-    [
-      bankPopulation,
-      decisions,
-      exceptionCauses,
-      outstandingAmountMatch,
-      outstandingList,
-      outstandingPayeeMatch,
-      registerAmountMatch,
-      registerEligibility,
-      registerMap,
-      yearEndDate,
-    ]
+    [bankPopulation, checkCopyMap, classificationByCheck, outstandingList, yearEndDate]
   );
 
   const completedCount = useMemo(() => {
     return selectedCheckNos.filter((checkNo) => {
-      if (!registerConfirmed[checkNo]) return false;
-      const eligibilityDecision = registerEligibility[checkNo];
-      const registerAmountDecision = registerAmountMatch[checkNo];
-      if (!eligibilityDecision) return false;
-      if (!registerAmountDecision) return false;
-      if (eligibilityDecision === 'ineligible') return true;
-      if (eligibilityDecision === 'eligible') {
-        const decision = decisions[checkNo];
-        if (decision !== 'found' && decision !== 'missing') return false;
-        if (decision === 'found') {
-          const amountMatchDecision = outstandingAmountMatch[checkNo];
-          if (!amountMatchDecision) return false;
-          const outstandingItem = outstandingList.get(checkNo);
-          if (outstandingItem?.payee) {
-            const payeeMatchDecision = outstandingPayeeMatch[checkNo];
-            if (!payeeMatchDecision) return false;
-          }
-          return true;
-        }
-        const note = (exceptionNotes[checkNo] || '').trim();
-        const cause = exceptionCauses[checkNo] || '';
-        return note.length > 0 && Boolean(cause);
-      }
-      return false;
+      return Boolean(classificationByCheck[checkNo]);
     }).length;
   }, [
-    decisions,
-    exceptionCauses,
-    exceptionNotes,
-    outstandingAmountMatch,
-    outstandingList,
-    outstandingPayeeMatch,
-    registerAmountMatch,
-    registerConfirmed,
-    registerEligibility,
+    classificationByCheck,
     selectedCheckNos,
   ]);
 
@@ -423,7 +469,7 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
   );
 
   const enqueueProgressSave = useCallback(
-    (nextStep) => {
+    (nextStep, overrideSelectedIds = null) => {
       if (!caseId || !userId) return;
       if (!attemptStartedAtRef.current) {
         attemptStartedAtRef.current = Date.now();
@@ -434,9 +480,11 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
       const targetStep = nextStep || activeStepRef.current;
       progressSaveTimeoutRef.current = setTimeout(async () => {
         try {
-          const currentSelected = Array.isArray(selectedCheckNosRef.current)
-            ? selectedCheckNosRef.current
-            : [];
+          const currentSelected = Array.isArray(overrideSelectedIds)
+            ? overrideSelectedIds
+            : Array.isArray(selectedCheckNosRef.current)
+              ? selectedCheckNosRef.current
+              : [];
           const currentSelectedCount = currentSelected.length;
           const currentCompletedCount = Number(completedCountRef.current || 0);
           const currentPercent = computePercentComplete(
@@ -455,14 +503,7 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
               draft: {
                 selectedPaymentIds: currentSelected,
                 outstandingCheckTesting: {
-                  registerConfirmed: registerConfirmedRef.current,
-                  registerEligibility: registerEligibilityRef.current,
-                  registerAmountMatch: registerAmountMatchRef.current,
-                  decisions: decisionsRef.current,
-                  outstandingAmountMatch: outstandingAmountMatchRef.current,
-                  outstandingPayeeMatch: outstandingPayeeMatchRef.current,
-                  exceptionNotes: exceptionNotesRef.current,
-                  exceptionCauses: exceptionCausesRef.current,
+                  classifications: classificationRef.current,
                 },
               },
             },
@@ -525,36 +566,8 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
   }, [completedCount]);
 
   useEffect(() => {
-    registerConfirmedRef.current = registerConfirmed;
-  }, [registerConfirmed]);
-
-  useEffect(() => {
-    registerEligibilityRef.current = registerEligibility;
-  }, [registerEligibility]);
-
-  useEffect(() => {
-    registerAmountMatchRef.current = registerAmountMatch;
-  }, [registerAmountMatch]);
-
-  useEffect(() => {
-    decisionsRef.current = decisions;
-  }, [decisions]);
-
-  useEffect(() => {
-    outstandingAmountMatchRef.current = outstandingAmountMatch;
-  }, [outstandingAmountMatch]);
-
-  useEffect(() => {
-    outstandingPayeeMatchRef.current = outstandingPayeeMatch;
-  }, [outstandingPayeeMatch]);
-
-  useEffect(() => {
-    exceptionNotesRef.current = exceptionNotes;
-  }, [exceptionNotes]);
-
-  useEffect(() => {
-    exceptionCausesRef.current = exceptionCauses;
-  }, [exceptionCauses]);
+    classificationRef.current = classificationByCheck;
+  }, [classificationByCheck]);
 
   useEffect(() => {
     isLockedRef.current = isLocked;
@@ -586,49 +599,21 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
           if (checkNo) nextSelection[checkNo] = true;
         });
         if (!recentlyChanged && !isSameSelectionMap(selectionRef.current, nextSelection)) {
-          setSelectedChecks(nextSelection);
+          const localHasSelection = Object.keys(selectionRef.current || {}).length > 0;
+          const serverHasSelection = Object.keys(nextSelection).length > 0;
+          if (serverHasSelection || !localHasSelection) {
+            setSelectedChecks(nextSelection);
+          }
         }
 
-        const otc = entry.draft?.outstandingCheckTesting && typeof entry.draft.outstandingCheckTesting === 'object'
-          ? entry.draft.outstandingCheckTesting
-          : {};
-        const nextRegisterConfirmed =
-          otc.registerConfirmed && typeof otc.registerConfirmed === 'object' ? otc.registerConfirmed : {};
-        const nextRegisterEligibility =
-          otc.registerEligibility && typeof otc.registerEligibility === 'object' ? otc.registerEligibility : {};
-        const nextRegisterAmountMatch =
-          otc.registerAmountMatch && typeof otc.registerAmountMatch === 'object' ? otc.registerAmountMatch : {};
-        const nextDecisions = otc.decisions && typeof otc.decisions === 'object' ? otc.decisions : {};
-        const nextOutstandingAmountMatch =
-          otc.outstandingAmountMatch && typeof otc.outstandingAmountMatch === 'object' ? otc.outstandingAmountMatch : {};
-        const nextOutstandingPayeeMatch =
-          otc.outstandingPayeeMatch && typeof otc.outstandingPayeeMatch === 'object' ? otc.outstandingPayeeMatch : {};
-        const nextNotes = otc.exceptionNotes && typeof otc.exceptionNotes === 'object' ? otc.exceptionNotes : {};
-        const nextCauses = otc.exceptionCauses && typeof otc.exceptionCauses === 'object' ? otc.exceptionCauses : {};
-
-        if (!recentlyChanged && !shallowEqualRecord(registerConfirmedRef.current, nextRegisterConfirmed)) {
-          setRegisterConfirmed(nextRegisterConfirmed);
-        }
-        if (!recentlyChanged && !shallowEqualRecord(registerEligibilityRef.current, nextRegisterEligibility)) {
-          setRegisterEligibility(nextRegisterEligibility);
-        }
-        if (!recentlyChanged && !shallowEqualRecord(registerAmountMatchRef.current, nextRegisterAmountMatch)) {
-          setRegisterAmountMatch(nextRegisterAmountMatch);
-        }
-        if (!recentlyChanged && !shallowEqualRecord(decisionsRef.current, nextDecisions)) {
-          setDecisions(nextDecisions);
-        }
-        if (!recentlyChanged && !shallowEqualRecord(outstandingAmountMatchRef.current, nextOutstandingAmountMatch)) {
-          setOutstandingAmountMatch(nextOutstandingAmountMatch);
-        }
-        if (!recentlyChanged && !shallowEqualRecord(outstandingPayeeMatchRef.current, nextOutstandingPayeeMatch)) {
-          setOutstandingPayeeMatch(nextOutstandingPayeeMatch);
-        }
-        if (!recentlyChanged && !shallowEqualRecord(exceptionNotesRef.current, nextNotes)) {
-          setExceptionNotes(nextNotes);
-        }
-        if (!recentlyChanged && !shallowEqualRecord(exceptionCausesRef.current, nextCauses)) {
-          setExceptionCauses(nextCauses);
+        const otc =
+          entry.draft?.outstandingCheckTesting && typeof entry.draft.outstandingCheckTesting === 'object'
+            ? entry.draft.outstandingCheckTesting
+            : {};
+        const nextClassifications =
+          otc.classifications && typeof otc.classifications === 'object' ? otc.classifications : {};
+        if (!recentlyChanged && !shallowEqualRecord(classificationRef.current, nextClassifications)) {
+          setClassificationByCheck(nextClassifications);
         }
 
         const shouldLock = entry.state === 'submitted' || nextStep === FLOW_STEPS.RESULTS;
@@ -679,162 +664,20 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
       } else {
         next[id] = true;
       }
+      const nextSelectedIds = Object.keys(next).filter((key) => next[key]);
+      selectionRef.current = next;
+      selectedCheckNosRef.current = nextSelectedIds;
+      enqueueProgressSave(FLOW_STEPS.SELECTION, nextSelectedIds);
       return next;
     });
   };
 
-  const confirmRegisterForCheck = (checkNo) => {
-    if (isLocked) return;
-    const id = normalizeCheckNo(checkNo);
-    if (!id) return;
-    const reg = registerMap.get(id);
-    if (!reg) {
-      showModal?.(`No matching check register entry found for check #${id}. Ask your instructor to add it.`, 'Register Missing');
-      return;
-    }
-    if (!yearEndDate) {
-      showModal?.('Year-end date (reconciliation date) is missing. Ask your instructor to set it in Cash Context.', 'Missing Year-End Date');
-      return;
-    }
-    const writtenDate = parseDate(reg.writtenDate);
-    if (!writtenDate) {
-      showModal?.(`Register written date is missing/invalid for check #${id}.`, 'Register Date Missing');
-      return;
-    }
-
-    lastLocalChangeRef.current = Date.now();
-    setRegisterConfirmed((prev) => ({ ...prev, [id]: true }));
-    enqueueProgressSave(FLOW_STEPS.TESTING);
-  };
-
-  const setEligibilityDecision = (checkNo, value) => {
+  const setClassificationDecision = (checkNo, value) => {
     if (isLocked) return;
     const id = normalizeCheckNo(checkNo);
     if (!id) return;
     lastLocalChangeRef.current = Date.now();
-    setRegisterEligibility((prev) => ({ ...prev, [id]: value }));
-    if (value !== 'eligible') {
-      setDecisions((prev) => {
-        if (!prev[id]) return prev;
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-      setOutstandingAmountMatch((prev) => {
-        if (!prev[id]) return prev;
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-      setOutstandingPayeeMatch((prev) => {
-        if (!prev[id]) return prev;
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-      setExceptionNotes((prev) => {
-        if (!prev[id]) return prev;
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-      setExceptionCauses((prev) => {
-        if (!prev[id]) return prev;
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-    }
-    enqueueProgressSave(FLOW_STEPS.TESTING);
-  };
-
-  const setRegisterAmountDecision = (checkNo, value) => {
-    if (isLocked) return;
-    const id = normalizeCheckNo(checkNo);
-    if (!id) return;
-    lastLocalChangeRef.current = Date.now();
-    setRegisterAmountMatch((prev) => ({ ...prev, [id]: value }));
-    enqueueProgressSave(FLOW_STEPS.TESTING);
-  };
-
-  const setOutstandingAmountDecision = (checkNo, value) => {
-    if (isLocked) return;
-    const id = normalizeCheckNo(checkNo);
-    if (!id) return;
-    lastLocalChangeRef.current = Date.now();
-    setOutstandingAmountMatch((prev) => ({ ...prev, [id]: value }));
-    enqueueProgressSave(FLOW_STEPS.TESTING);
-  };
-
-  const setOutstandingPayeeDecision = (checkNo, value) => {
-    if (isLocked) return;
-    const id = normalizeCheckNo(checkNo);
-    if (!id) return;
-    lastLocalChangeRef.current = Date.now();
-    setOutstandingPayeeMatch((prev) => ({ ...prev, [id]: value }));
-    enqueueProgressSave(FLOW_STEPS.TESTING);
-  };
-
-  const setExceptionCause = (checkNo, value) => {
-    if (isLocked) return;
-    const id = normalizeCheckNo(checkNo);
-    if (!id) return;
-    lastLocalChangeRef.current = Date.now();
-    setExceptionCauses((prev) => ({ ...prev, [id]: value }));
-    enqueueProgressSave(FLOW_STEPS.TESTING);
-  };
-
-  const setDecision = (checkNo, value) => {
-    if (isLocked) return;
-    const id = normalizeCheckNo(checkNo);
-    if (!id) return;
-    if (!registerConfirmed[id]) {
-      showModal?.('Confirm the check register written date before concluding.', 'Confirm Register First');
-      return;
-    }
-    if (registerEligibility[id] !== 'eligible') {
-      showModal?.('Confirm the check was written on or before year-end before concluding.', 'Eligibility Required');
-      return;
-    }
-    lastLocalChangeRef.current = Date.now();
-    setDecisions((prev) => ({ ...prev, [id]: value }));
-    if (value === 'found') {
-      setExceptionNotes((prev) => {
-        if (!prev[id]) return prev;
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-      setExceptionCauses((prev) => {
-        if (!prev[id]) return prev;
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-    }
-    if (value === 'missing') {
-      setOutstandingAmountMatch((prev) => {
-        if (!prev[id]) return prev;
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-      setOutstandingPayeeMatch((prev) => {
-        if (!prev[id]) return prev;
-        const next = { ...prev };
-        delete next[id];
-        return next;
-      });
-    }
-    enqueueProgressSave(FLOW_STEPS.TESTING);
-  };
-
-  const setNote = (checkNo, value) => {
-    if (isLocked) return;
-    const id = normalizeCheckNo(checkNo);
-    if (!id) return;
-    lastLocalChangeRef.current = Date.now();
-    setExceptionNotes((prev) => ({ ...prev, [id]: value }));
+    setClassificationByCheck((prev) => ({ ...prev, [id]: value }));
     enqueueProgressSave(FLOW_STEPS.TESTING);
   };
 
@@ -851,15 +694,6 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
       );
       return;
     }
-    if (registerMissingForSelected.length > 0) {
-      showModal?.(
-        `The check register is missing entries for: ${registerMissingForSelected.join(
-          ', '
-        )}. Ask your instructor to add them before continuing.`,
-        'Register Missing'
-      );
-      return;
-    }
     setActiveStep(FLOW_STEPS.TESTING);
     enqueueProgressSave(FLOW_STEPS.TESTING);
   };
@@ -872,14 +706,7 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
   }, [
     activeStep,
     selectedChecks,
-    registerConfirmed,
-    registerEligibility,
-    registerAmountMatch,
-    decisions,
-    outstandingAmountMatch,
-    outstandingPayeeMatch,
-    exceptionNotes,
-    exceptionCauses,
+    classificationByCheck,
     enqueueProgressSave,
     isLocked,
     caseId,
@@ -904,14 +731,7 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
           draft: {
             selectedPaymentIds: [],
             outstandingCheckTesting: {
-              registerConfirmed: {},
-              registerEligibility: {},
-              registerAmountMatch: {},
-              decisions: {},
-              outstandingAmountMatch: {},
-              outstandingPayeeMatch: {},
-              exceptionNotes: {},
-              exceptionCauses: {},
+              classifications: {},
             },
           },
           hasSuccessfulAttempt: false,
@@ -923,14 +743,7 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
       setActiveStep(initialStep);
       setFurthestStepIndex(0);
       setSelectedChecks({});
-      setRegisterConfirmed({});
-      setRegisterEligibility({});
-      setRegisterAmountMatch({});
-      setDecisions({});
-      setOutstandingAmountMatch({});
-      setOutstandingPayeeMatch({});
-      setExceptionNotes({});
-      setExceptionCauses({});
+      setClassificationByCheck({});
       attemptStartedAtRef.current = null;
     } catch (err) {
       console.error('[OutstandingCheckTesting] Failed to reset retake', err);
@@ -946,59 +759,19 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
     const missing = [];
     const results = selectedCheckNos.map((checkNo) => {
       const info = evalForCheck(checkNo);
-      const regConfirmed = !!registerConfirmed[checkNo];
-      const eligibilityDecision = registerEligibility[checkNo] || '';
-      const registerAmountDecision = registerAmountMatch[checkNo] || '';
-      const decision = decisions[checkNo] || '';
-      const note = (exceptionNotes[checkNo] || '').trim();
-      const cause = exceptionCauses[checkNo] || '';
-      const amountMatchDecision = outstandingAmountMatch[checkNo] || '';
-      const payeeMatchDecision = outstandingPayeeMatch[checkNo] || '';
-      if (!regConfirmed) {
+      const studentClassification = classificationByCheck[checkNo] || '';
+      if (!studentClassification) {
         missing.push(checkNo);
-        return {
-          ...info,
-          decision,
-          note,
-          regConfirmed,
-          eligibilityDecision,
-          registerAmountDecision,
-          cause,
-          amountMatchDecision,
-          payeeMatchDecision,
-        };
-      }
-      if (!eligibilityDecision || !registerAmountDecision) {
-        missing.push(checkNo);
-      } else if (eligibilityDecision === 'eligible') {
-        if (decision !== 'found' && decision !== 'missing') {
-          missing.push(checkNo);
-        } else if (decision === 'found') {
-          if (!amountMatchDecision) {
-            missing.push(checkNo);
-          } else if (info.outstandingItem?.payee && !payeeMatchDecision) {
-            missing.push(checkNo);
-          }
-        } else if (decision === 'missing' && (!note || !cause)) {
-          missing.push(checkNo);
-        }
       }
       return {
         ...info,
-        decision,
-        note,
-        regConfirmed,
-        eligibilityDecision,
-        registerAmountDecision,
-        cause,
-        amountMatchDecision,
-        payeeMatchDecision,
+        studentClassification,
       };
     });
 
     if (missing.length > 0) {
       showModal?.(
-        `Complete the register and outstanding list trace for: ${Array.from(new Set(missing)).join(', ')}.`,
+        `Select a conclusion for: ${Array.from(new Set(missing)).join(', ')}.`,
         'Incomplete Testing'
       );
       return;
@@ -1007,88 +780,12 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
     const caseTitle = caseData.title || caseData.caseName || 'Audit Case';
     try {
       setIsSubmitting(true);
-      const selectedSet = new Set(selectedCheckNos);
-      let trapsCount = 0;
-      let selectedRoutineCount = 0;
-      let missedExceptionsCount = 0;
-      let falsePositivesCount = 0;
-      let eligibilityErrorsCount = 0;
-      let matchErrorsCount = 0;
-
-      bankPopulation.forEach((item) => {
-        const checkNo = normalizeCheckNo(item?.checkNo);
-        if (!checkNo) return;
-        const reg = registerMap.get(checkNo) || null;
-        const writtenDate = reg ? parseDate(reg.writtenDate) : null;
-        const eligible = yearEndDate && writtenDate ? compareDatesYMD(writtenDate, yearEndDate) <= 0 : null;
-        const studentEligibility = registerEligibility[checkNo] || '';
-        const studentRegisterAmountMatch = registerAmountMatch[checkNo] || '';
-        const registerAmountMatches =
-          reg ? Math.abs(Number(reg.amount || 0) - Number(item.amount || 0)) <= 0.01 : null;
-        if (selectedSet.has(checkNo)) {
-          if (eligible === true && studentEligibility && studentEligibility !== 'eligible') {
-            eligibilityErrorsCount += 1;
-          }
-          if (eligible === false && studentEligibility && studentEligibility !== 'ineligible') {
-            eligibilityErrorsCount += 1;
-          }
-          if (registerAmountMatches !== null && studentRegisterAmountMatch) {
-            const registerMatchExpected = registerAmountMatches ? 'match' : 'mismatch';
-            if (studentRegisterAmountMatch !== registerMatchExpected) {
-              matchErrorsCount += 1;
-            }
-          }
-        }
-        if (eligible !== true) return;
-
-        const onOutstandingList = outstandingList.has(checkNo);
-        const decision = decisions[checkNo] || '';
-        if (!onOutstandingList) {
-          trapsCount += 1;
-          if (decision !== 'missing') {
-            missedExceptionsCount += 1;
-          }
-          return;
-        }
-
-        if (!selectedSet.has(checkNo)) return;
-        selectedRoutineCount += 1;
-        if (decision === 'missing') {
-          falsePositivesCount += 1;
-          return;
-        }
-        if (decision === 'found') {
-          const outstandingItem = outstandingList.get(checkNo);
-          const outstandingAmountMatches =
-            outstandingItem ? Math.abs(Number(outstandingItem.amount || 0) - Number(item.amount || 0)) <= 0.01 : null;
-          const studentOutstandingAmountMatch = outstandingAmountMatch[checkNo] || '';
-          if (outstandingAmountMatches !== null && studentOutstandingAmountMatch) {
-            const outstandingMatchExpected = outstandingAmountMatches ? 'match' : 'mismatch';
-            if (studentOutstandingAmountMatch !== outstandingMatchExpected) {
-              matchErrorsCount += 1;
-            }
-          }
-          const outstandingPayeeMatches =
-            outstandingItem && outstandingItem.payee && reg && reg.payee ? outstandingItem.payee === reg.payee : null;
-          const studentOutstandingPayeeMatch = outstandingPayeeMatch[checkNo] || '';
-          if (outstandingPayeeMatches !== null && studentOutstandingPayeeMatch) {
-            const outstandingPayeeExpected = outstandingPayeeMatches ? 'match' : 'mismatch';
-            if (studentOutstandingPayeeMatch !== outstandingPayeeExpected) {
-              matchErrorsCount += 1;
-            }
-          }
-        }
-      });
-
-      const totalConsidered = trapsCount + selectedRoutineCount;
-      const score =
-        totalConsidered > 0
-          ? Math.round(
-              ((totalConsidered - missedExceptionsCount - falsePositivesCount - eligibilityErrorsCount - matchErrorsCount) /
-                totalConsidered) *
-                100
-            )
-          : null;
+      const totalConsidered = results.length;
+      const correctCount = results.filter(
+        (row) => row.correctClassification && row.studentClassification === row.correctClassification
+      ).length;
+      const incorrectCount = totalConsidered - correctCount;
+      const score = totalConsidered > 0 ? Math.round((correctCount / totalConsidered) * 100) : null;
       const startedAtMs = attemptStartedAtRef.current;
       const timeToCompleteSeconds =
         startedAtMs ? Math.max(0, Math.round((Date.now() - startedAtMs) / 1000)) : null;
@@ -1100,25 +797,18 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
         outstandingCheckTesting: {
           yearEndDate: yearEndDateRaw,
           selectedCheckNos,
-          registerConfirmed,
-          registerEligibility,
-          registerAmountMatch,
-          decisions,
-          outstandingAmountMatch,
-          outstandingPayeeMatch,
-          exceptionNotes,
-          exceptionCauses,
+          classifications: classificationByCheck,
           results,
         },
         attemptSummary: {
           score,
           totalConsidered,
-          missedExceptionsCount,
-          falsePositivesCount,
-          eligibilityErrorsCount,
-          matchErrorsCount,
-          wrongClassificationCount: 0,
-          criticalIssuesCount: missedExceptionsCount,
+          missedExceptionsCount: 0,
+          falsePositivesCount: 0,
+          eligibilityErrorsCount: 0,
+          matchErrorsCount: 0,
+          wrongClassificationCount: incorrectCount,
+          criticalIssuesCount: incorrectCount,
           requiredDocsOpened: null,
           timeToCompleteSeconds,
         },
@@ -1136,14 +826,7 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
           draft: {
             selectedPaymentIds: selectedCheckNos,
             outstandingCheckTesting: {
-              registerConfirmed,
-              registerEligibility,
-              registerAmountMatch,
-              decisions,
-              outstandingAmountMatch,
-              outstandingPayeeMatch,
-              exceptionNotes,
-              exceptionCauses,
+              classifications: classificationByCheck,
             },
           },
           hasSuccessfulAttempt: true,
@@ -1163,45 +846,24 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
 
   const resultsSummary = useMemo(() => {
     const rows = selectedCheckNos.map((checkNo) => evalForCheck(checkNo));
-    const eligible = rows.filter((r) => r.eligible === true);
-    const exceptions = rows.filter((r) => r.correctDecision === 'missing');
-    const missed = rows.filter((r) => r.correctDecision === 'missing' && r.studentDecision !== 'missing');
-    const falsePositives = rows.filter((r) => r.correctDecision !== 'missing' && r.studentDecision === 'missing');
-    const eligibilityErrors = rows.filter((r) => {
-      if (r.eligible === null || !r.studentEligibility) return false;
-      if (r.eligible === true) return r.studentEligibility !== 'eligible';
-      if (r.eligible === false) return r.studentEligibility !== 'ineligible';
-      return false;
-    });
-    const registerAmountErrors = rows.filter((r) => {
-      if (r.registerAmountMatches === null || !r.studentRegisterAmountMatch) return false;
-      return r.registerAmountMatches ? r.studentRegisterAmountMatch !== 'match' : r.studentRegisterAmountMatch !== 'mismatch';
-    });
-    const outstandingMatchErrors = rows.filter((r) => {
-      if (r.correctDecision !== 'found' || r.studentDecision !== 'found') return false;
-      const amountMismatch =
-        r.outstandingAmountMatches === null || !r.studentOutstandingAmountMatch
-          ? false
-          : r.outstandingAmountMatches
-          ? r.studentOutstandingAmountMatch !== 'match'
-          : r.studentOutstandingAmountMatch !== 'mismatch';
-      const payeeMismatch =
-        r.outstandingPayeeMatches === null || !r.studentOutstandingPayeeMatch
-          ? false
-          : r.outstandingPayeeMatches
-          ? r.studentOutstandingPayeeMatch !== 'match'
-          : r.studentOutstandingPayeeMatch !== 'mismatch';
-      return amountMismatch || payeeMismatch;
-    });
+    const correct = rows.filter(
+      (r) => r.correctClassification && r.studentClassification === r.correctClassification
+    );
+    const incorrect = rows.filter(
+      (r) => r.studentClassification && r.correctClassification && r.studentClassification !== r.correctClassification
+    );
+    const properlyIncluded = rows.filter((r) => r.studentClassification === 'properly_included');
+    const properlyExcluded = rows.filter((r) => r.studentClassification === 'properly_excluded');
+    const improperlyIncluded = rows.filter((r) => r.studentClassification === 'improperly_included');
+    const improperlyExcluded = rows.filter((r) => r.studentClassification === 'improperly_excluded');
     return {
       sampleSize: rows.length,
-      eligibleCount: eligible.length,
-      exceptionCount: exceptions.length,
-      missedCount: missed.length,
-      falsePositiveCount: falsePositives.length,
-      eligibilityErrorCount: eligibilityErrors.length,
-      registerAmountErrorCount: registerAmountErrors.length,
-      outstandingMatchErrorCount: outstandingMatchErrors.length,
+      correctCount: correct.length,
+      incorrectCount: incorrect.length,
+      properlyIncludedCount: properlyIncluded.length,
+      properlyExcludedCount: properlyExcluded.length,
+      improperlyIncludedCount: improperlyIncluded.length,
+      improperlyExcludedCount: improperlyExcluded.length,
     };
   }, [evalForCheck, selectedCheckNos]);
 
@@ -1335,7 +997,6 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
                     checked={!!selectedChecks[item.checkNo]}
                     onChange={() => {
                       toggleSelection(item.checkNo);
-                      enqueueProgressSave(FLOW_STEPS.SELECTION);
                     }}
                     disabled={isLocked}
                     className="h-5 w-5 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
@@ -1346,11 +1007,6 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
                       <span className="text-gray-500">Cleared: {item.clearingDate || '—'}</span>
                       <span className="text-gray-500">Amount: {currencyFormatter.format(Number(item.amount) || 0)}</span>
                     </div>
-                    {!registerMap.has(item.checkNo) ? (
-                      <p className="mt-1 text-xs text-amber-700">
-                        Missing register entry for this check number (ask instructor to add it).
-                      </p>
-                    ) : null}
                   </div>
                 </label>
               ))
@@ -1371,19 +1027,45 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
 
   const renderTestingRow = (checkNo) => {
     const bankItem = bankPopulation.find((b) => b.checkNo === checkNo) || null;
-    const confirmed = !!registerConfirmed[checkNo];
     const evalRow = evalForCheck(checkNo);
-    const eligibilityDecision = registerEligibility[checkNo] || '';
-    const registerAmountDecision = registerAmountMatch[checkNo] || '';
-    const decision = decisions[checkNo] || '';
-    const amountMatchDecision = outstandingAmountMatch[checkNo] || '';
-    const payeeMatchDecision = outstandingPayeeMatch[checkNo] || '';
-    const causeDecision = exceptionCauses[checkNo] || '';
-    const requiresPayeeMatch = Boolean(evalRow.outstandingItem?.payee);
-    const hasRegisterEntry = registerMap.has(checkNo);
+    const checkCopy = checkCopyMap.get(checkNo) || null;
+    const classification = classificationByCheck[checkNo] || '';
+    const hasCheckCopy = Boolean(checkCopy);
+    const hasWrittenDate = Boolean(checkCopy?.writtenDate);
+    const hasYearEnd = Boolean(yearEndDate);
+    const classificationDisabled = isLocked || !hasYearEnd || !hasCheckCopy || !hasWrittenDate;
+    const isActive = activeCheckNo === checkNo;
+    const options = [
+      {
+        value: 'properly_included',
+        label: 'Properly Included',
+        hint: 'Written before year-end and appears on the 12/31 list.',
+      },
+      {
+        value: 'properly_excluded',
+        label: 'Properly Excluded',
+        hint: 'Written after year-end and not on the 12/31 list.',
+      },
+      {
+        value: 'improperly_included',
+        label: 'Improperly Included',
+        hint: 'Written after year-end but appears on the 12/31 list.',
+      },
+      {
+        value: 'improperly_excluded',
+        label: 'Improperly Excluded',
+        hint: 'Written before year-end but missing from the 12/31 list.',
+      },
+    ];
 
     return (
-      <div key={checkNo} className="rounded-lg border border-gray-200 bg-white p-4 space-y-3">
+      <div
+        key={checkNo}
+        className={`rounded-lg border p-4 space-y-3 cursor-pointer ${
+          isActive ? 'border-blue-200 bg-blue-50/40' : 'border-gray-200 bg-white'
+        }`}
+        onClick={() => setActiveCheckNo(checkNo)}
+      >
         <div className="flex flex-wrap items-start justify-between gap-2">
           <div>
             <h4 className="text-base font-semibold text-gray-900">Check #{checkNo}</h4>
@@ -1391,219 +1073,42 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
               Bank cleared: {bankItem?.clearingDate || '—'} · Amount: {currencyFormatter.format(Number(bankItem?.amount) || 0)}
             </p>
           </div>
-          <div className="text-xs text-gray-500">
-            {confirmed ? (
-              eligibilityDecision === 'ineligible' ? (
-                <span className="rounded-full bg-gray-100 px-2 py-1 font-semibold text-gray-700">Marked ineligible</span>
-              ) : eligibilityDecision === 'eligible' ? (
-                <span className="rounded-full bg-blue-50 px-2 py-1 font-semibold text-blue-700">Marked eligible</span>
-              ) : (
-                <span className="rounded-full bg-amber-50 px-2 py-1 font-semibold text-amber-700">Eligibility pending</span>
-              )
-            ) : (
-              <span className="rounded-full bg-amber-50 px-2 py-1 font-semibold text-amber-700">Confirm register first</span>
-            )}
-          </div>
         </div>
 
-        <div className="rounded-md border border-gray-100 bg-gray-50 p-3 space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Register Trace (Manual)</p>
-          <p className="text-xs text-gray-500">
-            Use the register table to confirm the written date and whether the amount matches the bank statement.
-          </p>
-          {!hasRegisterEntry ? (
-            <p className="text-xs text-amber-700">
-              No register entry found for this check number. Ask your instructor to add it.
-            </p>
-          ) : null}
-          <div className="flex flex-wrap gap-4 text-sm text-gray-800">
-            <label className="inline-flex items-center gap-2">
-              <input
-                type="radio"
-                name={`eligibility-${checkNo}`}
-                checked={eligibilityDecision === 'eligible'}
-                onChange={() => setEligibilityDecision(checkNo, 'eligible')}
-                disabled={isLocked}
-              />
-              Written on/before year-end
-            </label>
-            <label className="inline-flex items-center gap-2">
-              <input
-                type="radio"
-                name={`eligibility-${checkNo}`}
-                checked={eligibilityDecision === 'ineligible'}
-                onChange={() => setEligibilityDecision(checkNo, 'ineligible')}
-                disabled={isLocked}
-              />
-              Written after year-end
-            </label>
-          </div>
-          <div className="flex flex-wrap gap-4 text-sm text-gray-800">
-            <label className="inline-flex items-center gap-2">
-              <input
-                type="radio"
-                name={`register-amount-${checkNo}`}
-                checked={registerAmountDecision === 'match'}
-                onChange={() => setRegisterAmountDecision(checkNo, 'match')}
-                disabled={isLocked}
-              />
-              Register amount matches bank
-            </label>
-            <label className="inline-flex items-center gap-2">
-              <input
-                type="radio"
-                name={`register-amount-${checkNo}`}
-                checked={registerAmountDecision === 'mismatch'}
-                onChange={() => setRegisterAmountDecision(checkNo, 'mismatch')}
-                disabled={isLocked}
-              />
-              Register amount does not match
-            </label>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="secondary"
-              onClick={() => confirmRegisterForCheck(checkNo)}
-              disabled={isLocked || confirmed || !hasRegisterEntry}
-            >
-              {confirmed ? 'Register Trace Confirmed' : 'Mark Register Trace Complete'}
-            </Button>
-            <span className="text-xs text-gray-500">
-              Required before you can conclude whether it should appear on the 12/31 outstanding list.
-            </span>
-          </div>
-        </div>
-
-        {confirmed && eligibilityDecision === 'eligible' ? (
-          <div className="rounded-md border border-gray-100 bg-white p-3 space-y-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Trace To 12/31 Outstanding List</p>
-            <p className="text-xs text-gray-500">
-              Use the outstanding check list to confirm whether this check appears and whether amount/payee agree.
-            </p>
-            <div className="flex flex-wrap gap-4 items-center">
-              <label className="inline-flex items-center gap-2 text-sm">
-                <input
-                  type="radio"
-                  name={`decision-${checkNo}`}
-                  checked={decision === 'found'}
-                  onChange={() => setDecision(checkNo, 'found')}
-                  disabled={isLocked}
-                />
-                Found on list
-              </label>
-              <label className="inline-flex items-center gap-2 text-sm">
-                <input
-                  type="radio"
-                  name={`decision-${checkNo}`}
-                  checked={decision === 'missing'}
-                  onChange={() => setDecision(checkNo, 'missing')}
-                  disabled={isLocked}
-                />
-                Not found (exception)
-              </label>
-            </div>
-
-            {decision === 'found' ? (
-              <div className="flex flex-wrap gap-4 items-center text-sm text-gray-800">
-                <label className="inline-flex items-center gap-2">
-                  <input
-                    type="radio"
-                    name={`outstanding-amount-${checkNo}`}
-                    checked={amountMatchDecision === 'match'}
-                    onChange={() => setOutstandingAmountDecision(checkNo, 'match')}
-                    disabled={isLocked}
-                  />
-                  Amount agrees with list
-                </label>
-                <label className="inline-flex items-center gap-2">
-                  <input
-                    type="radio"
-                    name={`outstanding-amount-${checkNo}`}
-                    checked={amountMatchDecision === 'mismatch'}
-                    onChange={() => setOutstandingAmountDecision(checkNo, 'mismatch')}
-                    disabled={isLocked}
-                  />
-                  Amount does not agree
-                </label>
-                {requiresPayeeMatch ? (
-                  <>
-                    <label className="inline-flex items-center gap-2">
-                      <input
-                        type="radio"
-                        name={`outstanding-payee-${checkNo}`}
-                        checked={payeeMatchDecision === 'match'}
-                        onChange={() => setOutstandingPayeeDecision(checkNo, 'match')}
-                        disabled={isLocked}
-                      />
-                      Payee agrees with list
-                    </label>
-                    <label className="inline-flex items-center gap-2">
-                      <input
-                        type="radio"
-                        name={`outstanding-payee-${checkNo}`}
-                        checked={payeeMatchDecision === 'mismatch'}
-                        onChange={() => setOutstandingPayeeDecision(checkNo, 'mismatch')}
-                        disabled={isLocked}
-                      />
-                      Payee does not agree
-                    </label>
-                  </>
-                ) : null}
-              </div>
+        {!hasCheckCopy || !hasWrittenDate || !hasYearEnd ? (
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+            {!hasCheckCopy || !hasWrittenDate ? (
+              <p>Check copy is missing or still generating for this selection.</p>
             ) : null}
-
-            {decision === 'missing' ? (
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500">Exception Cause (required)</label>
-                <div className="mt-2 space-y-2 text-sm text-gray-800">
-                  <label className="flex items-start gap-2">
-                    <input
-                      type="radio"
-                      name={`cause-${checkNo}`}
-                      checked={causeDecision === 'recorded_late'}
-                      onChange={() => setExceptionCause(checkNo, 'recorded_late')}
-                      disabled={isLocked}
-                    />
-                    <span>Recorded after year-end (cutoff error)</span>
-                  </label>
-                  <label className="flex items-start gap-2">
-                    <input
-                      type="radio"
-                      name={`cause-${checkNo}`}
-                      checked={causeDecision === 'voided_reissued'}
-                      onChange={() => setExceptionCause(checkNo, 'voided_reissued')}
-                      disabled={isLocked}
-                    />
-                    <span>Voided / reissued check chain</span>
-                  </label>
-                  <label className="flex items-start gap-2">
-                    <input
-                      type="radio"
-                      name={`cause-${checkNo}`}
-                      checked={causeDecision === 'list_incomplete'}
-                      onChange={() => setExceptionCause(checkNo, 'list_incomplete')}
-                      disabled={isLocked}
-                    />
-                    <span>Outstanding list appears incomplete</span>
-                  </label>
-                </div>
-                <label className="block text-xs font-semibold uppercase tracking-wide text-gray-500 mt-4">Exception Note (required)</label>
-                <textarea
-                  rows={3}
-                  value={exceptionNotes[checkNo] || ''}
-                  onChange={(e) => setNote(checkNo, e.target.value)}
-                  disabled={isLocked}
-                  className="mt-2 w-full rounded-md border border-gray-200 p-2 text-sm"
-                  placeholder="What did you observe? What’s the likely explanation (recorded late, void/reissue, incomplete listing)?"
-                />
-              </div>
+            {!hasYearEnd ? (
+              <p>Year-end date is missing. Ask your instructor to set it in Cash Context.</p>
             ) : null}
-          </div>
-        ) : confirmed && eligibilityDecision === 'ineligible' ? (
-          <div className="rounded-md border border-gray-100 bg-gray-50 p-3 text-xs text-gray-600">
-            Marked ineligible (written after year-end). No outstanding list trace required.
           </div>
         ) : null}
+
+        <div className="rounded-md border border-gray-100 bg-white p-3 space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Conclusion</p>
+          <div className="space-y-2 text-sm text-gray-800">
+            {options.map((option) => (
+              <label key={option.value} className="flex items-start gap-2">
+                <input
+                  type="radio"
+                  name={`classification-${checkNo}`}
+                  checked={classification === option.value}
+                  onChange={() => setClassificationDecision(checkNo, option.value)}
+                  disabled={classificationDisabled}
+                />
+                <span>
+                  <span className="font-semibold">{option.label}</span>
+                  <span className="block text-xs text-gray-500">{option.hint}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+          {classificationDisabled ? (
+            <p className="text-xs text-amber-700">Fix the missing register/year-end data before concluding.</p>
+          ) : null}
+        </div>
       </div>
     );
   };
@@ -1613,46 +1118,18 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
       <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-2">
         <h2 className="text-2xl font-semibold text-gray-800">Step 3 — Trace & Conclude</h2>
         <p className="text-sm text-gray-500">
-          For each selection, trace to the register to confirm the written date and amount, then verify whether eligible items appear on the 12/31 outstanding list (amount/payee agreement).
+          For each selection, review the check copy and compare it to the 12/31 outstanding list, then choose the proper inclusion/exclusion conclusion.
         </p>
         <p className="text-xs text-gray-500">Progress: {percentComplete}% complete</p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <div className="space-y-4">
-          <ArtifactViewer artifacts={Array.isArray(caseData?.cashArtifacts) ? caseData.cashArtifacts : []} />
-          <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
-            <div className="border-b border-gray-100 px-4 py-3">
-              <h3 className="text-sm font-semibold text-gray-800">Check Register (Late Dec–Jan)</h3>
-              <p className="text-xs text-gray-500">Use to confirm written dates and amounts.</p>
-            </div>
-            <div className="max-h-[320px] overflow-y-auto">
-              {registerRows.length === 0 ? (
-                <p className="px-4 py-4 text-xs text-gray-500">No register items provided.</p>
-              ) : (
-                <table className="min-w-full divide-y divide-gray-100 text-xs">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-3 py-2 text-left font-semibold text-gray-600">Check #</th>
-                      <th className="px-3 py-2 text-left font-semibold text-gray-600">Written</th>
-                      <th className="px-3 py-2 text-left font-semibold text-gray-600">Payee</th>
-                      <th className="px-3 py-2 text-left font-semibold text-gray-600">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {registerRows.map((row) => (
-                      <tr key={`register-${row.id || row.checkNo}`}>
-                        <td className="px-3 py-2 font-semibold text-gray-800">{row.checkNo || '—'}</td>
-                        <td className="px-3 py-2 text-gray-700">{row.writtenDate || '—'}</td>
-                        <td className="px-3 py-2 text-gray-700">{row.payee || '—'}</td>
-                        <td className="px-3 py-2 text-gray-700">{currencyFormatter.format(Number(row.amount) || 0)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </div>
-          </div>
+          <CheckCopyViewer
+            referenceDocuments={Array.isArray(caseData?.referenceDocuments) ? caseData.referenceDocuments : []}
+            selectedCheckNos={selectedCheckNos}
+            activeCheckNo={activeCheckNo}
+          />
           <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
             <div className="border-b border-gray-100 px-4 py-3">
               <h3 className="text-sm font-semibold text-gray-800">12/31 Outstanding Check Listing</h3>
@@ -1704,7 +1181,7 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
       <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-2">
         <h2 className="text-2xl font-semibold text-gray-900">Results — Outstanding Check Testing</h2>
         <p className="text-sm text-gray-600">
-          Sample size: <span className="font-semibold">{resultsSummary.sampleSize}</span> · Eligible: <span className="font-semibold">{resultsSummary.eligibleCount}</span> · Exceptions (true): <span className="font-semibold">{resultsSummary.exceptionCount}</span> · Missed: <span className="font-semibold">{resultsSummary.missedCount}</span> · False positives: <span className="font-semibold">{resultsSummary.falsePositiveCount}</span> · Eligibility errors: <span className="font-semibold">{resultsSummary.eligibilityErrorCount}</span> · Match errors: <span className="font-semibold">{resultsSummary.registerAmountErrorCount + resultsSummary.outstandingMatchErrorCount}</span>
+          Sample size: <span className="font-semibold">{resultsSummary.sampleSize}</span> · Correct: <span className="font-semibold">{resultsSummary.correctCount}</span> · Incorrect: <span className="font-semibold">{resultsSummary.incorrectCount}</span> · Properly Included: <span className="font-semibold">{resultsSummary.properlyIncludedCount}</span> · Properly Excluded: <span className="font-semibold">{resultsSummary.properlyExcludedCount}</span> · Improperly Included: <span className="font-semibold">{resultsSummary.improperlyIncludedCount}</span> · Improperly Excluded: <span className="font-semibold">{resultsSummary.improperlyExcludedCount}</span>
         </p>
       </div>
 
@@ -1715,77 +1192,32 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
               <th className="px-4 py-2 text-left font-semibold text-gray-700">Check #</th>
               <th className="px-4 py-2 text-left font-semibold text-gray-700">Written</th>
               <th className="px-4 py-2 text-left font-semibold text-gray-700">Cleared</th>
-              <th className="px-4 py-2 text-left font-semibold text-gray-700">Eligibility (You)</th>
-              <th className="px-4 py-2 text-left font-semibold text-gray-700">Eligibility (Expected)</th>
-              <th className="px-4 py-2 text-left font-semibold text-gray-700">Your Call</th>
+              <th className="px-4 py-2 text-left font-semibold text-gray-700">On 12/31 List</th>
+              <th className="px-4 py-2 text-left font-semibold text-gray-700">Your Conclusion</th>
               <th className="px-4 py-2 text-left font-semibold text-gray-700">Expected</th>
-              <th className="px-4 py-2 text-left font-semibold text-gray-700">Match (You)</th>
               <th className="px-4 py-2 text-left font-semibold text-gray-700">Result</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
             {selectedCheckNos.map((checkNo) => {
               const info = evalForCheck(checkNo);
-              const reg = registerMap.get(checkNo);
+              const checkCopy = checkCopyMap.get(checkNo);
               const bank = bankPopulation.find((b) => b.checkNo === checkNo);
-              const eligibilityExpected =
-                info.eligible === true ? 'eligible' : info.eligible === false ? 'ineligible' : '';
-              const eligibilityCorrect =
-                eligibilityExpected && info.studentEligibility
-                  ? eligibilityExpected === info.studentEligibility
-                  : true;
-              const registerMatchExpected =
-                info.registerAmountMatches === true ? 'match' : info.registerAmountMatches === false ? 'mismatch' : '';
-              const registerMatchCorrect =
-                registerMatchExpected && info.studentRegisterAmountMatch
-                  ? registerMatchExpected === info.studentRegisterAmountMatch
-                  : true;
-              const decisionCorrect =
-                info.correctDecision === 'out_of_scope'
-                  ? info.studentDecision === '' || info.studentDecision === 'out_of_scope'
-                  : info.correctDecision && info.studentDecision
-                  ? info.correctDecision === info.studentDecision
-                  : false;
-              const outstandingAmountExpected =
-                info.outstandingAmountMatches === true
-                  ? 'match'
-                  : info.outstandingAmountMatches === false
-                  ? 'mismatch'
-                  : '';
-              const outstandingAmountCorrect =
-                outstandingAmountExpected && info.studentOutstandingAmountMatch
-                  ? outstandingAmountExpected === info.studentOutstandingAmountMatch
-                  : true;
-              const outstandingPayeeExpected =
-                info.outstandingPayeeMatches === true
-                  ? 'match'
-                  : info.outstandingPayeeMatches === false
-                  ? 'mismatch'
-                  : '';
-              const outstandingPayeeCorrect =
-                outstandingPayeeExpected && info.studentOutstandingPayeeMatch
-                  ? outstandingPayeeExpected === info.studentOutstandingPayeeMatch
-                  : true;
-              const outstandingMatchCorrect =
-                info.correctDecision === 'found' && info.studentDecision === 'found'
-                  ? outstandingAmountCorrect && outstandingPayeeCorrect
-                  : true;
-              const isCorrect = decisionCorrect && eligibilityCorrect && registerMatchCorrect && outstandingMatchCorrect;
-              const matchSummary = [
-                info.studentRegisterAmountMatch ? `Reg: ${info.studentRegisterAmountMatch}` : 'Reg: —',
-                info.studentOutstandingAmountMatch ? `List amt: ${info.studentOutstandingAmountMatch}` : 'List amt: —',
-                info.studentOutstandingPayeeMatch ? `Payee: ${info.studentOutstandingPayeeMatch}` : 'Payee: —',
-              ].join(' · ');
+              const isCorrect =
+                info.correctClassification &&
+                info.studentClassification &&
+                info.correctClassification === info.studentClassification;
+              const onListLabel = info.onOutstandingList ? 'Yes' : 'No';
+              const studentLabel = CLASSIFICATION_LABELS[info.studentClassification] || info.studentClassification || '—';
+              const expectedLabel = CLASSIFICATION_LABELS[info.correctClassification] || info.correctClassification || '—';
               return (
                 <tr key={`result-${checkNo}`}>
                   <td className="px-4 py-2 font-semibold text-gray-900">{checkNo}</td>
-                  <td className="px-4 py-2 text-gray-700">{reg?.writtenDate || '—'}</td>
+                  <td className="px-4 py-2 text-gray-700">{checkCopy?.writtenDate || '—'}</td>
                   <td className="px-4 py-2 text-gray-700">{bank?.clearingDate || '—'}</td>
-                  <td className="px-4 py-2 text-gray-700">{info.studentEligibility || '—'}</td>
-                  <td className="px-4 py-2 text-gray-700">{eligibilityExpected || '—'}</td>
-                  <td className="px-4 py-2 text-gray-700">{info.studentDecision || '—'}</td>
-                  <td className="px-4 py-2 text-gray-700">{info.correctDecision || '—'}</td>
-                  <td className="px-4 py-2 text-gray-700">{matchSummary}</td>
+                  <td className="px-4 py-2 text-gray-700">{onListLabel}</td>
+                  <td className="px-4 py-2 text-gray-700">{studentLabel}</td>
+                  <td className="px-4 py-2 text-gray-700">{expectedLabel}</td>
                   <td className={`px-4 py-2 font-semibold ${isCorrect ? 'text-emerald-700' : 'text-amber-700'}`}>
                     {isCorrect ? 'Correct' : 'Review'}
                   </td>

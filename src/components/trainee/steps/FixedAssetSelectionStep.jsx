@@ -17,6 +17,10 @@ export default function FixedAssetSelectionStep({
   setScopingModalError,
   isScopingModalOpen,
   onStrategyLocked,
+  showScoping = true,
+  showSubmit = false,
+  submitLabel = 'Submit Rollforward',
+  onSubmit,
 }) {
   const leadTicks = fixedAssetDraft.leadScheduleTicks || {};
   const totalTickTargets = ['total:beginningBalance', 'total:additions', 'total:disposals', 'total:endingBalance'];
@@ -37,6 +41,7 @@ export default function FixedAssetSelectionStep({
   };
 
   const renderScopingModal = () => {
+    if (!showScoping) return null;
     if (!isScopingModalOpen) return null;
     const planLabel =
       studentPlan === 'testing' ? 'Proceed to testing' : studentPlan === 'no_testing' ? 'No testing' : '—';
@@ -267,6 +272,7 @@ export default function FixedAssetSelectionStep({
           </div>
         )}
 
+        {showScoping ? (
         <div className="flex flex-col gap-3 rounded-lg border border-gray-100 bg-gray-50 px-4 py-3 md:flex-row md:items-center md:justify-between">
           <div className="space-y-1 text-sm text-gray-700">
             <p className="font-semibold text-gray-800">Tickmark legend</p>
@@ -297,20 +303,30 @@ export default function FixedAssetSelectionStep({
             </div>
           </div>
         </div>
+        ) : null}
 
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-2">
           <Button variant="secondary" onClick={() => navigate('/trainee')}>
             Back to Cases
           </Button>
-          <Button
-            onClick={() => {
-              setIsScopingModalOpen(true);
-              setScopingModalError('');
-            }}
-            disabled={isLocked || !totalsTicked || fixedAssetSummary.length === 0}
-          >
-            Open Testing Strategy Selector
-          </Button>
+          {showScoping ? (
+            <Button
+              onClick={() => {
+                setIsScopingModalOpen(true);
+                setScopingModalError('');
+              }}
+              disabled={isLocked || !totalsTicked || fixedAssetSummary.length === 0}
+            >
+              Open Testing Strategy Selector
+            </Button>
+          ) : showSubmit ? (
+            <Button
+              onClick={onSubmit}
+              disabled={isLocked || !totalsTicked || fixedAssetSummary.length === 0}
+            >
+              {submitLabel}
+            </Button>
+          ) : null}
         </div>
       </div>
     </div>

@@ -25,6 +25,7 @@ import { subscribeToRecentSubmissionActivity } from '../services/submissionServi
 import { fetchUsersWithProfiles } from '../services/userService';
 import { listCaseRecipes } from '../generation/recipeRegistry';
 import { fetchRecipe } from '../services/recipeService';
+import { seedCasePool } from '../services/attemptService';
 import AdvancedToolsMenu from '../components/admin/AdvancedToolsMenu';
 import DashboardMetrics from '../components/admin/DashboardMetrics';
 import SetupAlerts from '../components/admin/SetupAlerts';
@@ -150,6 +151,7 @@ export default function AdminDashboardPage() {
   const [recentActivity, setRecentActivity] = useState([]);
   const [recipeDetails, setRecipeDetails] = useState([]);
   const [recipesLoading, setRecipesLoading] = useState(true);
+  const [seedingRecipeIds, setSeedingRecipeIds] = useState(() => new Set());
   const [loadingSummary, setLoadingSummary] = useState(true);
   const [loadingUsers, setLoadingUsers] = useState(true);
   const [loadingAlerts, setLoadingAlerts] = useState(true);
@@ -186,6 +188,35 @@ export default function AdminDashboardPage() {
     }
   });
   const isAdmin = role === 'admin' || role === 'owner';
+  const handleSeedPool = useCallback(
+    async ({ moduleId, count }) => {
+      if (!moduleId) return;
+      if (seedingRecipeIds.has(moduleId)) return;
+      setSeedingRecipeIds((prev) => {
+        const next = new Set(prev);
+        next.add(moduleId);
+        return next;
+      });
+      try {
+        const result = await seedCasePool({ moduleId, count });
+        const createdCount = Number(result?.created || 0);
+        showModal(
+          `Seeded ${createdCount || count} case${createdCount === 1 ? '' : 's'} for this recipe.`,
+          'Case pool seeded'
+        );
+      } catch (err) {
+        console.error('[AdminDashboard] Failed to seed case pool', err);
+        showModal(err?.message || 'Unable to seed the case pool.', 'Seeding error');
+      } finally {
+        setSeedingRecipeIds((prev) => {
+          const next = new Set(prev);
+          next.delete(moduleId);
+          return next;
+        });
+      }
+    },
+    [seedingRecipeIds, showModal]
+  );
   const handleNavigate = useCallback(
     (target) => {
       if (!target || typeof target !== 'string') return;
@@ -963,12 +994,12 @@ export default function AdminDashboardPage() {
           <RecentActivity activity={recentActivity} loading={loadingActivity} onNavigate={handleNavigate} />
           <QuickActions onNavigate={handleNavigate} />
         </div>
-        <section className="bg-white border border-gray-200 rounded-lg shadow-sm p-5 space-y-4">
+        <section id="recipe-seeding" className="bg-white border border-gray-200 rounded-lg shadow-sm p-5 space-y-4">
           <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-xl font-semibold text-gray-800">Recipe details</h2>
+              <h2 className="text-xl font-semibold text-gray-800">Recipes & case pool</h2>
               <p className="text-sm text-gray-600">
-                Configure the instructional video and gate checks for coded recipes.
+                Configure instruction and seed the initial case pool for each recipe.
               </p>
             </div>
           </div>
@@ -994,12 +1025,28 @@ export default function AdminDashboardPage() {
                     </div>
                     <div className="text-xs text-gray-400 mt-1">v{recipe.recipeVersion || 1}</div>
                   </div>
-                  <Button
-                    variant="secondary"
-                    onClick={() => navigate(`/admin/edit-recipe/${recipe.id}`)}
-                  >
-                    {recipe.isConfigured ? 'Edit details' : 'Add details'}
-                  </Button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={() => navigate(`/admin/edit-recipe/${recipe.id}`)}
+                    >
+                      {recipe.isConfigured ? 'Edit details' : 'Add details'}
+                    </Button>
+                    <Button
+                      variant="primary"
+                      onClick={() => handleSeedPool({ moduleId: recipe.id, count: 10 })}
+                      isLoading={seedingRecipeIds.has(recipe.id)}
+                    >
+                      Seed 10 cases
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      onClick={() => handleSeedPool({ moduleId: recipe.id, count: 1 })}
+                      isLoading={seedingRecipeIds.has(recipe.id)}
+                    >
+                      Seed 1
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>

@@ -348,6 +348,12 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    // User billing status (server-writable only)
+    match /artifacts/{appId}/users/{userId}/billing {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow create, update, delete: if false;
+    }
+
     match /{path=**}/caseSubmissions/{caseId} {
       allow read: if request.auth != null && isAdmin();
       allow create, update: if request.auth != null &&

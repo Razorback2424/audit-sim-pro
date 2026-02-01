@@ -107,6 +107,8 @@ export const FirestorePaths = {
     `artifacts/${appIdValue}/users/${userId}/caseSubmissions`,
   USER_CASE_SUBMISSION: (userId, caseId) =>
     `artifacts/${appId}/users/${userId}/caseSubmissions/${caseId}`,
+  BILLING_DOCUMENT: (appIdValue, userId) =>
+    `artifacts/${appIdValue || appId}/users/${userId}/billing`,
   ROLE_DOCUMENT: (userId) => `roles/${userId}`,
   STUDENT_PROGRESS_COLLECTION: (appIdValue, uid) =>
     `artifacts/${appIdValue}/student_progress/${uid}/cases`,

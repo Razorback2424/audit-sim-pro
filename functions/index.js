@@ -4,11 +4,21 @@ const { onDocumentWritten } = require('firebase-functions/v2/firestore');
 const admin = require('firebase-admin');
 const { getTemplateRenderer } = require('./pdfTemplates');
 const { assertNoFieldValueInArrays } = require('./utils/firestoreGuards');
+const { buildCaseDraftFromRecipe } = require('./generation/buildCaseDraft');
+const { getCaseRecipe } = require('./generation/recipeRegistry');
+const Stripe = require('stripe');
 
 // Initialize Firebase Admin SDK
 // This is typically done automatically when deploying to Cloud Functions.
 // For local testing, you might need: admin.initializeApp({ credential: admin.credential.applicationDefault() });
 admin.initializeApp();
+
+const stripeSecretKey = process.env.STRIPE_SECRET_KEY || '';
+const stripe = stripeSecretKey ? Stripe(stripeSecretKey) : null;
+const STRIPE_PRICE_INDIVIDUAL = process.env.STRIPE_PRICE_INDIVIDUAL || '';
+const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
+const APP_BASE_URL = process.env.APP_BASE_URL || '';
+const DEFAULT_APP_ID = process.env.APP_ID || 'auditsim-pro-default-dev';
 
 const ANSWER_TOLERANCE = 0.01;
 
@@ -47,6 +57,337 @@ const ensureSafeFileName = (fileName = '') => {
   const trimmed = String(fileName || '').trim() || 'document.pdf';
   const withoutPaths = trimmed.replace(/[/\\]/g, '-');
   return withoutPaths.replace(/[^\w.\-()\s]/g, '').replace(/\s+/g, ' ').trim();
+};
+
+const toTrimmedString = (value) => {
+  if (typeof value === 'string') return value.trim();
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return '';
+};
+
+const toOptionalString = (value) => {
+  const trimmed = toTrimmedString(value);
+  return trimmed === '' ? null : trimmed;
+};
+
+const resolveAppId = (data) => toOptionalString(data?.appId) || DEFAULT_APP_ID;
+const resolveBaseUrl = (data) => toOptionalString(data?.baseUrl) || APP_BASE_URL;
+
+const resolveStripePrice = (plan) => {
+  const normalized = typeof plan === 'string' ? plan.trim().toLowerCase() : 'individual';
+  if (normalized === 'individual') return STRIPE_PRICE_INDIVIDUAL;
+  return '';
+};
+
+const buildBillingPath = (appIdValue, uid) => `artifacts/${appIdValue}/users/${uid}/billing`;
+
+const isRecord = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const resolveInstruction = ({ recipeDetails, draftInstruction, recipeVersion }) => {
+  if (recipeDetails?.instruction && typeof recipeDetails.instruction === 'object') {
+    return { ...recipeDetails.instruction, version: recipeVersion };
+  }
+  return { ...draftInstruction, version: recipeVersion };
+};
+
+const resolveWorkflow = ({ recipeDetails, draft }) => {
+  const fallback = draft?.workflow;
+  const fallbackSteps = Array.isArray(fallback?.steps) ? fallback.steps : [];
+  const candidate = recipeDetails?.workflow;
+  const candidateSteps = Array.isArray(candidate?.steps) ? candidate.steps : [];
+
+  if (candidateSteps.length > 0) {
+    if (fallbackSteps.includes('ca_check') && !candidateSteps.includes('ca_check')) {
+      return fallback;
+    }
+    if (fallbackSteps.includes('ca_completeness') && !candidateSteps.includes('ca_completeness')) {
+      return fallback;
+    }
+    return candidate;
+  }
+
+  if (fallbackSteps.length > 0) {
+    return fallback;
+  }
+
+  return { steps: ['instruction', 'selection', 'testing', 'results'], gateScope: 'once' };
+};
+
+const isProgressSubmitted = (progress) => {
+  if (!progress || typeof progress !== 'object') return false;
+  const state = typeof progress.state === 'string' ? progress.state.toLowerCase() : '';
+  const percentComplete = Number(progress.percentComplete || 0);
+  const step = typeof progress.step === 'string' ? progress.step.toLowerCase() : '';
+  return state === 'submitted' || percentComplete >= 100 || step === 'results';
+};
+
+const extractPrivateCaseKeyEntries = (items = []) => {
+  const sanitizedItems = [];
+  const privateEntries = {};
+
+  items.forEach((item, index) => {
+    if (!item || typeof item !== 'object') {
+      return;
+    }
+
+    const {
+      answerKey,
+      answerKeyMode,
+      answerKeySingleClassification,
+      groundTruths,
+      correctClassification,
+      primaryAssertion,
+      ...rest
+    } = item;
+
+    const paymentId = toOptionalString(rest.paymentId) || toOptionalString(item.paymentId) || `item-${index + 1}`;
+
+    const entry = {};
+    if (isRecord(answerKey) && Object.keys(answerKey).length > 0) {
+      entry.answerKey = { ...answerKey };
+    }
+    if (typeof answerKeyMode === 'string' && answerKeyMode.trim()) {
+      entry.answerKeyMode = answerKeyMode.trim();
+    }
+    if (typeof answerKeySingleClassification === 'string' && answerKeySingleClassification.trim()) {
+      entry.answerKeySingleClassification = answerKeySingleClassification.trim();
+    }
+    if (isRecord(groundTruths) && Object.keys(groundTruths).length > 0) {
+      entry.groundTruths = { ...groundTruths };
+    }
+    if (typeof correctClassification === 'string' && correctClassification.trim()) {
+      entry.correctClassification = correctClassification.trim();
+    }
+    if (typeof primaryAssertion === 'string' && primaryAssertion.trim()) {
+      entry.primaryAssertion = primaryAssertion.trim();
+    }
+    const resolvedRiskLevel =
+      typeof rest.riskLevel === 'string' && rest.riskLevel.trim()
+        ? rest.riskLevel.trim()
+        : typeof item.riskLevel === 'string' && item.riskLevel.trim()
+        ? item.riskLevel.trim()
+        : null;
+    if (resolvedRiskLevel) {
+      entry.riskLevel = resolvedRiskLevel;
+    }
+
+    const hasEntry = Object.keys(entry).length > 0;
+
+    sanitizedItems.push({
+      ...rest,
+      paymentId,
+      hasAnswerKey: Boolean(entry.answerKey),
+    });
+
+    if (hasEntry && paymentId) {
+      privateEntries[paymentId] = entry;
+    }
+  });
+
+  return { sanitizedItems, privateEntries };
+};
+
+const stripUndefinedDeep = (value) => {
+  if (Array.isArray(value)) {
+    return value
+      .map((entry) => stripUndefinedDeep(entry))
+      .filter((entry) => entry !== undefined);
+  }
+  if (isRecord(value)) {
+    const next = {};
+    Object.entries(value).forEach(([key, entry]) => {
+      if (entry === undefined) return;
+      const cleaned = stripUndefinedDeep(entry);
+      if (cleaned !== undefined) {
+        next[key] = cleaned;
+      }
+    });
+    return next;
+  }
+  return value;
+};
+
+const hasReadyFile = (doc) => {
+  if (!doc || typeof doc !== 'object') return false;
+  return Boolean(doc.downloadURL || doc.storagePath);
+};
+
+const hasPendingGeneratedDoc = (doc) => {
+  if (!doc || typeof doc !== 'object') return false;
+  const hasSpec = Boolean(doc.generationSpec || doc.generationSpecId);
+  return hasSpec && !hasReadyFile(doc);
+};
+
+const hasMissingArtifact = (doc) => {
+  if (!doc || typeof doc !== 'object') return false;
+  const hasFileName = typeof doc.fileName === 'string' && doc.fileName.trim();
+  return hasFileName && !hasReadyFile(doc);
+};
+
+const isCaseReady = (caseData) => {
+  if (!caseData || typeof caseData !== 'object') return false;
+  const referenceDocuments = Array.isArray(caseData.referenceDocuments) ? caseData.referenceDocuments : [];
+  const invoiceMappings = Array.isArray(caseData.invoiceMappings) ? caseData.invoiceMappings : [];
+  const cashArtifacts = Array.isArray(caseData.cashArtifacts) ? caseData.cashArtifacts : [];
+
+  const pendingGenerated = referenceDocuments.some(hasPendingGeneratedDoc) ||
+    invoiceMappings.some(hasPendingGeneratedDoc);
+
+  if (pendingGenerated) return false;
+
+  const missingCashArtifacts = cashArtifacts.some((doc) => {
+    const type = typeof doc?.type === 'string' ? doc.type.trim() : '';
+    if (!type) return false;
+    return hasMissingArtifact(doc);
+  });
+
+  if (missingCashArtifacts) return false;
+
+  return true;
+};
+
+const queueGenerationJob = async ({ firestore, appId, caseId, plan, phaseId, requestedBy, orgId }) => {
+  if (!plan || typeof plan !== 'object') return null;
+  const planSpecs = Array.isArray(plan.referenceDocumentSpecs) ? plan.referenceDocumentSpecs : [];
+  if (planSpecs.length === 0) return null;
+
+  const planRef = firestore.doc(`artifacts/${appId}/private/data/case_generation_plans/${caseId}`);
+  await planRef.set(
+    {
+      plan,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    },
+    { merge: true }
+  );
+
+  const jobRef = firestore.collection(`artifacts/${appId}/private/data/case_generation_jobs`).doc();
+  const payload = {
+    jobId: jobRef.id,
+    caseId,
+    appId,
+    plan,
+    planSource: 'auto',
+    caseMissing: false,
+    phaseId: phaseId ? String(phaseId).trim() : null,
+    status: 'queued',
+    requestedBy: requestedBy || null,
+    orgId: orgId || null,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  await jobRef.set(payload, { merge: true });
+
+  try {
+    await planRef.set(
+      {
+        lastJob: {
+          jobId: jobRef.id,
+          status: 'queued',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+      },
+      { merge: true }
+    );
+  } catch (err) {
+    console.warn('[queueGenerationJob] Failed to write lastJob status', err);
+  }
+
+  return { jobId: jobRef.id, status: payload.status };
+};
+
+const buildCaseFromRecipe = async ({ firestore, appId, moduleId, createdBy, orgId }) => {
+  const recipeMeta = getCaseRecipe(moduleId);
+  let recipeDetails = null;
+
+  try {
+    const recipeSnap = await firestore.doc(`artifacts/${appId}/public/data/recipes/${moduleId}`).get();
+    if (recipeSnap.exists) {
+      recipeDetails = recipeSnap.data() || null;
+    }
+  } catch (err) {
+    console.warn('[buildCaseFromRecipe] Failed to load recipe details', err);
+  }
+
+  const draft = buildCaseDraftFromRecipe({ recipeId: moduleId, overrides: {} });
+  const recipeVersion =
+    Number.isFinite(Number(recipeDetails?.recipeVersion))
+      ? Number(recipeDetails.recipeVersion)
+      : draft.recipeVersion || Number(recipeMeta?.version) || 1;
+
+  const instruction = resolveInstruction({
+    recipeDetails,
+    draftInstruction: draft.instruction,
+    recipeVersion,
+  });
+
+  const title =
+    toTrimmedString(recipeDetails?.title) ||
+    toTrimmedString(recipeDetails?.moduleTitle) ||
+    draft.caseName ||
+    recipeMeta.label ||
+    'Audit Case';
+  const moduleTitle =
+    toTrimmedString(recipeDetails?.moduleTitle) ||
+    toTrimmedString(recipeMeta.moduleTitle) ||
+    recipeMeta.label ||
+    '';
+
+  const workflow = resolveWorkflow({ recipeDetails, draft });
+
+  const casePayload = {
+    caseName: title,
+    title,
+    instruction,
+    disbursements: draft.disbursements,
+    invoiceMappings: draft.invoiceMappings || [],
+    referenceDocuments: draft.referenceDocuments,
+    workpaper: draft.workpaper || null,
+    publicVisible: true,
+    visibleToUserIds: [],
+    status: 'assigned',
+    opensAt: null,
+    dueAt: null,
+    auditArea: recipeDetails?.auditArea || recipeMeta.auditArea || draft.auditArea,
+    caseLevel: draft.caseLevel || recipeMeta.caseLevel || '',
+    moduleId: moduleId,
+    recipeVersion,
+    moduleTitle,
+    pathId: recipeDetails?.pathId || recipeMeta.pathId || '',
+    tier: recipeDetails?.tier || recipeMeta.tier || 'foundations',
+    primarySkill: recipeDetails?.primarySkill || recipeMeta.primarySkill || '',
+    workflow,
+    generationConfig: recipeDetails?.generationConfig || {},
+    retakeAttempt: false,
+    createdBy: createdBy || null,
+    cashContext: draft.cashContext || null,
+    cashOutstandingItems: draft.cashOutstandingItems || [],
+    cashCutoffItems: draft.cashCutoffItems || [],
+    cashRegisterItems: draft.cashRegisterItems || [],
+    cashReconciliationMap: draft.cashReconciliationMap || [],
+    cashArtifacts: draft.cashArtifacts || [],
+  };
+  if (orgId) {
+    casePayload.orgId = orgId;
+  }
+
+  const { sanitizedItems, privateEntries } = extractPrivateCaseKeyEntries(casePayload.disbursements || []);
+  const caseNameForSearch = toTrimmedString(casePayload.caseName || casePayload.title);
+  const { disbursements: _ignoredDisbursements, ...caseDataBase } = casePayload;
+  const caseData = stripUndefinedDeep({
+    ...caseDataBase,
+    auditItems: sanitizedItems,
+    caseNameLower: caseNameForSearch ? caseNameForSearch.toLowerCase() : '',
+    _deleted: false,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  const caseKeys = stripUndefinedDeep(privateEntries);
+  const generationPlan = stripUndefinedDeep(draft.generationPlan || null);
+
+  return { caseData, caseKeys, generationPlan };
 };
 
 const buildDebugDataForTemplate = (templateId) => {
@@ -151,6 +492,96 @@ const buildDebugDataForTemplate = (templateId) => {
               accountNumber: '0004812001',
               checkNumber: '10451',
             },
+          },
+        ],
+      };
+    case 'refdoc.fa-policy.v1':
+      return {
+        clientName: 'Clearwater Outfitters, Inc.',
+        fiscalYearStart: '20X3-01-01',
+        fiscalYearEnd: '20X3-12-31',
+        documentAsOfDate: '20X3-12-31',
+        currency: 'USD',
+        capitalizationThreshold: 10000,
+        capitalizeDirectCosts: ['Purchase price', 'Freight and delivery', 'Installation and testing'],
+        expenseExamples: ['Routine repairs', 'Training', 'Software subscriptions'],
+        depreciationStartRule: 'Placed in service / available for intended use',
+        depreciationMethodDefault: 'Straight-line',
+        depreciationConvention: 'Monthly',
+        assetClasses: [
+          { classCode: 'BLDG', className: 'Buildings', usefulLifeYears: 30, method: 'Straight-line' },
+          { classCode: 'EQUIP', className: 'Equipment', usefulLifeYears: 7, method: 'Straight-line' },
+          { classCode: 'VEH', className: 'Vehicles', usefulLifeYears: 5, method: 'Straight-line' },
+        ],
+      };
+    case 'refdoc.ppe-rollforward.v1':
+      return {
+        clientName: 'Clearwater Outfitters, Inc.',
+        fiscalYearStart: '20X3-01-01',
+        fiscalYearEnd: '20X3-12-31',
+        documentAsOfDate: '20X3-12-31',
+        currency: 'USD',
+        rows: [
+          {
+            classCode: 'BLDG',
+            className: 'Buildings',
+            beginningBalance: 900000,
+            additions: 150000,
+            disposals: 0,
+            endingBalance: 1050000,
+          },
+          {
+            classCode: 'EQUIP',
+            className: 'Equipment',
+            beginningBalance: 650000,
+            additions: 80000,
+            disposals: 0,
+            endingBalance: 730000,
+          },
+        ],
+        totals: {
+          beginningBalance: 1550000,
+          additions: 230000,
+          disposals: 0,
+          endingBalance: 1780000,
+        },
+        footerNote: 'Prepared from fixed asset subledger; agrees to general ledger.',
+      };
+    case 'refdoc.fa-listing.v1':
+      return {
+        clientName: 'Clearwater Outfitters, Inc.',
+        fiscalYearStart: '20X3-01-01',
+        fiscalYearEnd: '20X3-12-31',
+        documentAsOfDate: '20X3-12-31',
+        currency: 'USD',
+        rows: [
+          {
+            assetId: 'FA-BLDG-001',
+            description: 'Warehouse build-out (Denver)',
+            classCode: 'BLDG',
+            className: 'Buildings',
+            location: 'Denver, CO',
+            vendorName: 'Atlas Construction Co.',
+            invoiceNumber: 'INV-2450',
+            invoiceDate: '20X3-03-12',
+            placedInServiceDate: '20X3-04-15',
+            costBasis: 120000,
+            usefulLifeYears: 30,
+            method: 'Straight-line',
+          },
+          {
+            assetId: 'FA-EQUIP-014',
+            description: 'Automated packing line (Austin)',
+            classCode: 'EQUIP',
+            className: 'Equipment',
+            location: 'Austin, TX',
+            vendorName: 'Millstone Robotics',
+            invoiceNumber: 'INV-3881',
+            invoiceDate: '20X3-05-06',
+            placedInServiceDate: '20X3-06-01',
+            costBasis: 75000,
+            usefulLifeYears: 7,
+            method: 'Straight-line',
           },
         ],
       };
@@ -1017,6 +1448,263 @@ exports.queueCaseDocGeneration = functions.https.onCall(async (data, context) =>
   return { jobId: jobRef.id, status: payload.status };
 });
 
+exports.startCaseAttempt = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
+  }
+
+  const appId = data?.appId;
+  const moduleId = data?.moduleId;
+
+  if (!appId || typeof appId !== 'string') {
+    throw new functions.https.HttpsError('invalid-argument', 'appId is required.');
+  }
+  if (!moduleId || typeof moduleId !== 'string') {
+    throw new functions.https.HttpsError('invalid-argument', 'moduleId is required.');
+  }
+
+  const firestore = admin.firestore();
+  const { resolvedRole, requesterOrgId } = await resolveRequesterIdentity({
+    context,
+    appId,
+    firestore,
+    logLabel: 'startCaseAttempt',
+  });
+
+  if (resolvedRole !== 'admin' && resolvedRole !== 'owner' && resolvedRole !== 'instructor' && resolvedRole !== 'trainee') {
+    throw new functions.https.HttpsError('permission-denied', 'Insufficient permissions.');
+  }
+
+  if (resolvedRole === 'instructor' && !requesterOrgId) {
+    throw new functions.https.HttpsError('failed-precondition', 'Instructor has no Org ID.');
+  }
+
+  const uid = context.auth.uid;
+
+  const casesSnap = await firestore
+    .collection(`artifacts/${appId}/public/data/cases`)
+    .where('_deleted', '==', false)
+    .where('moduleId', '==', moduleId)
+    .get();
+
+  if (casesSnap.empty) {
+    throw new functions.https.HttpsError('not-found', 'No cases available for this module.');
+  }
+
+  const rawCases = casesSnap.docs.map((docSnap) => ({
+    id: docSnap.id,
+    data: docSnap.data() || {},
+  }));
+
+  const allowedStatuses = new Set(['assigned', 'in_progress', 'submitted', 'draft']);
+  const visibleCases = rawCases.filter(({ data: caseData }) => {
+    const status = typeof caseData?.status === 'string' ? caseData.status.toLowerCase() : 'assigned';
+    if (!allowedStatuses.has(status)) return false;
+    if (caseData?.publicVisible === true) return true;
+    const visibleToUserIds = Array.isArray(caseData?.visibleToUserIds) ? caseData.visibleToUserIds : [];
+    return visibleToUserIds.includes(uid);
+  });
+
+  if (visibleCases.length === 0) {
+    throw new functions.https.HttpsError('not-found', 'No cases are available for this user.');
+  }
+
+  const progressRefs = visibleCases.map(({ id }) =>
+    firestore.doc(`artifacts/${appId}/student_progress/${uid}/cases/${id}`)
+  );
+  const progressSnaps =
+    progressRefs.length > 0 ? await firestore.getAll(...progressRefs) : [];
+  const progressById = new Map();
+  progressSnaps.forEach((snap) => {
+    progressById.set(snap.id, snap.exists ? snap.data() : null);
+  });
+
+  const completedCount = visibleCases.filter(({ id }) =>
+    isProgressSubmitted(progressById.get(id))
+  ).length;
+
+  const availableCases = visibleCases.filter(({ id }) => !isProgressSubmitted(progressById.get(id)));
+  const readyCases = availableCases.filter(({ data: caseData }) => isCaseReady(caseData));
+
+  if (availableCases.length === 0) {
+    throw new functions.https.HttpsError('failed-precondition', 'No remaining cases are available.');
+  }
+  if (readyCases.length === 0) {
+    throw new functions.https.HttpsError(
+      'failed-precondition',
+      'Cases are still generating. Please wait a few minutes and try again.'
+    );
+  }
+
+  const isUnstarted = (progress) => {
+    if (!progress || typeof progress !== 'object') return true;
+    const percentComplete = Number(progress.percentComplete || 0);
+    const state = typeof progress.state === 'string' ? progress.state.toLowerCase() : '';
+    return percentComplete === 0 && state !== 'in_progress';
+  };
+
+  const sortCaseCandidates = (left, right) => {
+    const leftOrder = Number.isFinite(Number(left.data?.orderIndex)) ? Number(left.data.orderIndex) : Number.MAX_SAFE_INTEGER;
+    const rightOrder = Number.isFinite(Number(right.data?.orderIndex)) ? Number(right.data.orderIndex) : Number.MAX_SAFE_INTEGER;
+    if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+    const leftCreated = typeof left.data?.createdAt?.toMillis === 'function' ? left.data.createdAt.toMillis() : 0;
+    const rightCreated = typeof right.data?.createdAt?.toMillis === 'function' ? right.data.createdAt.toMillis() : 0;
+    if (leftCreated !== rightCreated) return leftCreated - rightCreated;
+    const leftTitle = toTrimmedString(left.data?.title || left.data?.caseName);
+    const rightTitle = toTrimmedString(right.data?.title || right.data?.caseName);
+    return leftTitle.localeCompare(rightTitle);
+  };
+
+  const unstartedCases = readyCases.filter(({ id }) => isUnstarted(progressById.get(id)));
+  const candidatePool = unstartedCases.length > 0 ? unstartedCases : readyCases;
+  const candidate = candidatePool.slice().sort(sortCaseCandidates)[0];
+
+  const remainingCount = visibleCases.length - completedCount;
+
+  let backfillCaseId = null;
+  if (remainingCount <= 2) {
+    try {
+      const { caseData, caseKeys, generationPlan } = await buildCaseFromRecipe({
+        firestore,
+        appId,
+        moduleId,
+        createdBy: uid,
+      });
+
+      const caseRef = firestore.collection(`artifacts/${appId}/public/data/cases`).doc();
+      await caseRef.set(caseData, { merge: true });
+
+      if (caseKeys && Object.keys(caseKeys).length > 0) {
+        await firestore
+          .doc(`artifacts/${appId}/private/data/case_keys/${caseRef.id}`)
+          .set(
+            {
+              items: caseKeys,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          );
+      }
+
+      if (generationPlan) {
+        const phaseList = Array.isArray(generationPlan?.phases) ? generationPlan.phases : [];
+        const initialPhaseId =
+          phaseList.length > 0 ? String(phaseList[0]?.id || phaseList[0] || '').trim() : '';
+        await queueGenerationJob({
+          firestore,
+          appId,
+          caseId: caseRef.id,
+          plan: generationPlan,
+          phaseId: initialPhaseId || null,
+          requestedBy: uid,
+          orgId: requesterOrgId || null,
+        });
+      }
+
+      backfillCaseId = caseRef.id;
+    } catch (err) {
+      console.error('[startCaseAttempt] Failed to backfill case pool', err);
+    }
+  }
+
+  return {
+    caseId: candidate.id,
+    totalCases: visibleCases.length,
+    remainingCount,
+    backfillCaseId,
+  };
+});
+
+exports.seedCasePool = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
+  }
+
+  const appId = data?.appId;
+  const moduleId = data?.moduleId;
+  const rawCount = Number(data?.count);
+  const count = Number.isFinite(rawCount) ? Math.max(1, Math.min(50, Math.floor(rawCount))) : 10;
+
+  if (!appId || typeof appId !== 'string') {
+    throw new functions.https.HttpsError('invalid-argument', 'appId is required.');
+  }
+  if (!moduleId || typeof moduleId !== 'string') {
+    throw new functions.https.HttpsError('invalid-argument', 'moduleId is required.');
+  }
+
+  const firestore = admin.firestore();
+  const { resolvedRole, requesterOrgId } = await resolveRequesterIdentity({
+    context,
+    appId,
+    firestore,
+    logLabel: 'seedCasePool',
+  });
+
+  if (resolvedRole !== 'admin' && resolvedRole !== 'owner' && resolvedRole !== 'instructor') {
+    throw new functions.https.HttpsError('permission-denied', 'Admin access required.');
+  }
+
+  if (resolvedRole === 'instructor' && !requesterOrgId) {
+    throw new functions.https.HttpsError('failed-precondition', 'Instructor has no Org ID.');
+  }
+
+  try {
+    getCaseRecipe(moduleId);
+  } catch (err) {
+    throw new functions.https.HttpsError('not-found', err?.message || 'Unknown moduleId.');
+  }
+
+  const uid = context.auth.uid;
+  const createdIds = [];
+
+  for (let i = 0; i < count; i += 1) {
+    const { caseData, caseKeys, generationPlan } = await buildCaseFromRecipe({
+      firestore,
+      appId,
+      moduleId,
+      createdBy: uid,
+      orgId: requesterOrgId || null,
+    });
+
+    const caseRef = firestore.collection(`artifacts/${appId}/public/data/cases`).doc();
+    await caseRef.set(caseData, { merge: true });
+
+    if (caseKeys && Object.keys(caseKeys).length > 0) {
+      await firestore
+        .doc(`artifacts/${appId}/private/data/case_keys/${caseRef.id}`)
+        .set(
+          {
+            items: caseKeys,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+    }
+
+    if (generationPlan) {
+      const phaseList = Array.isArray(generationPlan?.phases) ? generationPlan.phases : [];
+      const initialPhaseId =
+        phaseList.length > 0 ? String(phaseList[0]?.id || phaseList[0] || '').trim() : '';
+      await queueGenerationJob({
+        firestore,
+        appId,
+        caseId: caseRef.id,
+        plan: generationPlan,
+        phaseId: initialPhaseId || null,
+        requestedBy: uid,
+        orgId: requesterOrgId || null,
+      });
+    }
+
+    createdIds.push(caseRef.id);
+  }
+
+  return {
+    created: createdIds.length,
+    caseIds: createdIds,
+  };
+});
+
 exports.generateDebugRefdoc = functions
   .runWith({ memory: '512MB', timeoutSeconds: 60 })
   .https.onCall(async (data, context) => {
@@ -1377,30 +2065,8 @@ exports.processCaseDocGenerationJob = onDocumentWritten(
 
     for (const spec of checkCopySpecs) {
       try {
-        const { buffer, safeName, generationSpec } = await generatePdfDoc(spec);
-        const pngBuffer = await renderPngFromPdfBuffer(buffer, { width: 1200, height: 700 });
-        const pngName = safeName.replace(/\.pdf$/i, '.png');
-        const pngStoragePath = `artifacts/${appId}/case_reference/${caseId}/${pngName}`;
-        const pngFile = bucket.file(pngStoragePath);
-        await pngFile.save(pngBuffer, {
-          contentType: 'image/png',
-          resumable: false,
-          metadata: {
-            contentType: 'image/png',
-            customMetadata: {
-              caseId: String(caseId),
-              templateId: String(CHECK_COPY_TEMPLATE_ID),
-            },
-          },
-        });
-        const [signedUrl] = await pngFile.getSignedUrl({
-          action: 'read',
-          expires: Date.now() + 15 * 60 * 1000,
-        });
-        const checkNumber = extractCheckNumber(spec, generationSpec);
-        if (checkNumber) {
-          checkImageMap.set(checkNumber, { imageUrl: signedUrl });
-        }
+        // Skip PNG conversion for now to avoid Chromium crashes; PDFs still generate.
+        await generatePdfDoc(spec);
       } catch (err) {
         errors.push({
           fileName: spec?.fileName || null,
@@ -1469,6 +2135,8 @@ exports.processCaseDocGenerationJob = onDocumentWritten(
 
       const invoiceMappings = Array.isArray(caseData.invoiceMappings) ? caseData.invoiceMappings : [];
       const updatedMappings = invoiceMappings.map((mapping) => ({ ...mapping }));
+      const cashArtifacts = Array.isArray(caseData.cashArtifacts) ? caseData.cashArtifacts : [];
+      const updatedCashArtifacts = cashArtifacts.map((artifact) => ({ ...artifact }));
 
       results.forEach((result) => {
         if (!result.linkToPaymentId) return;
@@ -1494,13 +2162,38 @@ exports.processCaseDocGenerationJob = onDocumentWritten(
         }
       });
 
+      if (updatedCashArtifacts.length > 0) {
+        results.forEach((result) => {
+          if (!result.fileName) return;
+          const idx = updatedCashArtifacts.findIndex(
+            (artifact) => artifact && artifact.fileName === result.fileName
+          );
+          if (idx >= 0) {
+            updatedCashArtifacts[idx] = {
+              ...updatedCashArtifacts[idx],
+              storagePath: result.storagePath || updatedCashArtifacts[idx].storagePath || '',
+              contentType: result.contentType || updatedCashArtifacts[idx].contentType || '',
+              generatedAt: admin.firestore.Timestamp.now(),
+            };
+          }
+        });
+      }
+
       try {
         assertNoFieldValueInArrays(
-          { referenceDocuments: updated, invoiceMappings: updatedMappings },
+          {
+            referenceDocuments: updated,
+            invoiceMappings: updatedMappings,
+            cashArtifacts: updatedCashArtifacts,
+          },
           'caseUpdate'
         );
         await caseRef.set(
-          { referenceDocuments: updated, invoiceMappings: updatedMappings },
+          {
+            referenceDocuments: updated,
+            invoiceMappings: updatedMappings,
+            cashArtifacts: updatedCashArtifacts,
+          },
           { merge: true }
         );
       } catch (err) {
@@ -2009,3 +2702,97 @@ exports.gradeSubmission = onDocumentWritten(
     );
   }
 );
+
+exports.createStripeCheckoutSession = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Sign in to start checkout.');
+  }
+  if (!stripe || !stripeSecretKey) {
+    throw new functions.https.HttpsError('failed-precondition', 'Stripe is not configured.');
+  }
+
+  const plan = typeof data?.plan === 'string' ? data.plan.trim().toLowerCase() : 'individual';
+  const priceId = resolveStripePrice(plan);
+  if (!priceId) {
+    throw new functions.https.HttpsError('invalid-argument', 'Unsupported plan.');
+  }
+
+  const baseUrl = resolveBaseUrl(data);
+  if (!baseUrl) {
+    throw new functions.https.HttpsError('failed-precondition', 'Missing APP_BASE_URL.');
+  }
+
+  const uid = context.auth.uid;
+  const email = context.auth.token?.email || toOptionalString(data?.email) || undefined;
+  const appIdValue = resolveAppId(data);
+
+  const session = await stripe.checkout.sessions.create({
+    mode: 'payment',
+    line_items: [{ price: priceId, quantity: 1 }],
+    allow_promotion_codes: true,
+    success_url: `${baseUrl}/checkout/success?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${baseUrl}/checkout/cancel`,
+    client_reference_id: uid,
+    customer_email: email,
+    metadata: {
+      uid,
+      plan,
+      appId: appIdValue,
+    },
+  });
+
+  return { id: session.id, url: session.url };
+});
+
+exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
+  if (!stripe || !stripeSecretKey || !STRIPE_WEBHOOK_SECRET) {
+    res.status(500).send('Stripe not configured');
+    return;
+  }
+  const sig = req.headers['stripe-signature'];
+  if (!sig) {
+    res.status(400).send('Missing stripe-signature');
+    return;
+  }
+
+  let event;
+  try {
+    event = stripe.webhooks.constructEvent(req.rawBody, sig, STRIPE_WEBHOOK_SECRET);
+  } catch (err) {
+    console.error('[stripeWebhook] signature verification failed', err);
+    res.status(400).send(`Webhook Error: ${err.message}`);
+    return;
+  }
+
+  try {
+    if (event.type === 'checkout.session.completed') {
+      const session = event.data.object || {};
+      const metadata = session.metadata || {};
+      const uid = metadata.uid || session.client_reference_id;
+      const plan = metadata.plan || 'individual';
+      const appIdValue = metadata.appId || DEFAULT_APP_ID;
+
+      if (uid) {
+        const db = admin.firestore();
+        const billingRef = db.doc(buildBillingPath(appIdValue, uid));
+        await billingRef.set(
+          {
+            status: 'paid',
+            plan,
+            stripeCustomerId: session.customer || null,
+            stripeCheckoutSessionId: session.id || null,
+            stripePaymentStatus: session.payment_status || null,
+            lastPaidAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+    }
+
+    res.json({ received: true });
+  } catch (err) {
+    console.error('[stripeWebhook] handler failed', err);
+    res.status(500).send('Webhook handler failed');
+  }
+});

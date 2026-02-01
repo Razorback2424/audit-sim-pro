@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, Loader2 } from 'lucide-react';
-import { Button, useRoute, useModal, useAuth, appId } from '../AppCore';
+import { Button, useRoute, useModal, useAuth, useUser, appId } from '../AppCore';
 import { listStudentCases, deleteRetakeAttempt } from '../services/caseService';
 import { listRecipes } from '../services/recipeService';
 import { listCaseRecipes } from '../generation/recipeRegistry';
 import { subscribeProgressForCases } from '../services/progressService';
-import { generateAttemptFromRecipe } from '../services/attemptService';
+import { startCaseAttemptFromPool } from '../services/attemptService';
+import { isBillingPaid } from '../services/billingService';
 import {
   buildLearnerProgressView,
   DEFAULT_PATH_ID,
@@ -102,6 +103,7 @@ const isRecipeConfigured = (recipe) => {
 export default function TraineeDashboardPage() {
   const { navigate } = useRoute();
   const { userId } = useAuth();
+  const { billing, loadingBilling } = useUser();
   const { showModal } = useModal();
   const showModalRef = useRef(showModal);
 
@@ -121,6 +123,8 @@ export default function TraineeDashboardPage() {
   const [recipesLoading, setRecipesLoading] = useState(false);
   const [startingModuleId, setStartingModuleId] = useState('');
   const [deletingRetakeIds, setDeletingRetakeIds] = useState(() => new Set());
+  const hasPaidAccess = isBillingPaid(billing);
+  const showPaywall = !loadingBilling && !hasPaidAccess;
 
   const fetchCases = useCallback(async () => {
     if (!userId) return;
@@ -231,6 +235,15 @@ export default function TraineeDashboardPage() {
   }, [userId]);
 
   const caseIds = useMemo(() => cases.map((c) => c.id), [cases]);
+  const poolCountByModuleId = useMemo(() => {
+    const map = new Map();
+    cases.forEach((caseData) => {
+      const moduleId = caseData?.moduleId || caseData?.id;
+      if (!moduleId) return;
+      map.set(moduleId, (map.get(moduleId) || 0) + 1);
+    });
+    return map;
+  }, [cases]);
 
   useEffect(() => {
     if (!userId || caseIds.length === 0) {
@@ -394,6 +407,8 @@ export default function TraineeDashboardPage() {
       ? 'Start next'
       : 'Start next';
   const heroMetaLine = heroDepthLabel ? `Depth: ${heroDepthLabel}` : '';
+  const heroModuleId = heroRecipe?.moduleId || heroRecipe?.id || '';
+  const heroHasPool = heroModuleId ? (poolCountByModuleId.get(heroModuleId) || 0) > 0 : true;
 
   const currentFocusCase = heroCase;
   const selectedModuleLabel = selectedModuleId
@@ -446,13 +461,15 @@ export default function TraineeDashboardPage() {
   ]
     .filter(Boolean)
     .join(' • ');
+  const availableModuleId = availableModules[0]?.moduleId || availableModules[0]?.id || '';
+  const availableHasPool = availableModuleId ? (poolCountByModuleId.get(availableModuleId) || 0) > 0 : true;
 
   const handleStartModule = async (moduleId) => {
     if (!moduleId || !userId) return;
     if (startingModuleId) return;
     try {
       setStartingModuleId(moduleId);
-      const caseId = await generateAttemptFromRecipe({ moduleId, uid: userId });
+      const caseId = await startCaseAttemptFromPool({ moduleId });
       navigate(`/cases/${caseId}`);
     } catch (err) {
       console.error('Failed to start module:', err);
@@ -519,6 +536,28 @@ export default function TraineeDashboardPage() {
     return <div className="p-4 text-center">Authenticating user, please wait...</div>;
   }
 
+  if (showPaywall) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <main className="mx-auto w-full max-w-3xl px-6 py-16">
+          <div className="bg-white rounded-xl shadow-md border border-gray-100 p-8 text-center space-y-4">
+            <div className="text-xs uppercase tracking-[0.2em] text-gray-500">Demo access only</div>
+            <h1 className="text-3xl font-semibold text-gray-900">Unlock the full simulator</h1>
+            <p className="text-sm text-gray-600">
+              Your account can run the demo SURL case. Upgrade to access all modules and save mastery.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <Button onClick={() => navigate('/checkout?plan=individual')}>Unlock full access</Button>
+              <Button variant="secondary" onClick={() => navigate('/demo/surl')}>
+                Play the demo
+              </Button>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       <main className="mx-auto w-full max-w-[1400px] px-6 py-8 space-y-6 sm:px-8 lg:px-10">
@@ -544,6 +583,10 @@ export default function TraineeDashboardPage() {
                   <div className="text-sm text-gray-600">
                     No skills are set up in this module yet. Pick another module to continue.
                   </div>
+                ) : currentAction?.type === 'startModule' && !heroHasPool ? (
+                  <div className="text-sm text-gray-600">
+                    No cases are available for this module yet. Ask an admin to seed the case pool.
+                  </div>
                 ) : heroMetaLine ? (
                   <div className="text-sm text-gray-600">{heroMetaLine}</div>
                 ) : null}
@@ -551,6 +594,13 @@ export default function TraineeDashboardPage() {
               <Button
                 onClick={() => {
                   if (currentAction?.type === 'startModule' && heroRecipe) {
+                    if (!heroHasPool) {
+                      showModalRef.current?.(
+                        'No cases are available for this module yet. Ask an admin to seed the case pool.',
+                        'No cases available'
+                      );
+                      return;
+                    }
                     const moduleId = heroRecipe.moduleId || heroRecipe.id;
                     if (moduleId) handleStartModule(moduleId);
                     return;
@@ -568,6 +618,7 @@ export default function TraineeDashboardPage() {
                 }
                 disabled={
                   currentAction?.type === 'emptyModule' ||
+                  (currentAction?.type === 'startModule' && !heroHasPool) ||
                   currentAction?.type === 'startModule' &&
                   heroRecipe &&
                   startingModuleId !== '' &&
@@ -591,14 +642,27 @@ export default function TraineeDashboardPage() {
                 {availableMetaLine ? (
                   <div className="text-sm text-gray-600">{availableMetaLine}</div>
                 ) : null}
+                {!availableHasPool ? (
+                  <div className="text-sm text-gray-600">
+                    No cases are available for this module yet. Ask an admin to seed the case pool.
+                  </div>
+                ) : null}
               </div>
               <Button
-                onClick={() =>
-                  handleStartModule(availableModules[0]?.moduleId || availableModules[0]?.id)
-                }
+                onClick={() => {
+                  if (!availableHasPool) {
+                    showModalRef.current?.(
+                      'No cases are available for this module yet. Ask an admin to seed the case pool.',
+                      'No cases available'
+                    );
+                    return;
+                  }
+                  handleStartModule(availableModules[0]?.moduleId || availableModules[0]?.id);
+                }}
                 className="sm:w-auto w-full"
                 isLoading={startingModuleId === (availableModules[0]?.moduleId || availableModules[0]?.id)}
                 disabled={
+                  !availableHasPool ||
                   startingModuleId !== '' &&
                   startingModuleId !== (availableModules[0]?.moduleId || availableModules[0]?.id)
                 }

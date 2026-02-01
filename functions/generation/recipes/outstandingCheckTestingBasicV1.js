@@ -1,14 +1,14 @@
-import getUUID from '../../utils/getUUID';
-import { AUDIT_AREAS } from '../../models/caseConstants';
-import { buildSingleAnswerKey } from '../../utils/caseFormHelpers';
-import {
+const { getUUID } = require('../getUUID');
+const { AUDIT_AREAS } = require('../caseConstants');
+const { buildSingleAnswerKey } = require('../caseFormHelpers');
+const {
   initialCashRegisterItem,
   initialCutoffItem,
   initialDisbursement,
   initialInstruction,
   initialOutstandingItem,
   initialReferenceDocument,
-} from '../../constants/caseFormDefaults';
+} = require('../caseFormDefaults');
 
 const buildCashArtifact = ({ type, fileName }) => ({
   _tempId: getUUID(),
@@ -70,7 +70,7 @@ const buildRegisterItem = ({ checkNo, writtenDate, amount, payee }) => {
   };
 };
 
-export const outstandingCheckTestingBasicV1 = {
+const outstandingCheckTestingBasicV1 = {
   id: 'case.cash.outstanding-check.basic.v1',
   version: 1,
   label: 'Outstanding Check Testing (Generated)',
@@ -376,6 +376,33 @@ export const outstandingCheckTestingBasicV1 = {
     const bankName = 'Summit Community Bank';
     const accountName = 'Clearwater Outfitters, Inc.';
     const accountNumber = '102500184';
+    const buildCheckCopyData = ({ checkNumber, date, payee, amount, memo }) => ({
+      payer: {
+        name: accountName,
+        addressLine: '2150 Riverfront Ave, Denver, CO 80202',
+      },
+      checkNumber,
+      date,
+      payee,
+      amountNumeric: Number(amount || 0).toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      }),
+      amountWords: formatCheckAmountWords(amount),
+      bank: {
+        name: bankName,
+        subName: 'Member FDIC',
+      },
+      memo: memo || 'A/P Disbursement',
+      signatureName: 'K. Ramirez',
+      micr: {
+        routingSymbol: 'T',
+        routingNumber: '102000021',
+        accountSymbol: 'A',
+        accountNumber: '0004812001',
+        checkNumber,
+      },
+    });
     const buildStatementRows = (entries, dateKey) =>
       entries.map((item) => ({
         date: item[dateKey],
@@ -402,6 +429,19 @@ export const outstandingCheckTestingBasicV1 = {
     };
 
     const referenceDocumentSpecs = [
+      ...checks.map((item) => ({
+        id: getUUID(),
+        fileName: `Check Copy ${item.checkNo}.pdf`,
+        generationSpec: {
+          templateId: 'refdoc.check-copy.v1',
+          data: buildCheckCopyData({
+            checkNumber: item.checkNo,
+            date: item.writtenDate,
+            payee: item.payee,
+            amount: item.amount,
+          }),
+        },
+      })),
       {
         id: getUUID(),
         fileName: 'January Bank Statement (Cutoff).pdf',
@@ -418,6 +458,21 @@ export const outstandingCheckTestingBasicV1 = {
       layoutType: 'cash_recon',
       instruction,
       disbursements,
+      referenceDocuments: checks.map((item) => ({
+        ...initialReferenceDocument(),
+        _tempId: getUUID(),
+        fileName: `Check Copy ${item.checkNo}.pdf`,
+        generationSpecId: null,
+        generationSpec: {
+          templateId: 'refdoc.check-copy.v1',
+          data: buildCheckCopyData({
+            checkNumber: item.checkNo,
+            date: item.writtenDate,
+            payee: item.payee,
+            amount: item.amount,
+          }),
+        },
+      })),
       cashContext: {
         moduleType: 'outstanding_check_testing',
         bookBalance: '245670',
@@ -443,3 +498,5 @@ export const outstandingCheckTestingBasicV1 = {
     };
   },
 };
+
+module.exports = { outstandingCheckTestingBasicV1 };

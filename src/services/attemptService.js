@@ -1,4 +1,5 @@
-import { appId } from '../AppCore';
+import { appId, functions } from '../AppCore';
+import { httpsCallable } from 'firebase/functions';
 import { buildCaseDraftFromRecipe } from '../generation/buildCaseDraft';
 import { getCaseRecipe } from '../generation/recipeRegistry';
 import { createCase } from './caseService';
@@ -130,4 +131,36 @@ export const generateAttemptFromRecipe = async ({ moduleId, uid, retakeAttempt =
   }
 
   return caseId;
+};
+
+export const startCaseAttemptFromPool = async ({ moduleId, appId: appIdOverride } = {}) => {
+  if (!moduleId) {
+    throw new Error('startCaseAttemptFromPool requires a moduleId.');
+  }
+
+  const callable = httpsCallable(functions, 'startCaseAttempt');
+  const result = await callable({
+    appId: appIdOverride || appId,
+    moduleId,
+  });
+  const caseId = result?.data?.caseId || null;
+  if (!caseId) {
+    throw new Error('No case available for this module.');
+  }
+  return caseId;
+};
+
+export const seedCasePool = async ({ moduleId, count = 10, appId: appIdOverride } = {}) => {
+  if (!moduleId) {
+    throw new Error('seedCasePool requires a moduleId.');
+  }
+
+  const callable = httpsCallable(functions, 'seedCasePool');
+  const result = await callable({
+    appId: appIdOverride || appId,
+    moduleId,
+    count,
+  });
+
+  return result?.data || { created: 0, caseIds: [] };
 };

@@ -261,6 +261,8 @@ function useCaseForm({ params }) {
   const [faSummary, setFaSummary] = useState([initialFaClass()]);
   const [faRisk, setFaRisk] = useState({
     tolerableMisstatement: '',
+    capitalizationThreshold: '',
+    weightedAverageLife: '',
     strategy: 'all_over_tm',
     sampleSize: '',
   });
@@ -524,6 +526,8 @@ function useCaseForm({ params }) {
       hasCashItems(draft.faDisposals, ['assetId', 'description', 'proceeds', 'nbv']) ||
       Boolean(
         (draft.faRisk?.tolerableMisstatement || '').trim() ||
+          (draft.faRisk?.capitalizationThreshold || '').trim() ||
+          (draft.faRisk?.weightedAverageLife || '').trim() ||
           (draft.faRisk?.sampleSize || '').trim() ||
           (draft.faRisk?.strategy && draft.faRisk.strategy !== 'all_over_tm')
       );

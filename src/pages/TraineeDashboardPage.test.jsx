@@ -3,7 +3,7 @@ import TraineeDashboardPage from './TraineeDashboardPage';
 import { listStudentCases } from '../services/caseService';
 import { listRecipes } from '../services/recipeService';
 import { fetchRecipeProgress } from '../services/recipeProgressService';
-import { generateAttemptFromRecipe } from '../services/attemptService';
+import { startCaseAttemptFromPool } from '../services/attemptService';
 
 jest.mock('../services/caseService', () => ({
   listStudentCases: jest.fn().mockResolvedValue({ items: [], nextCursor: null })
@@ -18,7 +18,7 @@ jest.mock('../services/recipeProgressService', () => ({
 }));
 
 jest.mock('../services/attemptService', () => ({
-  generateAttemptFromRecipe: jest.fn()
+  startCaseAttemptFromPool: jest.fn()
 }));
 
 jest.mock('../AppCore', () => ({
@@ -46,6 +46,6 @@ describe('TraineeDashboardPage', () => {
     expect(listRecipes).toHaveBeenCalled();
     expect(screen.getByText(/program path/i)).toBeInTheDocument();
     expect(fetchRecipeProgress).not.toHaveBeenCalled();
-    expect(generateAttemptFromRecipe).not.toHaveBeenCalled();
+    expect(startCaseAttemptFromPool).not.toHaveBeenCalled();
   });
 });

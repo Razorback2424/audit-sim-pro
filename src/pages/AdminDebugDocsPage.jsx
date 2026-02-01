@@ -35,6 +35,9 @@ export default function AdminDebugDocsPage() {
       { id: 'refdoc.payroll-register.v1', label: 'Payroll Register' },
       { id: 'refdoc.remittance-bundle.v1', label: 'Remittance Bundle' },
       { id: 'refdoc.accrual-estimate.v1', label: 'Accrual Estimate' },
+      { id: 'refdoc.fa-policy.v1', label: 'FA Capitalization Policy' },
+      { id: 'refdoc.ppe-rollforward.v1', label: 'PP&E Rollforward' },
+      { id: 'refdoc.fa-listing.v1', label: 'Fixed Asset Listing' },
     ],
     []
   );

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Users, AlertTriangle, ClipboardList, FolderKanban, FileText } from 'lucide-react';
+import { Users, AlertTriangle, ClipboardList, FolderKanban, FileText, Inbox } from 'lucide-react';
 import { Button } from '../../AppCore';
 
 const ACTIONS = [
@@ -9,6 +9,13 @@ const ACTIONS = [
     description: 'Review active cases and delete stale drafts.',
     icon: FolderKanban,
     path: '/admin/cases',
+  },
+  {
+    key: 'seed-case-pool',
+    label: 'Seed case pool',
+    description: 'Generate the initial set of cases for each recipe.',
+    icon: Inbox,
+    path: '/admin#recipe-seeding',
   },
   {
     key: 'manage-users',

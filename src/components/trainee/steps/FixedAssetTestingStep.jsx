@@ -15,7 +15,7 @@ export default function FixedAssetTestingStep({
   referenceDocuments,
   selectedEvidenceItems,
   viewerEvidenceItems,
-    onSelectEvidence,
+  onSelectEvidence,
   activeEvidenceId,
   viewerEnabled,
   activeEvidenceLoading,
@@ -39,7 +39,31 @@ export default function FixedAssetTestingStep({
   setIsScopingModalOpen,
   scopingModalError,
   setScopingModalError,
+  visibleSections,
+  submitLabel = 'Submit Fixed Asset Testing',
 }) {
+  const sectionVisibility = {
+    scopingSummary: true,
+    leadSchedule: true,
+    strategy: true,
+    policy: true,
+    evidence: true,
+    additions: true,
+    disposals: true,
+    analytics: true,
+    submit: true,
+    ...(visibleSections || {}),
+  };
+  const policyDoc = useMemo(() => {
+    if (!Array.isArray(referenceDocuments)) return null;
+    return (
+      referenceDocuments.find(
+        (doc) =>
+          doc?.key === 'capitalization_policy' ||
+          doc?.generationSpec?.templateId === 'refdoc.fa-policy.v1'
+      ) || referenceDocuments[0] || null
+    );
+  }, [referenceDocuments]);
   const leadTicks = fixedAssetDraft.leadScheduleTicks || {};
   const totalTickTargets = ['total:beginningBalance', 'total:additions', 'total:disposals', 'total:endingBalance'];
   const totalsTicked = totalTickTargets.every((key) => leadTicks[key]);
@@ -222,7 +246,9 @@ export default function FixedAssetTestingStep({
     </div>
   );
 
-  if (!outcome) {
+  const enableScopingGate = sectionVisibility.scopingSummary || sectionVisibility.strategy;
+
+  if (enableScopingGate && !outcome) {
     return (
       <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-3">
         <h2 className="text-2xl font-semibold text-gray-800">Lock your testing strategy</h2>
@@ -238,10 +264,10 @@ export default function FixedAssetTestingStep({
     );
   }
 
-  if (outcome !== 'requires_testing') {
+  if (enableScopingGate && outcome !== 'requires_testing') {
     return (
       <div className="space-y-4">
-        {scopingSummaryCard}
+        {sectionVisibility.scopingSummary ? scopingSummaryCard : null}
         <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-3">
           <h3 className="text-xl font-semibold text-gray-800">
             {outcome === 'no_testing' && !additionsExceedTm ? 'No further testing required' : 'Virtual Senior: scope failed'}
@@ -267,101 +293,106 @@ export default function FixedAssetTestingStep({
 
   return (
     <div className="relative">
-      {renderScopingModal()}
+      {sectionVisibility.strategy ? renderScopingModal() : null}
       <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-6 space-y-5">
-        {scopingSummaryCard}
-        <div className="flex flex-col gap-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Lead Schedule</p>
-          <h2 className="text-2xl font-semibold text-gray-800">Tick and tie the rollforward before testing</h2>
-          <p className="text-sm text-gray-500">
-            Click each balance to mark it as verified (green) or not agreed (red). Summary totals must be ticked before you choose your testing strategy.
-          </p>
-        </div>
+        {sectionVisibility.scopingSummary ? scopingSummaryCard : null}
+        {sectionVisibility.leadSchedule ? (
+          <>
+            <div className="flex flex-col gap-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Lead Schedule</p>
+              <h2 className="text-2xl font-semibold text-gray-800">Tick and tie the rollforward before testing</h2>
+              <p className="text-sm text-gray-500">
+                Click each balance to mark it as verified (green) or not agreed (red). Summary totals must be ticked before you choose your testing strategy.
+              </p>
+            </div>
 
-        {fixedAssetSummary.length === 0 ? (
-          <p className="text-gray-600 text-sm">No rollforward data available. Contact your instructor before proceeding.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-200">
-                  <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">Asset Class</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Beg Bal</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Additions</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Disposals</th>
-                  <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">End Bal</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {fixedAssetSummary.map((row, index) => {
-                  const rowKey = row.className || `class-${index + 1}`;
-                  const renderCell = (fieldKey, value) => {
-                    const cellKey = `${rowKey}:${fieldKey}`;
-                    return (
-                      <td key={cellKey} className="px-3 py-2">
-                        <button
-                          type="button"
-                          onClick={() => toggleLeadScheduleTick(cellKey)}
-                          className={`w-full rounded-md border px-3 py-2 text-right transition ${leadCellClass(cellKey)}`}
-                          aria-label={`Tick ${row.className || rowKey} ${fieldKey}`}
-                        >
-                          <div className="flex items-center justify-between text-[11px] uppercase tracking-wide">
-                            <span>{leadTicks[cellKey] === 'exception' ? 'Does not agree' : 'Tick'}</span>
-                            {leadTicks[cellKey] === 'verified' ? (
-                              <CheckCircle2 size={14} />
-                            ) : leadTicks[cellKey] === 'exception' ? (
-                              <XCircle size={14} />
-                            ) : null}
-                          </div>
-                          <div className="text-base font-semibold">{currencyFormatter.format(Number(value) || 0)}</div>
-                        </button>
-                      </td>
-                    );
-                  };
-
-                  return (
-                    <tr key={rowKey}>
-                      <td className="px-3 py-2 font-semibold text-gray-800">{row.className || `Class ${index + 1}`}</td>
-                      {renderCell('beginningBalance', row.beginningBalance)}
-                      {renderCell('additions', row.additions)}
-                      {renderCell('disposals', row.disposals)}
-                      {renderCell('endingBalance', row.endingBalance)}
+            {fixedAssetSummary.length === 0 ? (
+              <p className="text-gray-600 text-sm">No rollforward data available. Contact your instructor before proceeding.</p>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-200">
+                      <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-600">Asset Class</th>
+                      <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Beg Bal</th>
+                      <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Additions</th>
+                      <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">Disposals</th>
+                      <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide text-gray-600">End Bal</th>
                     </tr>
-                  );
-                })}
-                <tr className="bg-slate-50 font-semibold text-gray-900">
-                  <td className="px-3 py-2">Total</td>
-                  {['beginningBalance', 'additions', 'disposals', 'endingBalance'].map((col) => {
-                    const cellKey = `total:${col}`;
-                    return (
-                      <td key={cellKey} className="px-3 py-2 text-right">
-                        <button
-                          type="button"
-                          onClick={() => toggleLeadScheduleTick(cellKey)}
-                          className={`w-full rounded-md border px-3 py-2 text-right transition ${leadCellClass(cellKey)}`}
-                          aria-label={`Tick total ${col}`}
-                        >
-                          <div className="flex items-center justify-between text-[11px] uppercase tracking-wide">
-                            <span>{leadTicks[cellKey] === 'exception' ? 'Does not agree' : 'Tick'}</span>
-                            {leadTicks[cellKey] === 'verified' ? (
-                              <CheckCircle2 size={14} />
-                            ) : leadTicks[cellKey] === 'exception' ? (
-                              <XCircle size={14} />
-                            ) : null}
-                          </div>
-                          <div className="text-base font-semibold">
-                            {currencyFormatter.format(Number(fixedAssetTotals[col]) || 0)}
-                          </div>
-                        </button>
-                      </td>
-                    );
-                  })}
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        )}
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {fixedAssetSummary.map((row, index) => {
+                      const rowKey = row.className || `class-${index + 1}`;
+                      const renderCell = (fieldKey, value) => {
+                        const cellKey = `${rowKey}:${fieldKey}`;
+                        return (
+                          <td key={cellKey} className="px-3 py-2">
+                            <button
+                              type="button"
+                              onClick={() => toggleLeadScheduleTick(cellKey)}
+                              className={`w-full rounded-md border px-3 py-2 text-right transition ${leadCellClass(cellKey)}`}
+                              aria-label={`Tick ${row.className || rowKey} ${fieldKey}`}
+                            >
+                              <div className="flex items-center justify-between text-[11px] uppercase tracking-wide">
+                                <span>{leadTicks[cellKey] === 'exception' ? 'Does not agree' : 'Tick'}</span>
+                                {leadTicks[cellKey] === 'verified' ? (
+                                  <CheckCircle2 size={14} />
+                                ) : leadTicks[cellKey] === 'exception' ? (
+                                  <XCircle size={14} />
+                                ) : null}
+                              </div>
+                              <div className="text-base font-semibold">{currencyFormatter.format(Number(value) || 0)}</div>
+                            </button>
+                          </td>
+                        );
+                      };
 
+                      return (
+                        <tr key={rowKey}>
+                          <td className="px-3 py-2 font-semibold text-gray-800">{row.className || `Class ${index + 1}`}</td>
+                          {renderCell('beginningBalance', row.beginningBalance)}
+                          {renderCell('additions', row.additions)}
+                          {renderCell('disposals', row.disposals)}
+                          {renderCell('endingBalance', row.endingBalance)}
+                        </tr>
+                      );
+                    })}
+                    <tr className="bg-slate-50 font-semibold text-gray-900">
+                      <td className="px-3 py-2">Total</td>
+                      {['beginningBalance', 'additions', 'disposals', 'endingBalance'].map((col) => {
+                        const cellKey = `total:${col}`;
+                        return (
+                          <td key={cellKey} className="px-3 py-2 text-right">
+                            <button
+                              type="button"
+                              onClick={() => toggleLeadScheduleTick(cellKey)}
+                              className={`w-full rounded-md border px-3 py-2 text-right transition ${leadCellClass(cellKey)}`}
+                              aria-label={`Tick total ${col}`}
+                            >
+                              <div className="flex items-center justify-between text-[11px] uppercase tracking-wide">
+                                <span>{leadTicks[cellKey] === 'exception' ? 'Does not agree' : 'Tick'}</span>
+                                {leadTicks[cellKey] === 'verified' ? (
+                                  <CheckCircle2 size={14} />
+                                ) : leadTicks[cellKey] === 'exception' ? (
+                                  <XCircle size={14} />
+                                ) : null}
+                              </div>
+                              <div className="text-base font-semibold">
+                                {currencyFormatter.format(Number(fixedAssetTotals[col]) || 0)}
+                              </div>
+                            </button>
+                          </td>
+                        );
+                      })}
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
+        ) : null}
+
+        {sectionVisibility.strategy ? (
         <section className="rounded-lg border border-gray-200 bg-gray-50 p-4">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -401,29 +432,32 @@ export default function FixedAssetTestingStep({
             </Button>
           </div>
         </section>
+        ) : null}
 
+        {(sectionVisibility.policy || sectionVisibility.evidence) ? (
         <div className="grid gap-4 lg:grid-cols-2">
+          {sectionVisibility.policy ? (
           <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Capitalization Policy</p>
             <h3 className="text-lg font-semibold text-gray-800">Keep the policy visible while testing</h3>
             <p className="mt-1 text-sm text-gray-600">
               Use the client policy to benchmark nature, threshold, and useful life conclusions.
             </p>
-            {referenceDocuments.length > 0 ? (
+            {policyDoc ? (
               <div className="mt-3 flex items-center gap-2">
                 <Button
                   variant="secondary"
                   onClick={() =>
                     handleViewDocument({
-                      fileName: referenceDocuments[0].fileName,
-                      storagePath: referenceDocuments[0].storagePath,
-                      downloadURL: referenceDocuments[0].downloadURL,
+                      fileName: policyDoc.fileName,
+                      storagePath: policyDoc.storagePath,
+                      downloadURL: policyDoc.downloadURL,
                     })
                   }
                 >
-                  Open {referenceDocuments[0].fileName}
+                  Open {policyDoc.fileName || 'Capitalization Policy'}
                 </Button>
-                {referenceDocuments.length > 1 ? (
+                {Array.isArray(referenceDocuments) && referenceDocuments.length > 1 ? (
                   <Button variant="ghost" onClick={handleDownloadAllReferences}>
                     <Download size={14} className="inline mr-1" />
                     Download all reference docs
@@ -436,6 +470,8 @@ export default function FixedAssetTestingStep({
               </p>
             )}
           </div>
+          ) : null}
+          {sectionVisibility.evidence ? (
           <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
             <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Invoice Viewer</p>
             <h3 className="text-lg font-semibold text-gray-800">Reference tray for source documents</h3>
@@ -460,8 +496,11 @@ export default function FixedAssetTestingStep({
               />
             </div>
           </div>
+          ) : null}
         </div>
+        ) : null}
 
+        {sectionVisibility.additions ? (
         <section className="space-y-3 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
           <div className="flex flex-col gap-1">
             <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Additions workbench</p>
@@ -553,7 +592,9 @@ export default function FixedAssetTestingStep({
             </div>
           )}
         </section>
+        ) : null}
 
+        {sectionVisibility.disposals ? (
         <section className="space-y-3 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
           <div className="flex flex-col gap-1">
             <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Disposals workbench</p>
@@ -632,7 +673,9 @@ export default function FixedAssetTestingStep({
             </div>
           )}
         </section>
+        ) : null}
 
+        {sectionVisibility.analytics ? (
         <section className="space-y-3 rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
           <div className="flex flex-col gap-1">
             <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Analytics</p>
@@ -705,15 +748,18 @@ export default function FixedAssetTestingStep({
             rows={3}
           />
         </section>
+        ) : null}
 
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <Button variant="secondary" onClick={handleBackToSelection} disabled={isLocked}>
-            Back to Lead Schedule
-          </Button>
-          <Button onClick={handleSubmitFixedAsset} disabled={isLocked}>
-            <Send size={18} className="inline mr-2" /> Submit Fixed Asset Testing
-          </Button>
-        </div>
+        {sectionVisibility.submit ? (
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <Button variant="secondary" onClick={handleBackToSelection} disabled={isLocked}>
+              Back to Lead Schedule
+            </Button>
+            <Button onClick={handleSubmitFixedAsset} disabled={isLocked}>
+              <Send size={18} className="inline mr-2" /> {submitLabel}
+            </Button>
+          </div>
+        ) : null}
       </div>
     </div>
   );

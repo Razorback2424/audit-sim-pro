@@ -8,7 +8,7 @@ const RegistrationPage = () => {
   const { currentUser } = useAuth();
   const { setRole } = useUser();
   const { showModal } = useModal();
-  const { navigate, route } = useRoute();
+  const { navigate, route, query } = useRoute();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -16,12 +16,19 @@ const RegistrationPage = () => {
   const [role, setSelectedRole] = useState('admin'); // allow choosing owner/admin/trainee for testing
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const plan = typeof query?.plan === 'string' ? query.plan.trim().toLowerCase() : '';
 
   const emailRef = useRef(null);
 
   useEffect(() => {
     if (emailRef.current) emailRef.current.focus();
   }, []);
+
+  useEffect(() => {
+    if (plan === 'individual') {
+      setSelectedRole('trainee');
+    }
+  }, [plan]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -55,7 +62,13 @@ const RegistrationPage = () => {
       const [, queryString] = (route || '').split('?');
       const params = new URLSearchParams(queryString || '');
       const next = params.get('next');
-      navigate(next || '/home');
+      if (next) {
+        navigate(next);
+      } else if (plan === 'individual') {
+        navigate('/checkout?plan=individual');
+      } else {
+        navigate('/home');
+      }
     } catch (err) {
       console.error('Registration error:', err);
       showModal?.(`Registration failed: ${err?.message || 'Unknown error'}`, 'Registration Error');
@@ -81,7 +94,11 @@ const RegistrationPage = () => {
   return (
     <div className="max-w-md mx-auto mt-10 p-6 bg-white border border-gray-200 rounded-md shadow-sm">
       <h1 className="text-2xl font-semibold text-gray-800 mb-1">Create your account</h1>
-      <p className="text-sm text-gray-500 mb-6">Register with email and password, and choose your role.</p>
+      <p className="text-sm text-gray-500 mb-6">
+        {plan === 'individual'
+          ? 'Register to unlock individual access.'
+          : 'Register with email and password, and choose your role.'}
+      </p>
 
       <form onSubmit={handleSubmit} className="space-y-4" noValidate>
         <div>
@@ -138,41 +155,43 @@ const RegistrationPage = () => {
           />
         </div>
 
-        <div>
-          <span className="block text-xs font-medium text-gray-700 mb-1">Choose role</span>
-          <div className="space-y-2">
-            <label className="flex items-center gap-2 text-sm text-gray-800">
-              <input
-                type="radio"
-                name="role"
-                value="owner"
-                checked={role === 'owner'}
-                onChange={() => setSelectedRole('owner')}
-              />
-              <span>Owner</span>
-            </label>
-            <label className="flex items-center gap-2 text-sm text-gray-800">
-              <input
-                type="radio"
-                name="role"
-                value="admin"
-                checked={role === 'admin'}
-                onChange={() => setSelectedRole('admin')}
-              />
-              <span>Administrator / Instructor</span>
-            </label>
-            <label className="flex items-center gap-2 text-sm text-gray-800">
-              <input
-                type="radio"
-                name="role"
-                value="trainee"
-                checked={role === 'trainee'}
-                onChange={() => setSelectedRole('trainee')}
-              />
-              <span>Auditor Trainee</span>
-            </label>
+        {plan === 'individual' ? null : (
+          <div>
+            <span className="block text-xs font-medium text-gray-700 mb-1">Choose role</span>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm text-gray-800">
+                <input
+                  type="radio"
+                  name="role"
+                  value="owner"
+                  checked={role === 'owner'}
+                  onChange={() => setSelectedRole('owner')}
+                />
+                <span>Owner</span>
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-800">
+                <input
+                  type="radio"
+                  name="role"
+                  value="admin"
+                  checked={role === 'admin'}
+                  onChange={() => setSelectedRole('admin')}
+                />
+                <span>Administrator / Instructor</span>
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-800">
+                <input
+                  type="radio"
+                  name="role"
+                  value="trainee"
+                  checked={role === 'trainee'}
+                  onChange={() => setSelectedRole('trainee')}
+                />
+                <span>Auditor Trainee</span>
+              </label>
+            </div>
           </div>
-        </div>
+        )}
 
         <Button type="submit" disabled={submitting} className="w-full">
           {submitting ? 'Creating account…' : 'Create account'}

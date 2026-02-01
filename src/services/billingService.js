@@ -1,77 +1,62 @@
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { db, appId, functions } from '../AppCore';
+import { appId, functions, db, FirestorePaths } from '../AppCore';
 
-const toNumberOrNull = (value) => {
-  const num = Number(value);
-  return Number.isFinite(num) ? num : null;
-};
-
-const toOptionalString = (value) => {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim();
-  return trimmed ? trimmed : null;
-};
-
-const normalizeSummary = (data) => {
-  if (!data || typeof data !== 'object') {
-    return null;
-  }
-  return {
-    planName: data.planName || 'Pilot',
-    seatCount: toNumberOrNull(data.seatCount),
-    renewalDate: data.renewalDate || null,
-    status: data.status || 'unknown',
-    provider: toOptionalString(data.provider),
-    customerId: toOptionalString(data.customerId),
-    subscriptionId: toOptionalString(data.subscriptionId),
+export const createCheckoutSession = async ({ plan, baseUrl }) => {
+  const callable = httpsCallable(functions, 'createStripeCheckoutSession');
+  const payload = {
+    plan,
+    appId,
+    baseUrl,
   };
+  const result = await callable(payload);
+  return result?.data || {};
 };
 
-const buildFallbackSummary = () => ({
-  planName: 'Pilot',
-  seatCount: null,
-  renewalDate: null,
-  status: 'unknown',
-  provider: null,
-  customerId: null,
-  subscriptionId: null,
-});
-
-export const fetchBillingSummary = async ({ orgId } = {}) => {
-  if (!orgId) {
-    return buildFallbackSummary();
-  }
-  try {
-    const ref = doc(db, `artifacts/${appId}/billing/orgs/${orgId}`);
-    const snap = await getDoc(ref);
-    if (snap.exists()) {
-      return normalizeSummary(snap.data()) || buildFallbackSummary();
-    }
-  } catch (error) {
-    console.warn('[billingService] Unable to fetch billing summary, using fallback.', {
-      orgId,
-      error,
-    });
-  }
-  return buildFallbackSummary();
+export const fetchBillingSummary = async ({ orgId, appId: appIdOverride } = {}) => {
+  if (!orgId) return null;
+  const ref = doc(db, `artifacts/${appIdOverride || appId}/billing/orgs/${orgId}`);
+  const snap = await getDoc(ref);
+  return snap.exists() ? snap.data() : null;
 };
 
-export const openBillingPortal = async ({ orgId } = {}) => {
-  if (!functions) {
-    throw new Error('Billing portal is not configured.');
-  }
+export const openBillingPortal = async ({ orgId, appId: appIdOverride } = {}) => {
   if (!orgId) {
-    throw new Error('Missing orgId for billing portal.');
+    throw new Error('Missing organization ID.');
   }
-  const callable = httpsCallable(functions, 'createBillingPortalSession');
-  const response = await callable({ appId, orgId });
-  const url = response?.data?.url;
-  if (!url || typeof url !== 'string') {
-    throw new Error('Billing portal session unavailable.');
+  const callable = httpsCallable(functions, 'openBillingPortal');
+  const result = await callable({ orgId, appId: appIdOverride || appId });
+  const url = result?.data?.url;
+  if (!url) {
+    throw new Error('Billing portal unavailable.');
   }
-  if (typeof window !== 'undefined') {
-    window.open(url, '_blank', 'noopener,noreferrer');
+  window.location.assign(url);
+};
+
+export const fetchUserBilling = async ({ uid, appId: appIdOverride } = {}) => {
+  if (!uid) return null;
+  const ref = doc(db, FirestorePaths.BILLING_DOCUMENT(appIdOverride || appId, uid));
+  const snap = await getDoc(ref);
+  return snap.exists() ? snap.data() : null;
+};
+
+export const subscribeUserBilling = ({ uid, appId: appIdOverride } = {}, onData, onError) => {
+  if (!uid) {
+    if (typeof onData === 'function') onData(null);
+    return () => null;
   }
-  return url;
+  const ref = doc(db, FirestorePaths.BILLING_DOCUMENT(appIdOverride || appId, uid));
+  return onSnapshot(
+    ref,
+    (snap) => {
+      const data = snap.exists() ? snap.data() : null;
+      if (typeof onData === 'function') onData(data);
+    },
+    onError
+  );
+};
+
+export const isBillingPaid = (billing) => {
+  const status = typeof billing?.status === 'string' ? billing.status.trim().toLowerCase() : '';
+  return status === 'paid' || status === 'active';
 };

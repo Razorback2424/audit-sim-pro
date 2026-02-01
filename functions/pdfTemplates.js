@@ -797,6 +797,327 @@ body { color: ${t.ink}; font-family: system-ui, -apple-system, Segoe UI, Roboto,
   return { html, css, pdfOptions: { format: 'Letter' } };
 };
 
+const renderFaPolicyV1 = ({ data = {}, theme = {} } = {}) => {
+  const {
+    clientName = 'Client',
+    fiscalYearStart = '',
+    fiscalYearEnd = '',
+    documentAsOfDate = '',
+    currency = 'USD',
+    capitalizationThreshold = 0,
+    capitalizeDirectCosts = [],
+    expenseExamples = [],
+    depreciationStartRule = '',
+    depreciationMethodDefault = '',
+    depreciationConvention = '',
+    assetClasses = [],
+  } = data || {};
+
+  const t = {
+    ink: '#111',
+    subtle: '#555',
+    rule: '#111',
+    ...theme,
+  };
+
+  const listItems = (items) =>
+    items.length
+      ? `<ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`
+      : '<div class=\"muted\">Not specified.</div>';
+
+  const classRows = assetClasses
+    .map(
+      (row) => `
+        <tr>
+          <td>${escapeHtml(row.classCode || '')}</td>
+          <td>${escapeHtml(row.className || '')}</td>
+          <td class=\"num\">${escapeHtml(row.usefulLifeYears || '')}</td>
+          <td>${escapeHtml(row.method || '')}</td>
+        </tr>
+      `
+    )
+    .join('');
+
+  const html = `
+    <div class=\"page\" role=\"document\" aria-label=\"Capitalization policy\">
+      <div class=\"header\">
+        <div class=\"title\">Capitalization Policy</div>
+        <div class=\"meta\">
+          <div><strong>Client:</strong> ${escapeHtml(clientName)}</div>
+          <div><strong>Fiscal Year:</strong> ${escapeHtml(fiscalYearStart)} to ${escapeHtml(fiscalYearEnd)}</div>
+          <div><strong>Document Date:</strong> ${escapeHtml(documentAsOfDate)}</div>
+        </div>
+      </div>
+
+      <div class=\"rule\"></div>
+
+      <section>
+        <h2>Capitalization Threshold</h2>
+        <div class=\"value\">${money(capitalizationThreshold, currency)}</div>
+      </section>
+
+      <section>
+        <h2>Costs to Capitalize</h2>
+        ${listItems(Array.isArray(capitalizeDirectCosts) ? capitalizeDirectCosts : [])}
+      </section>
+
+      <section>
+        <h2>Costs to Expense</h2>
+        ${listItems(Array.isArray(expenseExamples) ? expenseExamples : [])}
+      </section>
+
+      <section class=\"grid\">
+        <div>
+          <h2>Depreciation Start Rule</h2>
+          <div>${escapeHtml(depreciationStartRule)}</div>
+        </div>
+        <div>
+          <h2>Default Method</h2>
+          <div>${escapeHtml(depreciationMethodDefault)}</div>
+        </div>
+        <div>
+          <h2>Convention</h2>
+          <div>${escapeHtml(depreciationConvention)}</div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Useful Lives by Class</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Class Code</th>
+              <th>Class Name</th>
+              <th class=\"num\">Life (yrs)</th>
+              <th>Method</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${classRows || '<tr><td colspan=\"4\" class=\"muted\">No class data provided.</td></tr>'}
+          </tbody>
+        </table>
+      </section>
+    </div>
+  `;
+
+  const css = `
+@page { size: Letter; margin: 0.6in; }
+html, body { margin: 0; padding: 0; }
+body { color: ${t.ink}; font-family: Arial, Helvetica, sans-serif; font-size: 11pt; line-height: 1.35; }
+.page { width: 100%; }
+.title { font-size: 18pt; font-weight: 700; letter-spacing: 0.2px; }
+.meta { margin-top: 6px; font-size: 10pt; color: ${t.subtle}; }
+.rule { border-top: 2px solid ${t.rule}; margin: 12px 0 14px; }
+section { margin-bottom: 14px; }
+h2 { font-size: 11pt; margin: 0 0 6px; text-transform: uppercase; letter-spacing: 0.4px; }
+.value { font-size: 13pt; font-weight: 700; }
+ul { margin: 0 0 0 18px; padding: 0; }
+li { margin-bottom: 4px; }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { border-bottom: 1px solid #ddd; padding: 6px 4px; text-align: left; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.muted { color: ${t.subtle}; font-size: 10pt; }
+`;
+
+  return { html, css, pdfOptions: { format: 'Letter' } };
+};
+
+const renderPpeRollforwardV1 = ({ data = {}, theme = {} } = {}) => {
+  const {
+    clientName = 'Client',
+    fiscalYearStart = '',
+    fiscalYearEnd = '',
+    documentAsOfDate = '',
+    currency = 'USD',
+    rows = [],
+    totals = null,
+    footerNote = '',
+  } = data || {};
+
+  const t = {
+    ink: '#111',
+    subtle: '#555',
+    rule: '#111',
+    ...theme,
+  };
+
+  const safeTotals =
+    totals ||
+    rows.reduce(
+      (acc, row) => ({
+        beginningBalance: acc.beginningBalance + Number(row.beginningBalance || 0),
+        additions: acc.additions + Number(row.additions || 0),
+        disposals: acc.disposals + Number(row.disposals || 0),
+        endingBalance: acc.endingBalance + Number(row.endingBalance || 0),
+      }),
+      { beginningBalance: 0, additions: 0, disposals: 0, endingBalance: 0 }
+    );
+
+  const bodyRows = rows
+    .map(
+      (row) => `
+        <tr>
+          <td>${escapeHtml(row.className || row.classCode || '')}</td>
+          <td class=\"num\">${money(row.beginningBalance, currency)}</td>
+          <td class=\"num\">${money(row.additions, currency)}</td>
+          <td class=\"num\">${money(row.disposals, currency)}</td>
+          <td class=\"num\">${money(row.endingBalance, currency)}</td>
+        </tr>
+      `
+    )
+    .join('');
+
+  const html = `
+    <div class=\"page\" role=\"document\" aria-label=\"PP&E rollforward\">
+      <div class=\"header\">
+        <div class=\"title\">PP&E Rollforward</div>
+        <div class=\"meta\">
+          <div><strong>Client:</strong> ${escapeHtml(clientName)}</div>
+          <div><strong>Fiscal Year:</strong> ${escapeHtml(fiscalYearStart)} to ${escapeHtml(fiscalYearEnd)}</div>
+          <div><strong>Prepared:</strong> ${escapeHtml(documentAsOfDate)}</div>
+        </div>
+      </div>
+      <div class=\"rule\"></div>
+      <table>
+        <thead>
+          <tr>
+            <th>Asset Class</th>
+            <th class=\"num\">BOY</th>
+            <th class=\"num\">Additions</th>
+            <th class=\"num\">Disposals</th>
+            <th class=\"num\">EOY</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${bodyRows || '<tr><td colspan=\"5\" class=\"muted\">No rollforward rows provided.</td></tr>'}
+        </tbody>
+        <tfoot>
+          <tr class=\"total\">
+            <td>Total</td>
+            <td class=\"num\">${money(safeTotals.beginningBalance, currency)}</td>
+            <td class=\"num\">${money(safeTotals.additions, currency)}</td>
+            <td class=\"num\">${money(safeTotals.disposals, currency)}</td>
+            <td class=\"num\">${money(safeTotals.endingBalance, currency)}</td>
+          </tr>
+        </tfoot>
+      </table>
+      ${footerNote ? `<div class=\"footer\">${escapeHtml(footerNote)}</div>` : ''}
+    </div>
+  `;
+
+  const css = `
+@page { size: Letter; margin: 0.6in; }
+html, body { margin: 0; padding: 0; }
+body { color: ${t.ink}; font-family: Arial, Helvetica, sans-serif; font-size: 11pt; line-height: 1.35; }
+.page { width: 100%; }
+.title { font-size: 18pt; font-weight: 700; letter-spacing: 0.2px; }
+.meta { margin-top: 6px; font-size: 10pt; color: ${t.subtle}; }
+.rule { border-top: 2px solid ${t.rule}; margin: 12px 0 14px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { border-bottom: 1px solid #ddd; padding: 6px 4px; text-align: left; }
+.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tfoot .total td { font-weight: 700; border-top: 2px solid ${t.rule}; }
+.footer { margin-top: 14px; font-size: 10pt; color: ${t.subtle}; }
+.muted { color: ${t.subtle}; font-size: 10pt; }
+`;
+
+  return { html, css, pdfOptions: { format: 'Letter' } };
+};
+
+const renderFaListingV1 = ({ data = {}, theme = {} } = {}) => {
+  const {
+    clientName = 'Client',
+    fiscalYearStart = '',
+    fiscalYearEnd = '',
+    documentAsOfDate = '',
+    currency = 'USD',
+    rows = [],
+  } = data || {};
+
+  const t = {
+    ink: '#111',
+    subtle: '#555',
+    rule: '#111',
+    ...theme,
+  };
+
+  const showUsefulLife = rows.some((row) => row.usefulLifeYears !== undefined && row.usefulLifeYears !== null);
+  const showMethod = rows.some((row) => row.method);
+
+  const bodyRows = rows
+    .map(
+      (row) => `
+        <tr>
+          <td>${escapeHtml(row.assetId || '')}</td>
+          <td>${escapeHtml(row.description || '')}</td>
+          <td>${escapeHtml(row.className || row.classCode || '')}</td>
+          <td>${escapeHtml(row.location || '')}</td>
+          <td>${escapeHtml(row.vendorName || '')}</td>
+          <td>${escapeHtml(row.invoiceNumber || '')}</td>
+          <td>${escapeHtml(row.invoiceDate || '')}</td>
+          <td>${escapeHtml(row.placedInServiceDate || '')}</td>
+          <td class=\"num\">${money(row.costBasis || 0, currency)}</td>
+          ${showUsefulLife ? `<td class=\"num\">${escapeHtml(row.usefulLifeYears || '')}</td>` : ''}
+          ${showMethod ? `<td>${escapeHtml(row.method || '')}</td>` : ''}
+        </tr>
+      `
+    )
+    .join('');
+
+  const html = `
+    <div class=\"page\" role=\"document\" aria-label=\"Fixed asset listing\">
+      <div class=\"header\">
+        <div class=\"title\">Fixed Asset Listing</div>
+        <div class=\"meta\">
+          <div><strong>Client:</strong> ${escapeHtml(clientName)}</div>
+          <div><strong>Fiscal Year:</strong> ${escapeHtml(fiscalYearStart)} to ${escapeHtml(fiscalYearEnd)}</div>
+          <div><strong>As of:</strong> ${escapeHtml(documentAsOfDate)}</div>
+        </div>
+      </div>
+      <div class=\"rule\"></div>
+      <table>
+        <thead>
+          <tr>
+            <th>Asset ID</th>
+            <th>Description</th>
+            <th>Class</th>
+            <th>Location</th>
+            <th>Vendor</th>
+            <th>Invoice #</th>
+            <th>Invoice Date</th>
+            <th>Placed In Service</th>
+            <th class=\"num\">Cost</th>
+            ${showUsefulLife ? '<th class=\"num\">Life (yrs)</th>' : ''}
+            ${showMethod ? '<th>Method</th>' : ''}
+          </tr>
+        </thead>
+        <tbody>
+          ${bodyRows || '<tr><td colspan=\"11\" class=\"muted\">No assets provided.</td></tr>'}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  const css = `
+@page { size: Letter; margin: 0.5in; }
+html, body { margin: 0; padding: 0; }
+body { color: ${t.ink}; font-family: Arial, Helvetica, sans-serif; font-size: 9.5pt; line-height: 1.3; }
+.page { width: 100%; }
+.title { font-size: 16pt; font-weight: 700; letter-spacing: 0.2px; }
+.meta { margin-top: 4px; font-size: 9pt; color: ${t.subtle}; }
+.rule { border-top: 2px solid ${t.rule}; margin: 10px 0 12px; }
+table { width: 100%; border-collapse: collapse; }
+thead { display: table-header-group; }
+tr { page-break-inside: avoid; }
+th, td { border-bottom: 1px solid #ddd; padding: 4px 3px; text-align: left; vertical-align: top; }
+.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.muted { color: ${t.subtle}; font-size: 9pt; }
+`;
+
+  return { html, css, pdfOptions: { format: 'Letter' } };
+};
+
 const renderSeedBetaInvoiceV1 = ({ data = {}, theme = {}, layout = {} }) => {
   const {
     brandName = 'SEED BETA',
@@ -2922,6 +3243,9 @@ const TEMPLATE_REGISTRY = {
   'refdoc.ap-leadsheet.v1': renderApLeadSheetV1,
   'refdoc.disbursement-listing.v1': renderDisbursementListingV1,
   'refdoc.bank-statement.v1': renderBankStatementV1,
+  'refdoc.fa-policy.v1': renderFaPolicyV1,
+  'refdoc.ppe-rollforward.v1': renderPpeRollforwardV1,
+  'refdoc.fa-listing.v1': renderFaListingV1,
   'refdoc.payroll-register.v1': renderPayrollRegisterV1,
   'refdoc.remittance-bundle.v1': renderRemittanceBundleV1,
   'refdoc.accrual-estimate.v1': renderAccrualEstimateV1,

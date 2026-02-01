@@ -1,10 +1,7 @@
-import getUUID from '../utils/getUUID';
-import {
-  DEFAULT_ANSWER_KEY_CLASSIFICATION,
-  buildSingleAnswerKey,
-} from '../utils/caseFormHelpers';
+const { getUUID } = require('./getUUID');
+const { DEFAULT_ANSWER_KEY_CLASSIFICATION, buildSingleAnswerKey } = require('./caseFormHelpers');
 
-export const initialHighlightedDocument = () => ({
+const initialHighlightedDocument = () => ({
   fileName: '',
   storagePath: '',
   downloadURL: '',
@@ -14,7 +11,7 @@ export const initialHighlightedDocument = () => ({
   contentType: '',
 });
 
-export const initialDisbursement = () => ({
+const initialDisbursement = () => ({
   _tempId: getUUID(),
   paymentId: '',
   payee: '',
@@ -34,7 +31,7 @@ export const initialDisbursement = () => ({
   validator: { type: '', config: {} },
 });
 
-export const initialOutstandingItem = () => ({
+const initialOutstandingItem = () => ({
   _tempId: getUUID(),
   reference: '',
   payee: '',
@@ -42,14 +39,14 @@ export const initialOutstandingItem = () => ({
   amount: '',
 });
 
-export const initialCutoffItem = () => ({
+const initialCutoffItem = () => ({
   _tempId: getUUID(),
   reference: '',
   clearDate: '',
   amount: '',
 });
 
-export const initialCashRegisterItem = () => ({
+const initialCashRegisterItem = () => ({
   _tempId: getUUID(),
   checkNo: '',
   writtenDate: '',
@@ -57,14 +54,14 @@ export const initialCashRegisterItem = () => ({
   payee: '',
 });
 
-export const initialReconciliationMap = () => ({
+const initialReconciliationMap = () => ({
   _tempId: getUUID(),
   outstandingTempId: '',
   cutoffTempId: '',
   scenarioType: '',
 });
 
-export const initialInstruction = () => ({
+const initialInstruction = () => ({
   title: '',
   moduleCode: '',
   version: 1,
@@ -82,7 +79,7 @@ export const initialInstruction = () => ({
   },
 });
 
-export const initialCompletenessGate = () => ({
+const initialCompletenessGate = () => ({
   enabled: false,
   stepTitle: '',
   description: '',
@@ -121,7 +118,7 @@ export const initialCompletenessGate = () => ({
   correctedReferenceDocNames: [],
 });
 
-export const initialMapping = () => ({
+const initialMapping = () => ({
   _tempId: getUUID(),
   disbursementTempId: '',
   fileName: '',
@@ -133,7 +130,7 @@ export const initialMapping = () => ({
   contentType: '',
 });
 
-export const initialReferenceDocument = () => ({
+const initialReferenceDocument = () => ({
   _tempId: getUUID(),
   fileName: '',
   storagePath: '',
@@ -144,7 +141,7 @@ export const initialReferenceDocument = () => ({
   contentType: '',
 });
 
-export const initialFaClass = () => ({
+const initialFaClass = () => ({
   _tempId: getUUID(),
   className: '',
   beginningBalance: '',
@@ -153,7 +150,7 @@ export const initialFaClass = () => ({
   endingBalance: '',
 });
 
-export const initialFaAddition = () => ({
+const initialFaAddition = () => ({
   _tempId: getUUID(),
   vendor: '',
   description: '',
@@ -166,7 +163,7 @@ export const initialFaAddition = () => ({
   usefulLife: '',
 });
 
-export const initialFaDisposal = () => ({
+const initialFaDisposal = () => ({
   _tempId: getUUID(),
   assetId: '',
   description: '',
@@ -177,7 +174,7 @@ export const initialFaDisposal = () => ({
   expectedGainLoss: '',
 });
 
-export const initialCashContext = () => ({
+const initialCashContext = () => ({
   moduleType: 'bank_reconciliation',
   bookBalance: '',
   bankBalance: '',
@@ -187,3 +184,20 @@ export const initialCashContext = () => ({
   testingThreshold: '',
   cutoffWindowDays: '',
 });
+
+module.exports = {
+  initialHighlightedDocument,
+  initialDisbursement,
+  initialOutstandingItem,
+  initialCutoffItem,
+  initialCashRegisterItem,
+  initialReconciliationMap,
+  initialInstruction,
+  initialCompletenessGate,
+  initialMapping,
+  initialReferenceDocument,
+  initialFaClass,
+  initialFaAddition,
+  initialFaDisposal,
+  initialCashContext,
+};

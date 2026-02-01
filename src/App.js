@@ -20,6 +20,10 @@ import AdminCaseProgressPage from './pages/AdminCaseProgressPage';
 import AdminDebugDocsPage from './pages/AdminDebugDocsPage';
 import RecipeFormPage from './pages/RecipeFormPage';
 import LandingPage from './pages/LandingPage';
+import DemoSurlEntryPage from './pages/DemoSurlEntryPage';
+import CheckoutPage from './pages/CheckoutPage';
+import CheckoutSuccessPage from './pages/CheckoutSuccessPage';
+import CheckoutCancelPage from './pages/CheckoutCancelPage';
 import TraineeDashboardPage from './pages/TraineeDashboardPage';
 import TraineeCaseViewPage from './pages/TraineeCaseViewPage';
 import TraineeSubmissionHistoryPage from './pages/TraineeSubmissionHistoryPage';
@@ -61,6 +65,10 @@ export default function App() {
       <Route path="/register" element={<RegistrationPage />} />
       <Route path="/unauthorized" element={<UnauthorizedPage />} />
       <Route path="/" element={<LandingPage />} />
+      <Route path="/demo/surl" element={<DemoSurlEntryPage />} />
+      <Route path="/checkout" element={<CheckoutPage />} />
+      <Route path="/checkout/success" element={<CheckoutSuccessPage />} />
+      <Route path="/checkout/cancel" element={<CheckoutCancelPage />} />
 
       <Route element={<RequireAuth />}>
         <Route path="/select-role" element={<RoleSelectionPage />} />
