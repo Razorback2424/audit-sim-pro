@@ -8,6 +8,7 @@ import { fetchProgressForCases, saveProgress, subscribeProgressForCases } from '
 import { fetchRecipeProgress, saveRecipeProgress } from '../services/recipeProgressService';
 import { startCaseAttemptFromPool } from '../services/attemptService';
 import { isBillingPaid } from '../services/billingService';
+import { trackAnalyticsEvent } from '../services/analyticsService';
 import { Send, Loader2, ExternalLink, Download } from 'lucide-react';
 import ResultsAnalysis from '../components/trainee/ResultsAnalysis';
 import AuditItemCardFactory from '../components/trainee/AuditItemCardFactory';
@@ -896,6 +897,10 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     if (!caseId) {
       setLoading(false);
       if (!isDemo) navigate('/trainee');
+      return;
+    }
+    if (!isDemo && !isDemoCase && userId && loadingBilling) {
+      setLoading(true);
       return;
     }
     if (!isDemo && !isDemoCase && userId && !loadingBilling && !isBillingPaid(billing)) {
@@ -2485,6 +2490,13 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     const hasSuccessfulAttempt = gatesFirstAttempt && gatesPassed && allClassificationsCorrect;
     setModulePassed(hasSuccessfulAttempt);
 
+    if (isDemo || isDemoCase) {
+      trackAnalyticsEvent({
+        eventType: 'demo_submitted',
+        metadata: { caseId, passed: hasSuccessfulAttempt },
+      });
+    }
+
     if (!canPersist) {
       if (progressSaveTimeoutRef.current) {
         clearTimeout(progressSaveTimeoutRef.current);
@@ -3823,6 +3835,26 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     return (
       <div className="space-y-6">
         <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-6">
+          {(isDemo || isDemoCase) ? (
+            <div className="mb-6 rounded-xl border border-blue-200 bg-blue-50 px-4 py-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="text-sm font-semibold text-blue-900">Demo complete</div>
+                  <div className="text-sm text-blue-800">
+                    Unlock full access to run the complete simulator and track mastery.
+                  </div>
+                </div>
+                <Button
+                  onClick={() => {
+                    trackAnalyticsEvent({ eventType: 'upgrade_clicked', metadata: { source: 'demo_results' } });
+                    navigate('/checkout?plan=individual');
+                  }}
+                >
+                  Unlock full access
+                </Button>
+              </div>
+            </div>
+          ) : null}
           {modulePassed === false ? (
             <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
               <div className="font-semibold">Module not complete yet — this case is complete.</div>
@@ -3843,7 +3875,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
                   'Review the results below and try a new case to demonstrate mastery.'
                 )}
               </div>
-              {caseData?.moduleId ? (
+              {caseData?.moduleId && !isDemo && !isDemoCase ? (
                 <div className="mt-3">
                   <Button onClick={generateNewCase}>Start a new case with fresh documents</Button>
                 </div>
@@ -3864,17 +3896,22 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
               selection: selectionGateResult,
             }}
             referenceDocuments={referenceDocuments}
-            onRequestRetake={requestRetake}
-            onGenerateNewCase={caseData?.moduleId ? generateNewCase : undefined}
-            onReturnToDashboard={() => navigate('/trainee')}
+            onRequestRetake={!isDemo && !isDemoCase ? requestRetake : undefined}
+            onGenerateNewCase={caseData?.moduleId && !isDemo && !isDemoCase ? generateNewCase : undefined}
+            onReturnToDashboard={() => navigate(isDemo || isDemoCase ? '/' : '/trainee')}
           />
         </div>
 
-        <div className="flex justify-center">
-          <Button variant="secondary" onClick={() => navigate('/trainee')}> 
-            Return to Dashboard
-          </Button>
-        </div>
+        {!isDemo && !isDemoCase ? (
+          <div className="flex justify-center">
+            <Button
+              variant="secondary"
+              onClick={() => navigate('/trainee')}
+            >
+              Return to Dashboard
+            </Button>
+          </div>
+        ) : null}
       </div>
     );
   };

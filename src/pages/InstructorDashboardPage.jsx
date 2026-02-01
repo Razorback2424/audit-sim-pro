@@ -13,6 +13,8 @@ const TABS = [
   { id: 'billing', label: 'Billing' },
 ];
 
+const BILLING_PORTAL_ENABLED = false;
+
 const formatTimestamp = (value) => {
   if (!value) return '-';
   if (typeof value.toDate === 'function') {
@@ -88,9 +90,13 @@ export default function InstructorDashboardPage() {
   });
   const [endDate, setEndDate] = useState(() => formatDateInput(new Date()));
   const canViewValueBilling = role === ROLES.OWNER || role === ROLES.ADMIN;
+  const availableTabs = useMemo(
+    () => (BILLING_PORTAL_ENABLED ? TABS : TABS.filter((tab) => tab.id !== 'billing')),
+    []
+  );
   const visibleTabs = useMemo(
-    () => (canViewValueBilling ? TABS : TABS.filter((tab) => tab.id === 'people')),
-    [canViewValueBilling]
+    () => (canViewValueBilling ? availableTabs : availableTabs.filter((tab) => tab.id === 'people')),
+    [canViewValueBilling, availableTabs]
   );
 
   useEffect(() => {
@@ -134,6 +140,13 @@ export default function InstructorDashboardPage() {
   useEffect(() => {
     let active = true;
     const loadBilling = async () => {
+      if (!BILLING_PORTAL_ENABLED) {
+        if (active) {
+          setBillingSummary(null);
+          setBillingLoading(false);
+        }
+        return;
+      }
       if ((role !== ROLES.INSTRUCTOR && role !== ROLES.OWNER) || !userProfile?.orgId) {
         if (active) {
           setBillingSummary(null);
@@ -187,7 +200,10 @@ export default function InstructorDashboardPage() {
   }, [sortedRoster, selectedUserId]);
 
   useEffect(() => {
-    if (!canViewValueBilling && activeTab !== 'people') {
+    if (
+      (!canViewValueBilling && activeTab !== 'people') ||
+      (!BILLING_PORTAL_ENABLED && activeTab === 'billing')
+    ) {
       setActiveTab('people');
     }
   }, [canViewValueBilling, activeTab]);

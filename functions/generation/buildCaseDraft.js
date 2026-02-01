@@ -36,6 +36,12 @@ const buildCaseDraftFromRecipe = ({ recipeId, overrides = {} }) => {
     moduleId: recipeId,
     recipeVersion,
     caseName: buildGeneratedCaseName({ baseName: baseCaseName, caseLevel: resolvedCaseLevel }),
+    accessLevel:
+      typeof result?.accessLevel === 'string'
+        ? result.accessLevel.trim().toLowerCase()
+        : typeof overrides?.accessLevel === 'string'
+        ? overrides.accessLevel.trim().toLowerCase()
+        : 'paid',
     caseLevel: resolvedCaseLevel,
     auditArea: result.auditArea || DEFAULT_AUDIT_AREA,
     layoutType: result.layoutType || 'two_pane',

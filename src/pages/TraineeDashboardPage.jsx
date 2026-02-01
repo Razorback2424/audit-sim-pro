@@ -7,6 +7,7 @@ import { listCaseRecipes } from '../generation/recipeRegistry';
 import { subscribeProgressForCases } from '../services/progressService';
 import { startCaseAttemptFromPool } from '../services/attemptService';
 import { isBillingPaid } from '../services/billingService';
+import { trackAnalyticsEvent } from '../services/analyticsService';
 import {
   buildLearnerProgressView,
   DEFAULT_PATH_ID,
@@ -101,7 +102,7 @@ const isRecipeConfigured = (recipe) => {
 };
 
 export default function TraineeDashboardPage() {
-  const { navigate } = useRoute();
+  const { navigate, query, setQuery } = useRoute();
   const { userId } = useAuth();
   const { billing, loadingBilling } = useUser();
   const { showModal } = useModal();
@@ -127,7 +128,7 @@ export default function TraineeDashboardPage() {
   const showPaywall = !loadingBilling && !hasPaidAccess;
 
   const fetchCases = useCallback(async () => {
-    if (!userId) return;
+    if (!userId || loadingBilling || showPaywall) return;
     try {
       setLoading(true);
       setCases([]);
@@ -202,7 +203,7 @@ export default function TraineeDashboardPage() {
       setLoading(false);
       setInitialLoad(false);
     }
-  }, [userId]);
+  }, [userId, loadingBilling, showPaywall]);
 
   useEffect(() => {
     if (!userId) {
@@ -213,7 +214,7 @@ export default function TraineeDashboardPage() {
   }, [userId, fetchCases]);
 
   useEffect(() => {
-    if (!userId) return;
+    if (!userId || loadingBilling || showPaywall) return;
     let isActive = true;
     const loadRecipes = async () => {
       try {
@@ -232,7 +233,7 @@ export default function TraineeDashboardPage() {
     return () => {
       isActive = false;
     };
-  }, [userId]);
+  }, [userId, loadingBilling, showPaywall]);
 
   const caseIds = useMemo(() => cases.map((c) => c.id), [cases]);
   const poolCountByModuleId = useMemo(() => {
@@ -464,7 +465,7 @@ export default function TraineeDashboardPage() {
   const availableModuleId = availableModules[0]?.moduleId || availableModules[0]?.id || '';
   const availableHasPool = availableModuleId ? (poolCountByModuleId.get(availableModuleId) || 0) > 0 : true;
 
-  const handleStartModule = async (moduleId) => {
+  const handleStartModule = useCallback(async (moduleId) => {
     if (!moduleId || !userId) return;
     if (startingModuleId) return;
     try {
@@ -478,7 +479,25 @@ export default function TraineeDashboardPage() {
     } finally {
       setStartingModuleId('');
     }
-  };
+  }, [userId, startingModuleId, navigate]);
+
+  useEffect(() => {
+    const autostartRequested = query?.autostart === '1';
+    if (!autostartRequested || !hasPaidAccess || startingModuleId) return;
+    const targetModuleId = availableModules[0]?.moduleId || availableModules[0]?.id || '';
+    if (!targetModuleId) return;
+    handleStartModule(targetModuleId);
+    if (typeof setQuery === 'function') {
+      setQuery(
+        (prev) => {
+          const next = { ...prev };
+          delete next.autostart;
+          return next;
+        },
+        { replace: true }
+      );
+    }
+  }, [query, hasPaidAccess, startingModuleId, availableModules, handleStartModule, setQuery]);
 
   const handleDeleteRetake = useCallback(
     (caseData) => {
@@ -547,8 +566,21 @@ export default function TraineeDashboardPage() {
               Your account can run the demo SURL case. Upgrade to access all modules and save mastery.
             </p>
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
-              <Button onClick={() => navigate('/checkout?plan=individual')}>Unlock full access</Button>
-              <Button variant="secondary" onClick={() => navigate('/demo/surl')}>
+              <Button
+                onClick={() => {
+                  trackAnalyticsEvent({ eventType: 'upgrade_clicked', metadata: { source: 'dashboard_paywall' } });
+                  navigate('/checkout?plan=individual');
+                }}
+              >
+                Unlock full access
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => {
+                  trackAnalyticsEvent({ eventType: 'demo_started', metadata: { source: 'dashboard_paywall' } });
+                  navigate('/demo/surl');
+                }}
+              >
                 Play the demo
               </Button>
             </div>
@@ -619,10 +651,12 @@ export default function TraineeDashboardPage() {
                 disabled={
                   currentAction?.type === 'emptyModule' ||
                   (currentAction?.type === 'startModule' && !heroHasPool) ||
-                  currentAction?.type === 'startModule' &&
-                  heroRecipe &&
-                  startingModuleId !== '' &&
-                  startingModuleId !== (heroRecipe.moduleId || heroRecipe.id)
+                  (
+                    currentAction?.type === 'startModule' &&
+                    heroRecipe &&
+                    startingModuleId !== '' &&
+                    startingModuleId !== (heroRecipe.moduleId || heroRecipe.id)
+                  )
                 }
               >
                 {heroActionLabel}
@@ -663,8 +697,10 @@ export default function TraineeDashboardPage() {
                 isLoading={startingModuleId === (availableModules[0]?.moduleId || availableModules[0]?.id)}
                 disabled={
                   !availableHasPool ||
-                  startingModuleId !== '' &&
-                  startingModuleId !== (availableModules[0]?.moduleId || availableModules[0]?.id)
+                  (
+                    startingModuleId !== '' &&
+                    startingModuleId !== (availableModules[0]?.moduleId || availableModules[0]?.id)
+                  )
                 }
               >
                 Next

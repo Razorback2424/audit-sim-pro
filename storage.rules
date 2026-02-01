@@ -30,28 +30,59 @@ service firebase.storage {
       return hasGlobalAdminRole();
     }
 
+    function hasPaidAccess(appId) {
+      return request.auth != null &&
+        firestore.exists(/databases/(default)/documents/artifacts/$(appId)/users/$(request.auth.uid)/billing) &&
+        (
+          firestore.get(/databases/(default)/documents/artifacts/$(appId)/users/$(request.auth.uid)/billing).data.status in ['paid', 'active']
+        );
+    }
+
+    function caseDocExists(appId, caseId) {
+      return firestore.exists(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId));
+    }
+
+    function isDemoCase(appId, caseId) {
+      return caseDocExists(appId, caseId) &&
+        firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.accessLevel == 'demo';
+    }
+
+    function isPublicDemoCase(appId, caseId) {
+      return isDemoCase(appId, caseId) &&
+        firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.publicVisible == true;
+    }
+
     // ---------- Trainee visibility helper ----------
     // artifacts/{appId}/public/data/cases/{caseId} with visibleToUserIds (list)
     function traineeHasAccessToCase(appId, caseId) {
-      return request.auth != null &&
-             firestore.exists(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)) &&
-             (
-               // Public case
-               firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.publicVisible == true ||
-               // Backward compatibility: if no roster, treat non-false publicVisible as accessible
-               (
-                 (
-                   !(firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds is list) ||
-                   firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds.size() == 0
-                 ) &&
-                 firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.publicVisible != false
-               ) ||
-               // Rostered access
-               (
-                 (firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds is list) &&
-                 firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds.hasAny([request.auth.uid])
-               )
-             );
+      return (
+        (
+          request.auth != null &&
+          caseDocExists(appId, caseId) &&
+          (hasPaidAccess(appId) || isDemoCase(appId, caseId)) &&
+          (
+            // Public case
+            firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.publicVisible == true ||
+            // Backward compatibility: if no roster, treat non-false publicVisible as accessible
+            (
+              (
+                !(firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds is list) ||
+                firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds.size() == 0
+              ) &&
+              firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.publicVisible != false
+            ) ||
+            // Rostered access
+            (
+              (firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds is list) &&
+              firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds.hasAny([request.auth.uid])
+            )
+          )
+        ) ||
+        (
+          request.auth == null &&
+          isPublicDemoCase(appId, caseId)
+        )
+      );
     }
 
     function hasAllowedExtension() {

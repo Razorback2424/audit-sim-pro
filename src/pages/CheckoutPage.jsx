@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useAuth, useRoute } from '../AppCore';
 import { createCheckoutSession } from '../services/billingService';
+import { trackAnalyticsEvent } from '../services/analyticsService';
 
 const PLAN_LABELS = {
   individual: 'Individual Auditor Access',
@@ -24,6 +25,7 @@ export default function CheckoutPage() {
     setError('');
     setLoading(true);
     try {
+      await trackAnalyticsEvent({ eventType: 'checkout_started', metadata: { plan } });
       const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
       const { url } = await createCheckoutSession({ plan, baseUrl });
       if (url) {

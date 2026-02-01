@@ -186,6 +186,12 @@ const normalizeNumberOrNull = (value) => {
   return Number.isFinite(num) ? num : null;
 };
 
+const normalizeAccessLevel = (value) => {
+  if (typeof value !== 'string') return 'paid';
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'demo' ? 'demo' : 'paid';
+};
+
 const isPlainObject = (value) =>
   Object.prototype.toString.call(value) === '[object Object]';
 
@@ -769,6 +775,7 @@ const sanitizeCaseWriteData = (rawData = {}, { isCreate = false } = {}) => {
   sanitized.auditArea = normalizeAuditArea(sanitized.auditArea);
   sanitized.caseGroupId = normalizeCaseGroupId(sanitized.caseGroupId);
   sanitized.caseLevel = normalizeCaseLevel(sanitized.caseLevel);
+  sanitized.accessLevel = normalizeAccessLevel(sanitized.accessLevel);
 
   sanitized.pathId = toOptionalString(sanitized.pathId) || toOptionalString(sanitized.auditArea);
   sanitized.pathCategory = toOptionalString(sanitized.pathCategory);

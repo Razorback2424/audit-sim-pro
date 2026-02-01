@@ -96,6 +96,10 @@ export const generateAttemptFromRecipe = async ({ moduleId, uid, retakeAttempt =
     pathId: recipeDetails?.pathId || recipeMeta.pathId || '',
     tier: recipeDetails?.tier || recipeMeta.tier || 'foundations',
     primarySkill: recipeDetails?.primarySkill || recipeMeta.primarySkill || '',
+    accessLevel:
+      typeof draft?.accessLevel === 'string' && draft.accessLevel.trim().toLowerCase() === 'demo'
+        ? 'demo'
+        : 'paid',
     workflow,
     generationConfig: recipeDetails?.generationConfig || {},
     retakeAttempt: Boolean(retakeAttempt),

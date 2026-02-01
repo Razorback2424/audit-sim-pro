@@ -43,12 +43,28 @@ service cloud.firestore {
       return hasRole('instructor');
     }
 
+    function hasPaidAccess(appId) {
+      return request.auth != null &&
+        exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(request.auth.uid)/billing) &&
+        (
+          get(/databases/$(database)/documents/artifacts/$(appId)/users/$(request.auth.uid)/billing).data.status in ['paid', 'active']
+        );
+    }
+
+    function isDemoCase(caseData) {
+      return caseData != null &&
+        (caseData.accessLevel == 'demo');
+    }
+
     // Checks if the trainee can view the case currently being read
-    function traineeCaseAccessible() {
+    function traineeCaseAccessible(appId) {
       return (
-        !(resource.data.visibleToUserIds is list) ||
-        resource.data.visibleToUserIds.size() == 0 ||
-        request.auth.uid in resource.data.visibleToUserIds
+        (hasPaidAccess(appId) || isDemoCase(resource.data)) &&
+        (
+          !(resource.data.visibleToUserIds is list) ||
+          resource.data.visibleToUserIds.size() == 0 ||
+          request.auth.uid in resource.data.visibleToUserIds
+        )
       );
     }
 
@@ -129,6 +145,7 @@ service cloud.firestore {
              request.resource.data.status in ['assigned', 'in_progress', 'submitted', 'archived', 'draft'] &&
              request.resource.data.updatedAt is timestamp &&
              request.resource.data.createdAt is timestamp &&
+             (!('accessLevel' in request.resource.data) || request.resource.data.accessLevel in ['demo', 'paid']) &&
              (!('createdBy' in request.resource.data) || request.resource.data.createdBy == null || request.resource.data.createdBy is string) &&
              (!('caseLevel' in request.resource.data) || request.resource.data.caseLevel == null || request.resource.data.caseLevel in ['basic', 'intermediate', 'advanced']) &&
              (!('dueAt' in request.resource.data) || request.resource.data.dueAt == null || request.resource.data.dueAt is timestamp) &&
@@ -161,6 +178,7 @@ service cloud.firestore {
              request.resource.data.publicVisible is bool &&
              request.resource.data._deleted is bool &&
              request.resource.data.status in ['assigned', 'in_progress', 'submitted', 'archived', 'draft'] &&
+             (!('accessLevel' in request.resource.data) || request.resource.data.accessLevel in ['demo', 'paid']) &&
              (!('createdBy' in request.resource.data) || request.resource.data.createdBy == null || request.resource.data.createdBy is string) &&
              (!('caseLevel' in request.resource.data) || request.resource.data.caseLevel == null || request.resource.data.caseLevel in ['basic', 'intermediate', 'advanced']) &&
              (!('dueAt' in request.resource.data) || request.resource.data.dueAt == null || request.resource.data.dueAt is timestamp) &&
@@ -232,7 +250,17 @@ service cloud.firestore {
         (
           isTrainee() &&
           exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)) &&
+          (
+            hasPaidAccess(appId) ||
+            isDemoCase(get(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data)
+          ) &&
           request.auth.uid in get(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds
+        ) ||
+        (
+          request.auth == null &&
+          exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)) &&
+          isDemoCase(get(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data) &&
+          get(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.publicVisible == true
         );
     }
 
@@ -258,24 +286,21 @@ service cloud.firestore {
     // Case documents accessible to trainees if authorized
     match /artifacts/{appId}/public/data/cases/{caseId} {
       // For single document reads, the function is secure.
-      allow get: if request.auth != null && (
-        isAdmin() ||
-        resource.data.publicVisible == true ||
-        (
-          resource.data.visibleToUserIds is list &&
-          request.auth.uid in resource.data.visibleToUserIds
-        ) ||
-        (
-          belongsToOrg(resource.data) &&
-          (
-            isInstructor() ||
-            (isTrainee() && traineeCaseAccessible())
-          )
-        )
+      allow get: if (
+        (request.auth != null && (
+          isAdmin() ||
+          (isInstructor() && belongsToOrg(resource.data)) ||
+          (isTrainee() && traineeCaseAccessible(appId))
+        )) ||
+        (request.auth == null && isDemoCase(resource.data) && resource.data.publicVisible == true)
       );
       // For queries, allow any signed-in user; visibility is enforced by query filters (publicVisible/visibleToUserIds)
       // and downstream UI guards.
-      allow list: if request.auth != null;
+      allow list: if request.auth != null && (
+        isAdmin() ||
+        (isInstructor() && belongsToOrg(resource.data)) ||
+        (isTrainee() && traineeCaseAccessible(appId))
+      );
       allow create: if request.auth != null &&
         (
           isAdmin() ||
@@ -391,6 +416,22 @@ service cloud.firestore {
         isPlatformAdmin()
       );
       allow create, update, delete: if false;
+    }
+
+    match /artifacts/{appId}/billing/stripe_events/{eventId} {
+      allow read, write: if false;
+    }
+
+    match /artifacts/{appId}/billing/stripe_customers/{customerId} {
+      allow read, write: if false;
+    }
+
+    match /artifacts/{appId}/billing/stripe_payment_intents/{paymentIntentId} {
+      allow read, write: if false;
+    }
+
+    match /artifacts/{appId}/private/data/analytics_events/{eventId} {
+      allow read, write: if false;
     }
 
 

@@ -125,6 +125,7 @@ import {
  * @property {string[]} [secondarySkills]
  * @property {number} [estimatedMinutes]
  * @property {number} [orderIndex]
+ * @property {'demo' | 'paid'} [accessLevel]
  */
 
 export {}; // eslint-disable-line
@@ -240,6 +241,10 @@ export const toCaseModel = (id, data) => {
     orderIndex: Number.isFinite(Number(sanitizedCase?.orderIndex))
       ? Number(sanitizedCase.orderIndex)
       : null,
+    accessLevel:
+      typeof sanitizedCase?.accessLevel === 'string' && sanitizedCase.accessLevel.trim().toLowerCase() === 'demo'
+        ? 'demo'
+        : 'paid',
     workpaper:
       sanitizedCase?.workpaper && typeof sanitizedCase.workpaper === 'object'
         ? {

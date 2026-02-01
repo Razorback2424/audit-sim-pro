@@ -1,7 +1,8 @@
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import TraineeCaseViewPage from './TraineeCaseViewPage';
 import { useRoute } from '../AppCore';
+import { trackAnalyticsEvent } from '../services/analyticsService';
 
 const getDemoCaseId = (value) => (typeof value === 'string' ? value.trim() : '');
 
@@ -13,6 +14,10 @@ export default function DemoSurlEntryPage() {
     const fromEnv = getDemoCaseId(process.env.REACT_APP_DEMO_SURL_CASE_ID);
     return fromQuery || fromEnv;
   }, [query]);
+
+  useEffect(() => {
+    trackAnalyticsEvent({ eventType: 'demo_started', metadata: { caseId: demoCaseId || null } });
+  }, [demoCaseId]);
 
   if (!demoCaseId) {
     return (

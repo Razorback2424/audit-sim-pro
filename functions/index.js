@@ -81,6 +81,63 @@ const resolveStripePrice = (plan) => {
 };
 
 const buildBillingPath = (appIdValue, uid) => `artifacts/${appIdValue}/users/${uid}/billing`;
+const buildStripeEventPath = (appIdValue, eventId) =>
+  `artifacts/${appIdValue}/billing/stripe_events/${eventId}`;
+const buildStripeCustomerPath = (appIdValue, customerId) =>
+  `artifacts/${appIdValue}/billing/stripe_customers/${customerId}`;
+const buildStripePaymentIntentPath = (appIdValue, paymentIntentId) =>
+  `artifacts/${appIdValue}/billing/stripe_payment_intents/${paymentIntentId}`;
+const buildAnalyticsEventsCollection = (appIdValue) =>
+  `artifacts/${appIdValue}/private/data/analytics_events`;
+
+const normalizeEventType = (value) =>
+  typeof value === 'string' ? value.trim().toLowerCase() : '';
+
+const recordStripeEvent = async ({ firestore, appIdValue, event }) => {
+  if (!event?.id) return { alreadyProcessed: false };
+  const eventRef = firestore.doc(buildStripeEventPath(appIdValue, event.id));
+  return firestore.runTransaction(async (txn) => {
+    const snap = await txn.get(eventRef);
+    if (snap.exists) {
+      return { alreadyProcessed: true };
+    }
+    txn.set(
+      eventRef,
+      {
+        eventId: event.id,
+        type: event.type || null,
+        livemode: event.livemode === true,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    return { alreadyProcessed: false };
+  });
+};
+
+const resolveBillingIdentityFromStripe = async ({ firestore, appIdValue, customerId, paymentIntentId }) => {
+  if (paymentIntentId) {
+    const intentRef = firestore.doc(buildStripePaymentIntentPath(appIdValue, paymentIntentId));
+    const intentSnap = await intentRef.get();
+    if (intentSnap.exists) {
+      const data = intentSnap.data() || {};
+      if (data.uid) {
+        return { uid: data.uid, appIdValue: data.appId || appIdValue };
+      }
+    }
+  }
+  if (customerId) {
+    const customerRef = firestore.doc(buildStripeCustomerPath(appIdValue, customerId));
+    const customerSnap = await customerRef.get();
+    if (customerSnap.exists) {
+      const data = customerSnap.data() || {};
+      if (data.uid) {
+        return { uid: data.uid, appIdValue: data.appId || appIdValue };
+      }
+    }
+  }
+  return { uid: null, appIdValue };
+};
 
 const isRecord = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -335,6 +392,13 @@ const buildCaseFromRecipe = async ({ firestore, appId, moduleId, createdBy, orgI
     '';
 
   const workflow = resolveWorkflow({ recipeDetails, draft });
+  const normalizedAccess =
+    typeof recipeDetails?.accessLevel === 'string'
+      ? recipeDetails.accessLevel.trim().toLowerCase()
+      : typeof draft?.accessLevel === 'string'
+      ? draft.accessLevel.trim().toLowerCase()
+      : 'paid';
+  const accessLevel = normalizedAccess === 'demo' ? 'demo' : 'paid';
 
   const casePayload = {
     caseName: title,
@@ -357,6 +421,7 @@ const buildCaseFromRecipe = async ({ firestore, appId, moduleId, createdBy, orgI
     pathId: recipeDetails?.pathId || recipeMeta.pathId || '',
     tier: recipeDetails?.tier || recipeMeta.tier || 'foundations',
     primarySkill: recipeDetails?.primarySkill || recipeMeta.primarySkill || '',
+    accessLevel,
     workflow,
     generationConfig: recipeDetails?.generationConfig || {},
     retakeAttempt: false,
@@ -1110,6 +1175,14 @@ const resolveRequesterIdentity = async ({ context, appId, firestore, logLabel })
   return { resolvedRole, requesterOrgId };
 };
 
+const hasPaidAccessServer = async ({ firestore, appId, uid }) => {
+  if (!appId || !uid) return false;
+  const billingSnap = await firestore.doc(buildBillingPath(appId, uid)).get();
+  if (!billingSnap.exists) return false;
+  const status = typeof billingSnap.data()?.status === 'string' ? billingSnap.data().status.toLowerCase() : '';
+  return status === 'paid' || status === 'active';
+};
+
 exports.listRosterOptions = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
@@ -1480,6 +1553,12 @@ exports.startCaseAttempt = functions.https.onCall(async (data, context) => {
   }
 
   const uid = context.auth.uid;
+  if (resolvedRole === 'trainee') {
+    const isPaid = await hasPaidAccessServer({ firestore, appId, uid });
+    if (!isPaid) {
+      throw new functions.https.HttpsError('permission-denied', 'Upgrade required.');
+    }
+  }
 
   const casesSnap = await firestore
     .collection(`artifacts/${appId}/public/data/cases`)
@@ -2765,15 +2844,29 @@ exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
   }
 
   try {
-    if (event.type === 'checkout.session.completed') {
-      const session = event.data.object || {};
+    const db = admin.firestore();
+    const eventObject = event.data?.object || {};
+    const eventMetadata = eventObject.metadata || {};
+    const inferredAppId = eventMetadata.appId || DEFAULT_APP_ID;
+
+    const { alreadyProcessed } = await recordStripeEvent({
+      firestore: db,
+      appIdValue: inferredAppId,
+      event,
+    });
+    if (alreadyProcessed) {
+      res.json({ received: true, duplicate: true });
+      return;
+    }
+
+    if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
+      const session = eventObject || {};
       const metadata = session.metadata || {};
       const uid = metadata.uid || session.client_reference_id;
       const plan = metadata.plan || 'individual';
-      const appIdValue = metadata.appId || DEFAULT_APP_ID;
+      const appIdValue = metadata.appId || inferredAppId;
 
       if (uid) {
-        const db = admin.firestore();
         const billingRef = db.doc(buildBillingPath(appIdValue, uid));
         await billingRef.set(
           {
@@ -2782,7 +2875,54 @@ exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
             stripeCustomerId: session.customer || null,
             stripeCheckoutSessionId: session.id || null,
             stripePaymentStatus: session.payment_status || null,
+            stripePaymentIntentId: session.payment_intent || null,
             lastPaidAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+
+        if (session.customer) {
+          await db.doc(buildStripeCustomerPath(appIdValue, session.customer)).set(
+            {
+              uid,
+              appId: appIdValue,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          );
+        }
+        if (session.payment_intent) {
+          await db.doc(buildStripePaymentIntentPath(appIdValue, session.payment_intent)).set(
+            {
+              uid,
+              appId: appIdValue,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          );
+        }
+      }
+    }
+
+    if (event.type === 'charge.refunded' || event.type === 'charge.dispute.created') {
+      const charge = eventObject || {};
+      const customerId = charge.customer || null;
+      const paymentIntentId = charge.payment_intent || null;
+      const { uid, appIdValue } = await resolveBillingIdentityFromStripe({
+        firestore: db,
+        appIdValue: inferredAppId,
+        customerId,
+        paymentIntentId,
+      });
+
+      if (uid) {
+        await db.doc(buildBillingPath(appIdValue, uid)).set(
+          {
+            status: 'revoked',
+            stripePaymentStatus: charge.status || null,
+            revokedReason: event.type,
+            revokedAt: admin.firestore.FieldValue.serverTimestamp(),
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           },
           { merge: true }
@@ -2795,4 +2935,33 @@ exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
     console.error('[stripeWebhook] handler failed', err);
     res.status(500).send('Webhook handler failed');
   }
+});
+
+exports.trackAnalyticsEvent = functions.https.onCall(async (data, context) => {
+  const appIdValue = resolveAppId(data);
+  const eventType = normalizeEventType(data?.eventType);
+  const allowedEvents = new Set([
+    'registration_completed',
+    'checkout_started',
+    'checkout_completed',
+    'demo_started',
+    'demo_submitted',
+    'upgrade_clicked',
+  ]);
+  if (!allowedEvents.has(eventType)) {
+    throw new functions.https.HttpsError('invalid-argument', 'Unsupported event type.');
+  }
+
+  const payload = {
+    eventType,
+    uid: context.auth?.uid || null,
+    demoSessionId: toOptionalString(data?.demoSessionId),
+    metadata: isRecord(data?.metadata) ? data.metadata : null,
+    userAgent: context.rawRequest?.headers?.['user-agent'] || null,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+
+  const db = admin.firestore();
+  await db.collection(buildAnalyticsEventsCollection(appIdValue)).add(payload);
+  return { ok: true };
 });
