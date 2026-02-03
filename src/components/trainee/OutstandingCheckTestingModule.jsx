@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Timestamp } from 'firebase/firestore';
-import { ref as storageRef, getDownloadURL } from 'firebase/storage';
-import { Button, appId, storage } from '../../AppCore';
+import { Button, appId } from '../../AppCore';
 import { saveSubmission } from '../../services/submissionService';
 import { saveProgress, subscribeProgressForCases } from '../../services/progressService';
 import { fetchRecipeProgress, saveRecipeProgress } from '../../services/recipeProgressService';
+import { getSignedDocumentUrl } from '../../services/documentService';
 import { currencyFormatter } from '../../utils/formatters';
 import InstructionView from '../InstructionView';
 
@@ -124,7 +124,7 @@ const shallowEqualRecord = (a, b) => {
   return aKeys.every((key) => aObj[key] === bObj[key]);
 };
 
-function ArtifactViewer({ artifacts = [] }) {
+function ArtifactViewer({ artifacts = [], caseId }) {
   const yearEnd = artifacts.find((doc) => doc?.type === 'cash_year_end_statement') || null;
   const cutoff = artifacts.find((doc) => doc?.type === 'cash_cutoff_statement') || null;
   const [resolvedUrls, setResolvedUrls] = useState({ yearEnd: '', cutoff: '' });
@@ -134,16 +134,17 @@ function ArtifactViewer({ artifacts = [] }) {
     const resolveUrls = async () => {
       const resolveOne = async (doc) => {
         if (!doc) return '';
-        if (doc.downloadURL) return doc.downloadURL;
-        if (doc.storagePath) {
-          try {
-            return await getDownloadURL(storageRef(storage, doc.storagePath));
-          } catch (err) {
-            console.warn('[ArtifactViewer] Failed to resolve storage path', err);
-            return '';
-          }
+        if (!doc.storagePath && !doc.downloadURL) return '';
+        try {
+          return await getSignedDocumentUrl({
+            caseId,
+            storagePath: doc.storagePath,
+            downloadURL: doc.downloadURL,
+          });
+        } catch (err) {
+          console.warn('[ArtifactViewer] Failed to resolve storage path', err);
+          return '';
         }
-        return '';
       };
       const [yearEndUrl, cutoffUrl] = await Promise.all([resolveOne(yearEnd), resolveOne(cutoff)]);
       if (isActive) {
@@ -154,7 +155,7 @@ function ArtifactViewer({ artifacts = [] }) {
     return () => {
       isActive = false;
     };
-  }, [cutoff, yearEnd]);
+  }, [caseId, cutoff, yearEnd]);
 
   const renderOne = (doc, title, url) => {
     if (!doc) {
@@ -212,7 +213,7 @@ const CLASSIFICATION_LABELS = {
   improperly_excluded: 'Improperly Excluded',
 };
 
-function CheckCopyViewer({ referenceDocuments = [], selectedCheckNos = [], activeCheckNo = '' }) {
+function CheckCopyViewer({ referenceDocuments = [], selectedCheckNos = [], activeCheckNo = '', caseId }) {
   const [checkUrls, setCheckUrls] = useState({});
 
   const checkDocMap = useMemo(() => {
@@ -232,17 +233,18 @@ function CheckCopyViewer({ referenceDocuments = [], selectedCheckNos = [], activ
         (selectedCheckNos || []).map(async (checkNo) => {
           const doc = checkDocMap.get(checkNo);
           if (!doc) return [checkNo, ''];
-          if (doc.downloadURL) return [checkNo, doc.downloadURL];
-          if (doc.storagePath) {
-            try {
-              const url = await getDownloadURL(storageRef(storage, doc.storagePath));
-              return [checkNo, url];
-            } catch (err) {
-              console.warn('[CheckCopyViewer] Failed to resolve storage path', err);
-              return [checkNo, ''];
-            }
+          if (!doc.storagePath && !doc.downloadURL) return [checkNo, ''];
+          try {
+            const url = await getSignedDocumentUrl({
+              caseId,
+              storagePath: doc.storagePath,
+              downloadURL: doc.downloadURL,
+            });
+            return [checkNo, url];
+          } catch (err) {
+            console.warn('[CheckCopyViewer] Failed to resolve storage path', err);
+            return [checkNo, ''];
           }
-          return [checkNo, ''];
         })
       );
       if (isActive) {
@@ -254,7 +256,7 @@ function CheckCopyViewer({ referenceDocuments = [], selectedCheckNos = [], activ
     return () => {
       isActive = false;
     };
-  }, [checkDocMap, selectedCheckNos]);
+  }, [caseId, checkDocMap, selectedCheckNos]);
 
   const activeUrl = activeCheckNo ? checkUrls[activeCheckNo] || '' : '';
   const activeDoc = activeCheckNo ? checkDocMap.get(activeCheckNo) : null;
@@ -980,7 +982,7 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <ArtifactViewer artifacts={Array.isArray(caseData?.cashArtifacts) ? caseData.cashArtifacts : []} />
+        <ArtifactViewer artifacts={Array.isArray(caseData?.cashArtifacts) ? caseData.cashArtifacts : []} caseId={caseId} />
         <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
           <div className="border-b border-gray-200 px-4 py-3">
             <h3 className="text-lg font-semibold text-gray-800">January Cutoff Statement — Cleared Checks</h3>
@@ -1129,6 +1131,7 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
             referenceDocuments={Array.isArray(caseData?.referenceDocuments) ? caseData.referenceDocuments : []}
             selectedCheckNos={selectedCheckNos}
             activeCheckNo={activeCheckNo}
+            caseId={caseId}
           />
           <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden">
             <div className="border-b border-gray-100 px-4 py-3">

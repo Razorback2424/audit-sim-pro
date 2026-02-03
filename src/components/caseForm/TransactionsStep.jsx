@@ -12,6 +12,7 @@ const CASH_MODULE_TYPE_OPTIONS = [
 ];
 
 export default function TransactionsStep({
+  caseId,
   transactions,
   files,
   availableSkillTags = [],
@@ -270,6 +271,7 @@ export default function TransactionsStep({
               item={item}
               index={index}
               auditArea={auditArea}
+              caseId={caseId}
               onChange={handleDisbursementChange}
               onRemove={removeDisbursement}
               onAddMapping={addMappingToDisbursement}

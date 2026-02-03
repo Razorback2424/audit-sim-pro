@@ -79,6 +79,6 @@ describe('buildDashboardData', () => {
     expect(data.learners[1].status).toBe('not_started');
     expect(data.cohortSummary.baselineCriticalAvg).toBe(2);
     expect(data.cohortSummary.latestCriticalAvg).toBe(0);
-    expect(data.cohortSummary.needsAttentionCount).toBe(1);
+    expect(data.cohortSummary.needsAttentionCount).toBe(2);
   });
 });

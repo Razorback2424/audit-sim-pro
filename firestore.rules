@@ -45,9 +45,9 @@ service cloud.firestore {
 
     function hasPaidAccess(appId) {
       return request.auth != null &&
-        exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(request.auth.uid)/billing) &&
+        exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(request.auth.uid)/billing/status) &&
         (
-          get(/databases/$(database)/documents/artifacts/$(appId)/users/$(request.auth.uid)/billing).data.status in ['paid', 'active']
+          get(/databases/$(database)/documents/artifacts/$(appId)/users/$(request.auth.uid)/billing/status).data.status in ['paid', 'active']
         );
     }
 
@@ -56,14 +56,29 @@ service cloud.firestore {
         (caseData.accessLevel == 'demo');
     }
 
+    function traineeCaseVisibleToUser() {
+      return (
+        resource.data.publicVisible == true ||
+        (
+          resource.data.visibleToUserIds is list &&
+          request.auth.uid in resource.data.visibleToUserIds
+        )
+      );
+    }
+
     // Checks if the trainee can view the case currently being read
     function traineeCaseAccessible(appId) {
       return (
-        (hasPaidAccess(appId) || isDemoCase(resource.data)) &&
         (
-          !(resource.data.visibleToUserIds is list) ||
-          resource.data.visibleToUserIds.size() == 0 ||
-          request.auth.uid in resource.data.visibleToUserIds
+          hasPaidAccess(appId) &&
+          resource.data._deleted == false &&
+          traineeCaseVisibleToUser()
+        ) ||
+        (
+          !hasPaidAccess(appId) &&
+          resource.data._deleted == false &&
+          isDemoCase(resource.data) &&
+          resource.data.publicVisible == true
         )
       );
     }
@@ -277,8 +292,10 @@ service cloud.firestore {
     match /roles/{userId} {
       // Allow users to read their own role document (for display/initial setup)
       allow read: if request.auth != null && request.auth.uid == userId;
-      // Allow a user to create their own role document with any role.
-      allow create: if request.auth != null && request.auth.uid == userId;
+      // Allow a user to create their own role document as trainee only.
+      allow create: if request.auth != null &&
+        request.auth.uid == userId &&
+        request.resource.data.role == 'trainee';
       // Role updates should primarily be handled by a trusted backend service (e.g., Cloud Function)
       allow update: if request.auth != null && isAdmin(); // Still allow admin client-side if needed, but custom claims are source of truth
     }
@@ -294,13 +311,8 @@ service cloud.firestore {
         )) ||
         (request.auth == null && isDemoCase(resource.data) && resource.data.publicVisible == true)
       );
-      // For queries, allow any signed-in user; visibility is enforced by query filters (publicVisible/visibleToUserIds)
-      // and downstream UI guards.
-      allow list: if request.auth != null && (
-        isAdmin() ||
-        (isInstructor() && belongsToOrg(resource.data)) ||
-        (isTrainee() && traineeCaseAccessible(appId))
-      );
+      // For queries, restrict to privileged users only (trainees must use callable function).
+      allow list: if request.auth != null && (isAdmin() || isInstructor());
       allow create: if request.auth != null &&
         (
           isAdmin() ||
@@ -324,6 +336,13 @@ service cloud.firestore {
           )
         );
       allow delete: if request.auth != null && isAdmin();
+    }
+
+    // Public demo configuration (caseId + metadata)
+    match /artifacts/{appId}/public/config/demo/{docId} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update, delete: if request.auth != null && isAdmin();
     }
 
     // Private answer keys stored under artifacts/{appId}/private/data/case_keys/{caseId}
@@ -374,7 +393,7 @@ service cloud.firestore {
     }
 
     // User billing status (server-writable only)
-    match /artifacts/{appId}/users/{userId}/billing {
+    match /artifacts/{appId}/users/{userId}/billing/{docId} {
       allow read: if request.auth != null && request.auth.uid == userId;
       allow create, update, delete: if false;
     }

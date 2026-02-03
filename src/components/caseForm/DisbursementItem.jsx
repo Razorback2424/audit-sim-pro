@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ChevronDown, ChevronRight, PlusCircle, Trash2 } from 'lucide-react';
 import { Input, Button, Select } from '../../AppCore';
 import { AUDIT_AREAS } from '../../models/caseConstants';
@@ -8,8 +8,9 @@ import {
   extractAnswerKeyMeta,
 } from '../../utils/caseFormHelpers';
 import { TAG_FIELDS, normalizeTagInput } from '../../services/tagService';
+import { getSignedDocumentUrl } from '../../services/documentService';
 
-const InvoiceMappingInline = ({ mapping, disbursementTempId, onRemove, onFileSelect, acceptValue }) => {
+const InvoiceMappingInline = ({ mapping, disbursementTempId, onRemove, onFileSelect, acceptValue, onOpenDocument }) => {
   const fileInputId = `mapping-file-${mapping._tempId}`;
   const fileLabel =
     mapping.clientSideFile?.name || mapping.fileName || mapping.storagePath || mapping.downloadURL || 'No file selected';
@@ -44,15 +45,14 @@ const InvoiceMappingInline = ({ mapping, disbursementTempId, onRemove, onFileSel
               {mapping.storagePath}
             </p>
           ) : null}
-          {mapping.downloadURL ? (
-            <a
-              href={mapping.downloadURL}
-              target="_blank"
-              rel="noreferrer"
+          {onOpenDocument && (mapping.storagePath || mapping.downloadURL) ? (
+            <button
+              type="button"
+              onClick={() => onOpenDocument(mapping)}
               className="text-xs text-blue-600 hover:text-blue-800 underline"
             >
-              Open download URL
-            </a>
+              Open document
+            </button>
           ) : null}
           {mapping.uploadError ? (
             <p className="mt-1 text-xs text-red-600">Error: {mapping.uploadError}</p>
@@ -96,6 +96,7 @@ const HighlightedEvidenceUploader = ({
   acceptValue,
   prettySupportedLabels,
   maxUploadBytes,
+  onOpenDocument,
 }) => {
   const fileInputId = `highlighted-upload-${disbursementTempId}`;
   const label =
@@ -140,15 +141,14 @@ const HighlightedEvidenceUploader = ({
           </p>
           <p className="mt-1 text-xs text-gray-600">{helperText}</p>
           <p className={`mt-1 text-xs ${status.className}`}>{status.text}</p>
-          {document?.downloadURL ? (
-            <a
-              href={document.downloadURL}
-              target="_blank"
-              rel="noreferrer"
+          {onOpenDocument && (document?.storagePath || document?.downloadURL) ? (
+            <button
+              type="button"
+              onClick={() => onOpenDocument(document)}
               className="text-xs text-blue-600 hover:text-blue-800 underline mt-1 inline-block"
             >
-              Open download URL
-            </a>
+              Open document
+            </button>
           ) : null}
         </div>
         <div className="flex items-center gap-2">
@@ -342,6 +342,7 @@ const DisbursementItem = ({
   item,
   index,
   auditArea,
+  caseId,
   onChange,
   onRemove,
   onAddMapping,
@@ -367,6 +368,23 @@ const DisbursementItem = ({
       setExpanded(true);
     }
   }, [isNewItem]);
+
+  const handleOpenDocument = useCallback(
+    async (doc) => {
+      if (!caseId || !doc) return;
+      try {
+        const url = await getSignedDocumentUrl({
+          caseId,
+          storagePath: doc.storagePath,
+          downloadURL: doc.downloadURL,
+        });
+        window.open(url, '_blank');
+      } catch (error) {
+        console.error('[DisbursementItem] Failed to open document', error);
+      }
+    },
+    [caseId]
+  );
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -845,6 +863,7 @@ const DisbursementItem = ({
                     acceptValue={fileAcceptValue}
                     prettySupportedLabels={prettySupportedLabels}
                     maxUploadBytes={maxUploadBytes}
+                    onOpenDocument={caseId ? handleOpenDocument : null}
                   />
                 </div>
               </div>
@@ -883,6 +902,7 @@ const DisbursementItem = ({
                         onRemove={onRemoveMapping}
                         onFileSelect={onSelectMappingFile}
                         acceptValue={fileAcceptValue}
+                        onOpenDocument={caseId ? handleOpenDocument : null}
                       />
                     ))
                   )}

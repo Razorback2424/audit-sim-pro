@@ -26,6 +26,7 @@ import { fetchUsersWithProfiles } from '../services/userService';
 import { listCaseRecipes } from '../generation/recipeRegistry';
 import { fetchRecipe } from '../services/recipeService';
 import { seedCasePool } from '../services/attemptService';
+import { fetchDemoConfig, setDemoCase } from '../services/demoService';
 import AdvancedToolsMenu from '../components/admin/AdvancedToolsMenu';
 import DashboardMetrics from '../components/admin/DashboardMetrics';
 import SetupAlerts from '../components/admin/SetupAlerts';
@@ -166,6 +167,12 @@ export default function AdminDashboardPage() {
     hasNextPage: false,
     hasPreviousPage: false,
   });
+  const [demoConfig, setDemoConfig] = useState(null);
+  const [demoCaseId, setDemoCaseId] = useState('');
+  const [demoError, setDemoError] = useState('');
+  const [settingDemo, setSettingDemo] = useState(false);
+  const [demoBackfillPaid, setDemoBackfillPaid] = useState(true);
+  const [demoQueueDocs, setDemoQueueDocs] = useState(true);
   const [searchInput, setSearchInput] = useState(() => (query?.search ?? '').trim());
   const [debouncedSearch, setDebouncedSearch] = useState(() => (query?.search ?? '').trim());
   const [viewMode, setViewMode] = useState(() => {
@@ -188,6 +195,70 @@ export default function AdminDashboardPage() {
     }
   });
   const isAdmin = role === 'admin' || role === 'owner';
+
+  useEffect(() => {
+    let active = true;
+    setDemoError('');
+    fetchDemoConfig()
+      .then((config) => {
+        if (!active) return;
+        setDemoConfig(config);
+        if (typeof config?.caseId === 'string' && config.caseId.trim()) {
+          setDemoCaseId(config.caseId.trim());
+        }
+      })
+      .catch((err) => {
+        if (!active) return;
+        setDemoError(err?.message || 'Unable to load demo configuration.');
+      });
+    return () => {
+      active = false;
+    };
+  }, [refreshToken]);
+
+  const handleSetDemoCase = useCallback(async () => {
+    const trimmed = demoCaseId.trim();
+    if (!trimmed) {
+      showModal('Enter a demo case ID first.', 'Missing demo case');
+      return;
+    }
+    if (settingDemo) return;
+    setSettingDemo(true);
+    setDemoError('');
+    try {
+      const result = await setDemoCase({
+        caseId: trimmed,
+        backfillPaid: demoBackfillPaid,
+        queueDocuments: demoQueueDocs,
+      });
+      const config = await fetchDemoConfig();
+      setDemoConfig(config);
+      const updatedCount = result?.updatedCount ?? 0;
+      const generationStatus = result?.generationStatus;
+      const extraNote =
+        generationStatus === 'missing-plan'
+          ? ' (No generation plan found for demo case.)'
+          : generationStatus === 'ready'
+          ? ' (Artifacts already ready.)'
+          : generationStatus
+          ? ` (Generation: ${generationStatus})`
+          : '';
+      showModal(
+        `Demo case set. Updated ${updatedCount} case${updatedCount === 1 ? '' : 's'}.${extraNote}`,
+        'Demo updated'
+      );
+      setRefreshToken((value) => value + 1);
+    } catch (err) {
+      const message = err?.message || 'Failed to set demo case.';
+      const code = err?.code ? ` (${err.code})` : '';
+      const details = err?.details ? ` ${typeof err.details === 'string' ? err.details : JSON.stringify(err.details)}` : '';
+      const fullMessage = `${message}${code}${details}`;
+      setDemoError(fullMessage);
+      showModal(fullMessage, 'Demo update failed');
+    } finally {
+      setSettingDemo(false);
+    }
+  }, [demoCaseId, demoBackfillPaid, demoQueueDocs, settingDemo, showModal]);
   const handleSeedPool = useCallback(
     async ({ moduleId, count }) => {
       if (!moduleId) return;
@@ -413,7 +484,7 @@ export default function AdminDashboardPage() {
         unsubscribe();
       }
     };
-  }, [showModal, role, loadingRole]);
+  }, [showModal, role, loadingRole, isAdmin]);
 
   useEffect(() => {
     if (loadingRole || !isAdmin) {
@@ -456,7 +527,7 @@ export default function AdminDashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [loadingRole, role]);
+  }, [loadingRole, role, isAdmin]);
 
   useEffect(() => {
     if (loadingRole || !isAdmin) {
@@ -485,7 +556,7 @@ export default function AdminDashboardPage() {
     return () => {
       cancelled = true;
     };
-  }, [showModal, role, loadingRole]);
+  }, [showModal, role, loadingRole, isAdmin]);
 
   useEffect(() => {
     if (loadingRole || !isAdmin) {
@@ -512,7 +583,7 @@ export default function AdminDashboardPage() {
         unsubscribe();
       }
     };
-  }, [showModal, role, loadingRole]);
+  }, [showModal, role, loadingRole, isAdmin]);
 
   useEffect(() => {
     if (loadingRole || !isAdmin) {
@@ -597,7 +668,7 @@ export default function AdminDashboardPage() {
         unsubscribeSubmissions();
       }
     };
-  }, [showModal, role, loadingRole]);
+  }, [showModal, role, loadingRole, isAdmin]);
 
   const handleRepairCases = async () => {
     if (repairingCases) return;
@@ -1051,6 +1122,63 @@ export default function AdminDashboardPage() {
               ))}
             </div>
           )}
+        </section>
+        <section id="demo-setup" className="bg-white border border-gray-200 rounded-lg shadow-sm p-5 space-y-4">
+          <div className="flex flex-col gap-2">
+            <h2 className="text-xl font-semibold text-gray-800">Demo setup</h2>
+            <p className="text-sm text-gray-600">
+              Pick exactly one public demo case. All other cases will be marked paid if backfill is enabled.
+            </p>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-gray-700" htmlFor="demo-case-id">
+                Demo case ID
+              </label>
+              <Input
+                id="demo-case-id"
+                value={demoCaseId}
+                onChange={(event) => setDemoCaseId(event.target.value)}
+                placeholder="Paste a case ID"
+                list="demo-case-options"
+              />
+              <datalist id="demo-case-options">
+                {casesState.items.map((caseData) => (
+                  <option key={caseData.id} value={caseData.id}>
+                    {caseData.caseName || caseData.title || caseData.id}
+                  </option>
+                ))}
+              </datalist>
+              <div className="text-xs text-gray-500">
+                Current demo: {demoConfig?.caseId || 'Not configured'}
+                {demoConfig?.caseName ? ` · ${demoConfig.caseName}` : ''}
+              </div>
+            </div>
+            <div className="space-y-3">
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={demoBackfillPaid}
+                  onChange={(event) => setDemoBackfillPaid(event.target.checked)}
+                />
+                Backfill all other cases to accessLevel=paid
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={demoQueueDocs}
+                  onChange={(event) => setDemoQueueDocs(event.target.checked)}
+                />
+                Queue document generation for the demo case
+              </label>
+              <Button onClick={handleSetDemoCase} isLoading={settingDemo}>
+                Set demo case
+              </Button>
+              {demoError ? (
+                <p className="text-xs text-rose-600">{demoError}</p>
+              ) : null}
+            </div>
+          </div>
         </section>
         <section id="cases" className="space-y-4">
           <div className="flex flex-col gap-4">

@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, PlusCircle, RotateCcw } from 'lucide-react';
-import { ref as storageRef, getDownloadURL } from 'firebase/storage';
+import { getSignedDocumentUrl } from '../../services/documentService';
 import { currencyFormatter } from '../../utils/formatters';
-import { storage } from '../../AppCore';
 
 const normalize = (val) => (typeof val === 'string' ? val.trim().toLowerCase() : '');
 
@@ -59,16 +58,6 @@ const isInlinePreviewable = (contentType, fileNameOrPath) => {
     return true;
   }
   return false;
-};
-
-const resolveDocumentUrl = async (doc) => {
-  if (!doc) return '';
-  if (doc.downloadURL) return doc.downloadURL;
-  if (doc.storagePath) {
-    const fileRef = storageRef(storage, doc.storagePath);
-    return await getDownloadURL(fileRef);
-  }
-  return '';
 };
 
 const extractBreakdown = (source) => {
@@ -226,6 +215,7 @@ const DecoyTable = ({ items }) => {
 };
 
 export default function ResultsAnalysis({
+  caseId,
   disbursements,
   studentAnswers,
   gateResults,
@@ -242,6 +232,19 @@ export default function ResultsAnalysis({
   const [highlightInlineNotSupported, setHighlightInlineNotSupported] = useState(false);
   const tieOutGate = gateResults?.tieOut || null;
   const selectionGate = gateResults?.selection || null;
+
+  const resolveDocumentUrl = useCallback(
+    async (doc) => {
+      if (!doc || (!doc.storagePath && !doc.downloadURL)) return '';
+      if (!caseId) throw new Error('Case ID is required to open documents.');
+      return getSignedDocumentUrl({
+        caseId,
+        storagePath: doc.storagePath,
+        downloadURL: doc.downloadURL,
+      });
+    },
+    [caseId]
+  );
 
   const { traps, routineCorrect, issues, falsePositiveCount, caughtTraps } = useMemo(() => {
     const traps = [];
@@ -433,7 +436,7 @@ export default function ResultsAnalysis({
     return () => {
       cancelled = true;
     };
-  }, [invoiceDoc]);
+  }, [invoiceDoc, resolveDocumentUrl]);
 
   const [apAgingUrl, setApAgingUrl] = useState('');
   const [apAgingLoading, setApAgingLoading] = useState(false);
@@ -479,7 +482,7 @@ export default function ResultsAnalysis({
     return () => {
       cancelled = true;
     };
-  }, [apAgingDoc]);
+  }, [apAgingDoc, resolveDocumentUrl]);
 
   const goPrev = useCallback(() => {
     setActiveIssueIndex((prev) => Math.max(0, prev - 1));

@@ -88,3 +88,21 @@ export const toProgressModel = (data, caseId) => {
     attemptCount: normalizeNumber(attemptCount, 0),
   };
 };
+
+export const deriveProgressState = ({ step, percentComplete }) => {
+  const normalizedStep = typeof step === 'string' ? step.toLowerCase() : '';
+  const pct = Number.isFinite(Number(percentComplete)) ? Number(percentComplete) : 0;
+  if (normalizedStep === 'results' || pct >= 100) return 'submitted';
+  if (pct > 0) return 'in_progress';
+  return 'not_started';
+};
+
+export const isProgressComplete = (progress) => {
+  if (typeof progress?.hasSuccessfulAttempt === 'boolean') {
+    return progress.hasSuccessfulAttempt;
+  }
+  const state = typeof progress?.state === 'string' ? progress.state.toLowerCase() : '';
+  const pct = Number(progress?.percentComplete || 0);
+  const step = typeof progress?.step === 'string' ? progress.step.toLowerCase() : '';
+  return state === 'submitted' || pct >= 100 || step === 'results';
+};

@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { Timestamp } from 'firebase/firestore';
-import { storage, Button, useRoute, useAuth, useUser, useModal, appId } from '../AppCore';
+import { Button, useRoute, useAuth, useUser, useModal, appId } from '../AppCore';
 import { fetchCase, listStudentCases, subscribeToCase } from '../services/caseService';
 import { saveSubmission } from '../services/submissionService';
 import { fetchProgressForCases, saveProgress, subscribeProgressForCases } from '../services/progressService';
@@ -9,6 +8,7 @@ import { fetchRecipeProgress, saveRecipeProgress } from '../services/recipeProgr
 import { startCaseAttemptFromPool } from '../services/attemptService';
 import { isBillingPaid } from '../services/billingService';
 import { trackAnalyticsEvent } from '../services/analyticsService';
+import { getSignedDocumentUrl } from '../services/documentService';
 import { Send, Loader2, ExternalLink, Download } from 'lucide-react';
 import ResultsAnalysis from '../components/trainee/ResultsAnalysis';
 import AuditItemCardFactory from '../components/trainee/AuditItemCardFactory';
@@ -17,6 +17,7 @@ import FixedAssetTestingModule from '../components/trainee/FixedAssetTestingModu
 import InstructionView from '../components/InstructionView';
 import { getCaseLevelLabel, normalizeCaseLevel } from '../models/caseConstants';
 import { computeDisbursementAttemptSummary } from '../utils/attemptSummary';
+import { deriveProgressState, isProgressComplete as isProgressCompleteModel } from '../models/progress';
 
 const FLOW_STEPS = Object.freeze({
   INSTRUCTION: 'instruction',
@@ -275,12 +276,6 @@ const computePercentComplete = (step, selectedCount, classifiedCount) => {
   return 0;
 };
 
-const deriveStateFromProgress = (step, percentComplete) => {
-  if (step === FLOW_STEPS.RESULTS || percentComplete >= 100) return 'submitted';
-  if (percentComplete > 0) return 'in_progress';
-  return 'not_started';
-};
-
 const isSameSelectionMap = (currentMap, nextMap) => {
   const currentKeys = Object.keys(currentMap);
   const nextKeys = Object.keys(nextMap);
@@ -457,6 +452,14 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
   const [apAgingPreviewUrl, setApAgingPreviewUrl] = useState('');
   const [apAgingPreviewLoading, setApAgingPreviewLoading] = useState(false);
   const [apAgingPreviewError, setApAgingPreviewError] = useState('');
+
+  const requestSignedUrl = useCallback(
+    async ({ storagePath, downloadURL }) => {
+      if (!caseId) throw new Error('Case ID is required to open documents.');
+      return getSignedDocumentUrl({ caseId, storagePath, downloadURL });
+    },
+    [caseId]
+  );
 
   const recipeId = useMemo(() => getRecipeId(caseData), [caseData]);
   const recipeGateId = useMemo(() => {
@@ -771,7 +774,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
           caseId: newCaseId,
           patch: {
             percentComplete,
-            state: deriveStateFromProgress(firstPostInstructionStep, percentComplete),
+            state: deriveProgressState({ step: firstPostInstructionStep, percentComplete }),
             step: firstPostInstructionStep,
             draft: {
               selectedPaymentIds: [],
@@ -847,15 +850,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     [parseAmount]
   );
 
-  const isProgressComplete = useCallback((progress) => {
-    if (typeof progress?.hasSuccessfulAttempt === 'boolean') {
-      return progress.hasSuccessfulAttempt;
-    }
-    const state = typeof progress?.state === 'string' ? progress.state.toLowerCase() : '';
-    const pct = Number(progress?.percentComplete || 0);
-    const step = typeof progress?.step === 'string' ? progress.step.toLowerCase() : '';
-    return state === 'submitted' || pct >= 100 || step === 'results';
-  }, []);
+  const isProgressComplete = useCallback((progress) => isProgressCompleteModel(progress), []);
 
   useEffect(() => {
     activeStepRef.current = activeStep;
@@ -1337,13 +1332,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       setApAgingPreviewLoading(false);
       return;
     }
-    if (apAgingDoc.downloadURL) {
-      setApAgingPreviewUrl(apAgingDoc.downloadURL);
-      setApAgingPreviewError('');
-      setApAgingPreviewLoading(false);
-      return;
-    }
-    if (!apAgingDoc.storagePath || !storage?.app) {
+    if (!apAgingDoc.storagePath && !apAgingDoc.downloadURL) {
       setApAgingPreviewUrl('');
       setApAgingPreviewError('AP aging preview unavailable.');
       setApAgingPreviewLoading(false);
@@ -1354,7 +1343,10 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     setApAgingPreviewError('');
     setApAgingPreviewUrl('');
 
-    getDownloadURL(storageRef(storage, apAgingDoc.storagePath))
+    requestSignedUrl({
+      storagePath: apAgingDoc.storagePath,
+      downloadURL: apAgingDoc.downloadURL,
+    })
       .then((url) => {
         if (cancelled) return;
         setApAgingPreviewUrl(url);
@@ -1362,10 +1354,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       })
       .catch((error) => {
         if (cancelled) return;
-        const message =
-          error?.code === 'storage/object-not-found'
-            ? 'AP aging document is missing from storage.'
-            : 'Unable to load AP aging preview.';
+        const message = 'Unable to load AP aging preview.';
         setApAgingPreviewError(message);
       })
       .finally(() => {
@@ -1376,7 +1365,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     return () => {
       cancelled = true;
     };
-  }, [apAgingDoc]);
+  }, [apAgingDoc, requestSignedUrl]);
 
   const hasPendingGeneration = useMemo(() => {
     const docs = Array.isArray(caseData?.referenceDocuments) ? caseData.referenceDocuments : [];
@@ -1479,7 +1468,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       const referenceKey = getReferenceKey(doc);
       if (referenceKey && openedReferenceDocs.has(referenceKey)) return true;
       const view = tieOutDocViews[doc.id];
-      return Boolean(view?.url || doc.downloadURL);
+      return Boolean(view?.url);
     });
   }, [openedReferenceDocs, tieOutGateConfig, tieOutReferenceDocuments, tieOutDocViews]);
 
@@ -1491,7 +1480,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       const referenceKey = getReferenceKey(doc);
       if (referenceKey && openedReferenceDocs.has(referenceKey)) return true;
       const view = completenessDocViews[doc.id];
-      return Boolean(view?.url || doc.downloadURL);
+      return Boolean(view?.url);
     });
   }, [openedReferenceDocs, completenessGateConfig, completenessReferenceDocuments, completenessDocViews]);
 
@@ -1510,45 +1499,23 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     const initialViews = {};
     docs.forEach((doc) => {
       initialViews[doc.id] = {
-        url: doc.downloadURL || '',
-        loading: Boolean(!doc.downloadURL && doc.storagePath),
+        url: '',
+        loading: Boolean(doc.storagePath || doc.downloadURL),
         error: '',
       };
     });
     setTieOutDocViews(initialViews);
 
-    if (!storage?.app) {
-      setTieOutDocViews((prev) => {
-        const next = { ...prev };
-        docs.forEach((doc) => {
-          if (!next[doc.id]?.url) {
-            next[doc.id] = {
-              ...next[doc.id],
-              loading: false,
-              error: 'Preview unavailable in this environment.',
-            };
-          }
-        });
-        return next;
-      });
-      return () => {
-        cancelled = true;
-      };
-    }
-
     Promise.all(
       docs.map(async (doc) => {
-        if (doc.downloadURL || !doc.storagePath) {
-          return { id: doc.id, url: doc.downloadURL || '', error: '' };
+        if (!doc.storagePath && !doc.downloadURL) {
+          return { id: doc.id, url: '', error: 'Document not linked.' };
         }
         try {
-          const url = await getDownloadURL(storageRef(storage, doc.storagePath));
+          const url = await requestSignedUrl({ storagePath: doc.storagePath, downloadURL: doc.downloadURL });
           return { id: doc.id, url, error: '' };
         } catch (error) {
-          const message =
-            error?.code === 'storage/object-not-found'
-              ? 'Document is missing from storage.'
-              : 'Unable to load document preview.';
+          const message = 'Unable to load document preview.';
           return { id: doc.id, url: '', error: message };
         }
       })
@@ -1581,7 +1548,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     return () => {
       cancelled = true;
     };
-  }, [tieOutGateConfig, tieOutReferenceDocuments]);
+  }, [tieOutGateConfig, tieOutReferenceDocuments, requestSignedUrl]);
 
   useEffect(() => {
     if (!completenessGateConfig) {
@@ -1598,45 +1565,23 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     const initialViews = {};
     docs.forEach((doc) => {
       initialViews[doc.id] = {
-        url: doc.downloadURL || '',
-        loading: Boolean(!doc.downloadURL && doc.storagePath),
+        url: '',
+        loading: Boolean(doc.storagePath || doc.downloadURL),
         error: '',
       };
     });
     setCompletenessDocViews(initialViews);
 
-    if (!storage?.app) {
-      setCompletenessDocViews((prev) => {
-        const next = { ...prev };
-        docs.forEach((doc) => {
-          if (!next[doc.id]?.url) {
-            next[doc.id] = {
-              ...next[doc.id],
-              loading: false,
-              error: 'Preview unavailable in this environment.',
-            };
-          }
-        });
-        return next;
-      });
-      return () => {
-        cancelled = true;
-      };
-    }
-
     Promise.all(
       docs.map(async (doc) => {
-        if (doc.downloadURL || !doc.storagePath) {
-          return { id: doc.id, url: doc.downloadURL || '', error: '' };
+        if (!doc.storagePath && !doc.downloadURL) {
+          return { id: doc.id, url: '', error: 'Document not linked.' };
         }
         try {
-          const url = await getDownloadURL(storageRef(storage, doc.storagePath));
+          const url = await requestSignedUrl({ storagePath: doc.storagePath, downloadURL: doc.downloadURL });
           return { id: doc.id, url, error: '' };
         } catch (error) {
-          const message =
-            error?.code === 'storage/object-not-found'
-              ? 'Document is missing from storage.'
-              : 'Unable to load document preview.';
+          const message = 'Unable to load document preview.';
           return { id: doc.id, url: '', error: message };
         }
       })
@@ -1669,7 +1614,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     return () => {
       cancelled = true;
     };
-  }, [completenessGateConfig, completenessReferenceDocuments]);
+  }, [completenessGateConfig, completenessReferenceDocuments, requestSignedUrl]);
 
   const classifiedCount = useMemo(() => {
     return selectedDisbursementDetails.filter((disbursement) =>
@@ -1771,7 +1716,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       setActiveEvidenceId(evidenceSource[0].evidenceId);
       setActivePaymentId(evidenceSource[0].paymentId || null);
     }
-  }, [viewerEnabled, evidenceSource, activeEvidenceId]);
+  }, [viewerEnabled, evidenceSource, activeEvidenceId, requestSignedUrl]);
 
   useEffect(() => {
     if (!activeEvidenceId || evidenceSource.length === 0) return;
@@ -1804,32 +1749,8 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       target.evidenceFileName || target.storagePath || target.downloadURL
     );
 
-    if (target.downloadURL) {
-      if (inlinePreviewAllowed) {
-        setActiveEvidenceUrl(target.downloadURL);
-        setActiveEvidenceError('');
-        setActiveEvidenceLoading(false);
-        lastResolvedEvidenceRef.current = {
-          evidenceId: target.evidenceId,
-          storagePath: target.storagePath || null,
-          url: target.downloadURL,
-          inlineNotSupported: false,
-        };
-      } else {
-        setActiveEvidenceUrl(null);
-        setActiveEvidenceError('Preview not available for this file type. Use "Open in new tab" to download.');
-        setActiveEvidenceLoading(false);
-        lastResolvedEvidenceRef.current = {
-          evidenceId: target.evidenceId,
-          storagePath: target.storagePath || null,
-          url: null,
-          inlineNotSupported: true,
-        };
-      }
-      return;
-    }
-
-    if (!target.storagePath) {
+    const sourceKey = target.storagePath || target.downloadURL || null;
+    if (!sourceKey) {
       setActiveEvidenceUrl(null);
       setActiveEvidenceError('Document not linked for this disbursement.');
       setActiveEvidenceLoading(false);
@@ -1841,22 +1762,10 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       return;
     }
 
-    if (!storage?.app) {
-      setActiveEvidenceUrl(null);
-      setActiveEvidenceError('Document preview unavailable in this environment.');
-      setActiveEvidenceLoading(false);
-      lastResolvedEvidenceRef.current = {
-        evidenceId: target.evidenceId,
-        storagePath: target.storagePath,
-        url: null,
-      };
-      return;
-    }
-
     const lastResolved = lastResolvedEvidenceRef.current;
     if (
       lastResolved.evidenceId === target.evidenceId &&
-      lastResolved.storagePath === target.storagePath &&
+      lastResolved.storagePath === sourceKey &&
       (lastResolved.url || lastResolved.inlineNotSupported)
     ) {
       if (lastResolved.inlineNotSupported) {
@@ -1876,7 +1785,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     setActiveEvidenceUrl(null);
     lastResolvedEvidenceRef.current = {
       evidenceId: target.evidenceId,
-      storagePath: target.storagePath,
+      storagePath: sourceKey,
       url: null,
       inlineNotSupported: false,
     };
@@ -1896,14 +1805,14 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       };
     }
 
-    getDownloadURL(storageRef(storage, target.storagePath))
+    requestSignedUrl({ storagePath: target.storagePath, downloadURL: target.downloadURL })
       .then((url) => {
         if (cancelled) return;
         setActiveEvidenceUrl(url);
         setActiveEvidenceError('');
         lastResolvedEvidenceRef.current = {
           evidenceId: target.evidenceId,
-          storagePath: target.storagePath,
+          storagePath: sourceKey,
           url,
           inlineNotSupported: false,
         };
@@ -1911,15 +1820,12 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       .catch((error) => {
         if (cancelled) return;
         console.error('Error loading evidence document:', error);
-        const message =
-          error?.code === 'storage/object-not-found'
-            ? 'Document is missing from storage.'
-            : 'Unable to load document preview.';
+        const message = 'Unable to load document preview.';
         setActiveEvidenceUrl(null);
         setActiveEvidenceError(message);
         lastResolvedEvidenceRef.current = {
           evidenceId: target.evidenceId,
-          storagePath: target.storagePath,
+          storagePath: sourceKey,
           url: null,
           inlineNotSupported: false,
         };
@@ -1988,7 +1894,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
 
         const patch = {
           percentComplete,
-          state: deriveStateFromProgress(step, percentComplete),
+          state: deriveProgressState({ step, percentComplete }),
           step,
           draft: {
             selectedPaymentIds: selectedPaymentIds,
@@ -2461,7 +2367,6 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
         paymentId: disbursement.paymentId,
         fileName: doc.fileName,
         storagePath: doc.storagePath,
-        downloadURL: doc.downloadURL,
       }))
     );
     const attemptSummary = computeDisbursementAttemptSummary({
@@ -2568,34 +2473,25 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       return;
     }
 
-    if (docInfo.downloadURL) {
-      window.open(docInfo.downloadURL, '_blank');
-      return;
-    }
-
-    if (docInfo.storagePath) {
+    showModal(
+      `Preparing secure access for: ${docInfo.fileName || 'Document'}\n\nPlease wait...`,
+      'Fetching Document',
+      () => null
+    );
+    try {
+      const url = await requestSignedUrl({
+        storagePath: docInfo.storagePath,
+        downloadURL: docInfo.downloadURL,
+      });
+      hideModal();
+      window.open(url, '_blank');
+    } catch (error) {
+      console.error('Error getting signed URL:', error);
+      hideModal();
       showModal(
-        `Attempting to get download URL for: ${docInfo.fileName}\nPath: ${docInfo.storagePath}\n\nPlease wait...`,
-        'Fetching Document',
-        () => null
+        `Could not retrieve document: ${docInfo.fileName || 'Document'}.\n\nPlease ensure the admin has uploaded the file and that permissions are correctly configured.`,
+        'Error Viewing Document'
       );
-      try {
-        const fileRef = storageRef(storage, docInfo.storagePath);
-        const url = await getDownloadURL(fileRef);
-        hideModal();
-        window.open(url, '_blank');
-      } catch (error) {
-        console.error('Error getting download URL:', error);
-        hideModal();
-        let errorMessage = `Could not retrieve document: ${docInfo.fileName}.\nError: ${error.code}\n\n`;
-        errorMessage +=
-          "This usually means the file was not actually uploaded to Firebase Storage at the expected path by an administrator, or you don't have permission to access it.\n\n";
-        errorMessage += `Expected path: ${docInfo.storagePath}\n\n`;
-        errorMessage += 'Please ensure the admin has uploaded the file and that Firebase Storage rules are correctly configured.';
-        showModal(errorMessage, 'Error Viewing Document');
-      }
-    } else {
-      showModal('No valid way to access the document.', 'Error');
     }
   };
 
@@ -2846,23 +2742,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     }
     try {
       setDownloadingReferenceId(doc.id);
-      let url = '';
-      const fallbackUrl = (doc.downloadURL || '').trim();
-      if (doc.storagePath) {
-        try {
-          url = await getDownloadURL(storageRef(storage, doc.storagePath));
-        } catch (err) {
-          if (fallbackUrl) {
-            url = fallbackUrl;
-          } else {
-            throw err;
-          }
-        }
-      } else if (fallbackUrl) {
-        url = fallbackUrl;
-      } else {
-        throw new Error('Reference document is missing a download link.');
-      }
+      const url = await requestSignedUrl({ storagePath: doc.storagePath, downloadURL: doc.downloadURL });
       const isPdf = isInlinePreviewable(doc.contentType, doc.fileName || url);
       if (isPdf) {
         window.open(url, '_blank', 'noopener');
@@ -3083,7 +2963,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
           <div className="grid gap-4 xl:grid-cols-2">
             {tieOutDocs.map((doc) => {
               const view = tieOutDocViews[doc.id] || {};
-              const previewUrl = view.url || doc.downloadURL || '';
+              const previewUrl = view.url || '';
               const previewError = view.error || '';
               const previewLoading = view.loading || false;
               const hasLink = Boolean(doc.storagePath || doc.downloadURL);
@@ -3287,7 +3167,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
           <div className="grid gap-4 xl:grid-cols-2">
             {completenessDocs.map((doc) => {
               const view = completenessDocViews[doc.id] || {};
-              const previewUrl = view.url || doc.downloadURL || '';
+              const previewUrl = view.url || '';
               const previewError = view.error || '';
               const previewLoading = view.loading || false;
               const hasLink = Boolean(doc.storagePath || doc.downloadURL);
@@ -3888,6 +3768,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
           </div>
           
           <ResultsAnalysis 
+            caseId={caseId}
             disbursements={resultsDisbursements} 
             studentAnswers={classificationAmounts} 
             gateResults={{

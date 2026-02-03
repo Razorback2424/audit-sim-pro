@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getDownloadURL, ref as storageRef } from 'firebase/storage';
 import { Button, useAuth, useRoute, useModal, appId, storage } from '../AppCore';
 import { fetchCase, createCase, markCaseDeleted, fetchCasesPage } from '../services/caseService';
 import { fetchUserRosterOptions, getCurrentUserOrgId } from '../services/userService';
@@ -1062,29 +1061,12 @@ function useCaseForm({ params }) {
     const generated = docs.filter(
       (doc) => doc && doc.generationSpec && typeof doc.generationSpec === 'object'
     );
-    const ready = generated.filter((doc) => doc.downloadURL || doc.storagePath).length;
+    const ready = generated.filter((doc) => doc.storagePath).length;
     return {
       total: generated.length,
       ready,
       pending: Math.max(0, generated.length - ready),
     };
-  }, []);
-
-  const resolveReferenceDownloadUrls = useCallback(async (docs) => {
-    if (!Array.isArray(docs) || docs.length === 0) return docs;
-    const resolved = await Promise.all(
-      docs.map(async (doc) => {
-        if (!doc || doc.downloadURL || !doc.storagePath) return doc;
-        try {
-          const url = await getDownloadURL(storageRef(storage, doc.storagePath));
-          return { ...doc, downloadURL: url };
-        } catch (err) {
-          console.warn('[case-form] Failed to resolve download URL', err);
-          return doc;
-        }
-      })
-    );
-    return resolved;
   }, []);
 
   const toSafeDate = useCallback((value) => {
@@ -1113,8 +1095,7 @@ function useCaseForm({ params }) {
         const updated = await fetchCase(caseIdForJob).catch(() => null);
         if (updated?.referenceDocuments) {
           const normalized = normalizeReferenceDocumentsForForm(updated.referenceDocuments);
-          const resolved = await resolveReferenceDownloadUrls(normalized);
-          setReferenceDocuments(resolved);
+          setReferenceDocuments(normalized);
           const counts = computeGenerationCounts(updated.referenceDocuments);
           if (counts.pending === 0) {
             // continue to refresh job status before breaking

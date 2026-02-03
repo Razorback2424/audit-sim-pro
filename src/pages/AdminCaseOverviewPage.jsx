@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { ref as storageRef, getDownloadURL } from 'firebase/storage';
-import { storage, Button, useRoute, useModal } from '../AppCore';
-import { fetchCase, markCaseDeleted } from '../services/caseService';
+import { Button, useRoute, useModal } from '../AppCore';
+import { fetchCase, markCaseDeleted, getCaseMappingHealth } from '../services/caseService';
 import { getAuditAreaLabel, getCaseGroupLabel } from '../models/caseConstants';
+import { getSignedDocumentUrl } from '../services/documentService';
 
 export default function AdminCaseOverviewPage({ params }) {
   const { caseId } = params;
@@ -31,16 +31,16 @@ export default function AdminCaseOverviewPage({ params }) {
   }, [caseId, navigate, showModal]);
 
   const handleView = async (mapping) => {
-    if (mapping.downloadURL) {
-      window.open(mapping.downloadURL, '_blank');
-      return;
-    }
-    if (!mapping.storagePath) {
+    if (!mapping?.storagePath && !mapping?.downloadURL) {
       showModal('No file path available.', 'Error');
       return;
     }
     try {
-      const url = await getDownloadURL(storageRef(storage, mapping.storagePath));
+      const url = await getSignedDocumentUrl({
+        caseId,
+        storagePath: mapping.storagePath,
+        downloadURL: mapping.downloadURL,
+      });
       window.open(url, '_blank');
     } catch (err) {
       console.error('Error getting URL:', err);
@@ -81,6 +81,7 @@ export default function AdminCaseOverviewPage({ params }) {
   const caseTitle = caseData.title || caseData.caseName || 'Audit Case';
   const auditAreaLabel = getAuditAreaLabel(caseData.auditArea);
   const caseGroupLabel = getCaseGroupLabel(caseData.caseGroupId);
+  const mappingHealth = getCaseMappingHealth(caseData);
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
@@ -106,6 +107,19 @@ export default function AdminCaseOverviewPage({ params }) {
             <div><strong>Due At:</strong> {formatTimestamp(caseData.dueAt)}</div>
             <div><strong>Audit Area:</strong> {auditAreaLabel}</div>
             <div><strong>Case Group:</strong> {caseGroupLabel}</div>
+          </div>
+          <div className="border rounded-md p-4 text-sm text-gray-700 bg-gray-50">
+            <div className="font-semibold text-gray-800">Mapping Health</div>
+            {mappingHealth.totalDisbursements === 0 ? (
+              <div className="mt-1 text-gray-500">No disbursements recorded.</div>
+            ) : (
+              <div className="mt-1 grid grid-cols-1 md:grid-cols-4 gap-2">
+                <div><strong>Total:</strong> {mappingHealth.totalDisbursements}</div>
+                <div><strong>Mapped:</strong> {mappingHealth.mappedDisbursements}</div>
+                <div><strong>Unmapped:</strong> {mappingHealth.unmappedDisbursements}</div>
+                <div><strong>Mapped %:</strong> {mappingHealth.mappedPercent}%</div>
+              </div>
+            )}
           </div>
           <h2 className="text-xl font-semibold text-gray-700 mt-4 mb-2">Disbursements</h2>
           {caseData.disbursements && caseData.disbursements.length > 0 ? (

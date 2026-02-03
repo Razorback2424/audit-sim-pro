@@ -21,12 +21,10 @@ const sanitizeHighlightedDocumentForSave = (doc) => {
   if (!doc || typeof doc !== 'object') return undefined;
   const fileName = (doc.fileName || '').trim();
   const storagePath = (doc.storagePath || '').trim();
-  const downloadURL = (doc.downloadURL || '').trim();
-  if (!fileName && !storagePath && !downloadURL) return undefined;
+  if (!fileName && !storagePath) return undefined;
   const payload = {};
   if (fileName) payload.fileName = fileName;
   if (storagePath) payload.storagePath = storagePath;
-  if (downloadURL) payload.downloadURL = downloadURL;
   if (doc.contentType) payload.contentType = doc.contentType;
   return payload;
 };

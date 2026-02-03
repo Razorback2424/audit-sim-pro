@@ -13,6 +13,8 @@ const Stripe = require('stripe');
 // For local testing, you might need: admin.initializeApp({ credential: admin.credential.applicationDefault() });
 admin.initializeApp();
 
+const callable = functions.runWith({ enforceAppCheck: true });
+
 const stripeSecretKey = process.env.STRIPE_SECRET_KEY || '';
 const stripe = stripeSecretKey ? Stripe(stripeSecretKey) : null;
 const STRIPE_PRICE_INDIVIDUAL = process.env.STRIPE_PRICE_INDIVIDUAL || '';
@@ -80,12 +82,16 @@ const resolveStripePrice = (plan) => {
   return '';
 };
 
-const buildBillingPath = (appIdValue, uid) => `artifacts/${appIdValue}/users/${uid}/billing`;
-const buildStripeEventPath = (appIdValue, eventId) =>
-  `artifacts/${appIdValue}/billing/stripe_events/${eventId}`;
-const buildStripeCustomerPath = (appIdValue, customerId) =>
+const buildBillingPath = (appIdValue, uid) => `artifacts/${appIdValue}/users/${uid}/billing/status`;
+const STRIPE_GLOBAL_BILLING_ROOT = 'artifacts/global/billing';
+const buildStripeEventPath = (eventId) => `${STRIPE_GLOBAL_BILLING_ROOT}/stripe_events/${eventId}`;
+const buildStripeCustomerGlobalPath = (customerId) =>
+  `${STRIPE_GLOBAL_BILLING_ROOT}/stripe_customers/${customerId}`;
+const buildStripePaymentIntentGlobalPath = (paymentIntentId) =>
+  `${STRIPE_GLOBAL_BILLING_ROOT}/stripe_payment_intents/${paymentIntentId}`;
+const buildStripeCustomerScopedPath = (appIdValue, customerId) =>
   `artifacts/${appIdValue}/billing/stripe_customers/${customerId}`;
-const buildStripePaymentIntentPath = (appIdValue, paymentIntentId) =>
+const buildStripePaymentIntentScopedPath = (appIdValue, paymentIntentId) =>
   `artifacts/${appIdValue}/billing/stripe_payment_intents/${paymentIntentId}`;
 const buildAnalyticsEventsCollection = (appIdValue) =>
   `artifacts/${appIdValue}/private/data/analytics_events`;
@@ -93,13 +99,30 @@ const buildAnalyticsEventsCollection = (appIdValue) =>
 const normalizeEventType = (value) =>
   typeof value === 'string' ? value.trim().toLowerCase() : '';
 
-const recordStripeEvent = async ({ firestore, appIdValue, event }) => {
-  if (!event?.id) return { alreadyProcessed: false };
-  const eventRef = firestore.doc(buildStripeEventPath(appIdValue, event.id));
+const recordStripeEvent = async ({ firestore, event }) => {
+  if (!event?.id) return { alreadyProcessed: false, eventRef: null };
+  const eventRef = firestore.doc(buildStripeEventPath(event.id));
   return firestore.runTransaction(async (txn) => {
     const snap = await txn.get(eventRef);
     if (snap.exists) {
-      return { alreadyProcessed: true };
+      const data = snap.data() || {};
+      if (data.state === 'processed') {
+        return { alreadyProcessed: true, eventRef };
+      }
+      const attemptCount = Number.isFinite(Number(data.attemptCount))
+        ? Number(data.attemptCount) + 1
+        : 1;
+      txn.set(
+        eventRef,
+        {
+          state: 'processing',
+          attemptCount,
+          startedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      return { alreadyProcessed: false, eventRef };
     }
     txn.set(
       eventRef,
@@ -107,36 +130,72 @@ const recordStripeEvent = async ({ firestore, appIdValue, event }) => {
         eventId: event.id,
         type: event.type || null,
         livemode: event.livemode === true,
+        state: 'processing',
+        attemptCount: 1,
+        startedAt: admin.firestore.FieldValue.serverTimestamp(),
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       },
       { merge: true }
     );
-    return { alreadyProcessed: false };
+    return { alreadyProcessed: false, eventRef };
   });
 };
 
 const resolveBillingIdentityFromStripe = async ({ firestore, appIdValue, customerId, paymentIntentId }) => {
   if (paymentIntentId) {
-    const intentRef = firestore.doc(buildStripePaymentIntentPath(appIdValue, paymentIntentId));
-    const intentSnap = await intentRef.get();
-    if (intentSnap.exists) {
-      const data = intentSnap.data() || {};
-      if (data.uid) {
-        return { uid: data.uid, appIdValue: data.appId || appIdValue };
+    const globalIntentRef = firestore.doc(buildStripePaymentIntentGlobalPath(paymentIntentId));
+    const globalIntentSnap = await globalIntentRef.get();
+    if (globalIntentSnap.exists) {
+      const data = globalIntentSnap.data() || {};
+      if (data.uid && data.appId) {
+        return { uid: data.uid, appIdValue: data.appId };
+      }
+    }
+    if (appIdValue) {
+      const intentRef = firestore.doc(buildStripePaymentIntentScopedPath(appIdValue, paymentIntentId));
+      const intentSnap = await intentRef.get();
+      if (intentSnap.exists) {
+        const data = intentSnap.data() || {};
+        if (data.uid) {
+          return { uid: data.uid, appIdValue: data.appId || appIdValue };
+        }
       }
     }
   }
   if (customerId) {
-    const customerRef = firestore.doc(buildStripeCustomerPath(appIdValue, customerId));
-    const customerSnap = await customerRef.get();
-    if (customerSnap.exists) {
-      const data = customerSnap.data() || {};
-      if (data.uid) {
-        return { uid: data.uid, appIdValue: data.appId || appIdValue };
+    const globalCustomerRef = firestore.doc(buildStripeCustomerGlobalPath(customerId));
+    const globalCustomerSnap = await globalCustomerRef.get();
+    if (globalCustomerSnap.exists) {
+      const data = globalCustomerSnap.data() || {};
+      if (data.uid && data.appId) {
+        return { uid: data.uid, appIdValue: data.appId };
+      }
+    }
+    if (appIdValue) {
+      const customerRef = firestore.doc(buildStripeCustomerScopedPath(appIdValue, customerId));
+      const customerSnap = await customerRef.get();
+      if (customerSnap.exists) {
+        const data = customerSnap.data() || {};
+        if (data.uid) {
+          return { uid: data.uid, appIdValue: data.appId || appIdValue };
+        }
       }
     }
   }
   return { uid: null, appIdValue };
+};
+
+const commitBatches = async ({ firestore, updates }) => {
+  const batchSize = 450;
+  for (let i = 0; i < updates.length; i += batchSize) {
+    const batch = firestore.batch();
+    updates.slice(i, i + batchSize).forEach(({ ref, data }) => {
+      batch.set(ref, data, { merge: true });
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await batch.commit();
+  }
 };
 
 const isRecord = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -856,6 +915,7 @@ const collectCaseStoragePaths = (caseData, bucketName) => {
   };
 
   addDocuments(caseData?.referenceDocuments);
+  addDocuments(caseData?.cashArtifacts);
   addDocuments(caseData?.invoiceMappings);
   addItems(caseData?.auditItems);
   addItems(caseData?.disbursements);
@@ -1183,7 +1243,157 @@ const hasPaidAccessServer = async ({ firestore, appId, uid }) => {
   return status === 'paid' || status === 'active';
 };
 
-exports.listRosterOptions = functions.https.onCall(async (data, context) => {
+const DEFAULT_STUDENT_STATUSES = ['assigned', 'in_progress', 'submitted', 'draft'];
+const VALID_STUDENT_STATUSES = new Set(['assigned', 'in_progress', 'submitted', 'draft', 'archived']);
+
+const normalizeStudentStatusFilter = (value) => {
+  if (!Array.isArray(value)) return DEFAULT_STUDENT_STATUSES;
+  const normalized = value
+    .map((entry) => (typeof entry === 'string' ? entry.trim().toLowerCase() : ''))
+    .filter((entry) => VALID_STUDENT_STATUSES.has(entry));
+  return normalized.length > 0 ? normalized : DEFAULT_STUDENT_STATUSES;
+};
+
+const normalizeStudentSort = (value) => {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return normalized === 'title' ? 'title' : 'due';
+};
+
+const normalizeCursorTimestamp = (value) => {
+  if (!value) return null;
+  if (value instanceof admin.firestore.Timestamp) return value;
+  if (typeof value?.toDate === 'function') {
+    return admin.firestore.Timestamp.fromDate(value.toDate());
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return admin.firestore.Timestamp.fromMillis(value);
+  }
+  if (typeof value === 'string') {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return admin.firestore.Timestamp.fromDate(parsed);
+    }
+  }
+  if (typeof value === 'object') {
+    const seconds =
+      typeof value.seconds === 'number'
+        ? value.seconds
+        : typeof value._seconds === 'number'
+        ? value._seconds
+        : null;
+    if (typeof seconds === 'number') {
+      const nanoseconds =
+        typeof value.nanoseconds === 'number'
+          ? value.nanoseconds
+          : typeof value._nanoseconds === 'number'
+          ? value._nanoseconds
+          : 0;
+      return new admin.firestore.Timestamp(seconds, nanoseconds);
+    }
+  }
+  return null;
+};
+
+const toCursorTimestamp = (value) => {
+  if (!value) return null;
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  const safeDate = toSafeDate(value);
+  return safeDate ? safeDate.getTime() : null;
+};
+
+exports.listStudentCases = callable.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
+  }
+
+  const appId = data?.appId;
+  if (!appId || typeof appId !== 'string') {
+    throw new functions.https.HttpsError('invalid-argument', 'appId is required.');
+  }
+
+  const firestore = admin.firestore();
+  const { resolvedRole } = await resolveRequesterIdentity({
+    context,
+    appId,
+    firestore,
+    logLabel: 'listStudentCases',
+  });
+
+  if (resolvedRole !== 'admin' && resolvedRole !== 'owner' && resolvedRole !== 'instructor' && resolvedRole !== 'trainee') {
+    throw new functions.https.HttpsError('permission-denied', 'Insufficient permissions.');
+  }
+
+  const pageSizeRaw = Number(data?.pageSize);
+  const pageSize = Number.isFinite(pageSizeRaw)
+    ? Math.max(1, Math.min(100, Math.floor(pageSizeRaw)))
+    : 20;
+  const includeOpensAtGate = data?.includeOpensAtGate === true;
+  const statusFilter = normalizeStudentStatusFilter(data?.statusFilter);
+  const sortBy = normalizeStudentSort(data?.sortBy);
+  const cursor = data?.cursor && typeof data.cursor === 'object' ? data.cursor : null;
+
+  const uid = context.auth.uid;
+  const isPaid = resolvedRole === 'trainee' ? await hasPaidAccessServer({ firestore, appId, uid }) : true;
+
+  const casesCollection = firestore.collection(`artifacts/${appId}/public/data/cases`);
+  const baseVisibilityFilter = admin.firestore.Filter.or(
+    admin.firestore.Filter.where('publicVisible', '==', true),
+    admin.firestore.Filter.where('visibleToUserIds', 'array-contains', uid)
+  );
+  const filters = [admin.firestore.Filter.where('_deleted', '==', false), baseVisibilityFilter];
+
+  if (statusFilter && statusFilter.length > 0) {
+    filters.push(admin.firestore.Filter.where('status', 'in', statusFilter));
+  }
+
+  if (includeOpensAtGate) {
+    filters.push(admin.firestore.Filter.where('opensAt', '<=', admin.firestore.Timestamp.now()));
+  }
+
+  if (!isPaid) {
+    filters.push(admin.firestore.Filter.where('accessLevel', '==', 'demo'));
+    filters.push(admin.firestore.Filter.where('publicVisible', '==', true));
+  }
+
+  let query = casesCollection.where(admin.firestore.Filter.and(...filters));
+
+  if (sortBy === 'title') {
+    query = query.orderBy('title', 'asc').orderBy('dueAt', 'asc');
+  } else {
+    query = query.orderBy('dueAt', 'asc').orderBy('title', 'asc');
+  }
+
+  if (cursor) {
+    const cursorTitle = toTrimmedString(cursor?.title || '');
+    const cursorDueAt = normalizeCursorTimestamp(cursor?.dueAt);
+    if (sortBy === 'title') {
+      query = query.startAfter(cursorTitle, cursorDueAt ?? null);
+    } else {
+      query = query.startAfter(cursorDueAt ?? null, cursorTitle);
+    }
+  }
+
+  if (pageSize) {
+    query = query.limit(pageSize);
+  }
+
+  const snap = await query.get();
+  const items = snap.docs.map((docSnap) => ({ id: docSnap.id, data: docSnap.data() || {} }));
+  const lastDoc = snap.docs[snap.docs.length - 1];
+
+  let nextCursor = null;
+  if (lastDoc) {
+    const data = lastDoc.data() || {};
+    nextCursor = {
+      dueAt: toCursorTimestamp(data.dueAt ?? null),
+      title: toTrimmedString(data.title || data.caseName || ''),
+    };
+  }
+
+  return { items, nextCursor };
+});
+
+exports.listRosterOptions = callable.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
   }
@@ -1259,7 +1469,113 @@ exports.listRosterOptions = functions.https.onCall(async (data, context) => {
   return { roster };
 });
 
-exports.auditOrphanedInvoices = functions.https.onCall(async (data, context) => {
+exports.getSignedDocumentUrl = callable.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
+  }
+
+  const appId = data?.appId;
+  const caseId = data?.caseId;
+  const rawStoragePath = typeof data?.storagePath === 'string' ? data.storagePath.trim() : '';
+  const rawDownloadUrl = typeof data?.downloadURL === 'string' ? data.downloadURL.trim() : '';
+
+  if (!appId || typeof appId !== 'string') {
+    throw new functions.https.HttpsError('invalid-argument', 'appId is required.');
+  }
+  if (!caseId || typeof caseId !== 'string') {
+    throw new functions.https.HttpsError('invalid-argument', 'caseId is required.');
+  }
+  if (!rawStoragePath && !rawDownloadUrl) {
+    throw new functions.https.HttpsError('invalid-argument', 'storagePath or downloadURL is required.');
+  }
+
+  const firestore = admin.firestore();
+  const { resolvedRole, requesterOrgId } = await resolveRequesterIdentity({
+    context,
+    appId,
+    firestore,
+    logLabel: 'getSignedDocumentUrl',
+  });
+
+  if (resolvedRole !== 'admin' && resolvedRole !== 'owner' && resolvedRole !== 'instructor' && resolvedRole !== 'trainee') {
+    throw new functions.https.HttpsError('permission-denied', 'Insufficient permissions.');
+  }
+
+  if (resolvedRole === 'instructor' && !requesterOrgId) {
+    throw new functions.https.HttpsError('failed-precondition', 'Instructor has no Org ID.');
+  }
+
+  const bucket = admin.storage().bucket();
+  const normalizedPath = normalizeStoragePath(rawStoragePath || rawDownloadUrl, bucket.name);
+  if (!normalizedPath) {
+    throw new functions.https.HttpsError('invalid-argument', 'Unable to resolve storage path.');
+  }
+
+  if (caseId === 'debug') {
+    if (resolvedRole !== 'admin' && resolvedRole !== 'owner') {
+      throw new functions.https.HttpsError('permission-denied', 'Insufficient permissions for debug documents.');
+    }
+    const expectedPrefix = `artifacts/${appId}/debug/reference/`;
+    if (!normalizedPath.startsWith(expectedPrefix)) {
+      throw new functions.https.HttpsError('permission-denied', 'Document not within debug scope.');
+    }
+    const expiresAtMs = Date.now() + 10 * 60 * 1000;
+    const [url] = await bucket.file(normalizedPath).getSignedUrl({
+      action: 'read',
+      expires: expiresAtMs,
+    });
+    return { url, expiresAt: expiresAtMs };
+  }
+
+  const resolved = await resolveCaseAppId(firestore, appId, caseId);
+  if (!resolved) {
+    throw new functions.https.HttpsError('not-found', 'Case not found for provided appId.');
+  }
+  const { appId: resolvedAppId, caseData, caseMissing } = resolved;
+
+  if (caseMissing || !caseData) {
+    throw new functions.https.HttpsError('not-found', 'Case not found.');
+  }
+
+  if (resolvedRole === 'instructor') {
+    if (!caseData?.orgId || caseData.orgId !== requesterOrgId) {
+      throw new functions.https.HttpsError('permission-denied', 'Case is outside instructor org.');
+    }
+  }
+
+  if (resolvedRole === 'trainee') {
+    const uid = context.auth.uid;
+    const isPaid = await hasPaidAccessServer({ firestore, appId: resolvedAppId, uid });
+    const visibleToUserIds = Array.isArray(caseData?.visibleToUserIds) ? caseData.visibleToUserIds : [];
+    const isPublicVisible = caseData?.publicVisible === true;
+    const accessLevel = typeof caseData?.accessLevel === 'string' ? caseData.accessLevel.trim().toLowerCase() : 'paid';
+
+    if (isPaid) {
+      if (!isPublicVisible && !visibleToUserIds.includes(uid)) {
+        throw new functions.https.HttpsError('permission-denied', 'Case is not assigned to trainee.');
+      }
+    } else {
+      if (!(isPublicVisible && accessLevel === 'demo')) {
+        throw new functions.https.HttpsError('permission-denied', 'Case is not available for demo access.');
+      }
+    }
+  }
+
+  const allowedPaths = collectCaseStoragePaths(caseData, bucket.name);
+  if (!allowedPaths.includes(normalizedPath)) {
+    throw new functions.https.HttpsError('permission-denied', 'Document not associated with case.');
+  }
+
+  const expiresAtMs = Date.now() + 10 * 60 * 1000;
+  const [url] = await bucket.file(normalizedPath).getSignedUrl({
+    action: 'read',
+    expires: expiresAtMs,
+  });
+
+  return { url, expiresAt: expiresAtMs };
+});
+
+exports.auditOrphanedInvoices = callable.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
   }
@@ -1383,7 +1699,7 @@ const resolveCaseAppId = async (firestore, appId, caseId) => {
   return appId ? { appId, caseData: null, caseMissing: true } : null;
 };
 
-exports.queueCaseDocGeneration = functions.https.onCall(async (data, context) => {
+exports.queueCaseDocGeneration = callable.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
   }
@@ -1521,7 +1837,7 @@ exports.queueCaseDocGeneration = functions.https.onCall(async (data, context) =>
   return { jobId: jobRef.id, status: payload.status };
 });
 
-exports.startCaseAttempt = functions.https.onCall(async (data, context) => {
+exports.startCaseAttempt = callable.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
   }
@@ -1553,11 +1869,10 @@ exports.startCaseAttempt = functions.https.onCall(async (data, context) => {
   }
 
   const uid = context.auth.uid;
+  let allowDemoOnly = false;
   if (resolvedRole === 'trainee') {
     const isPaid = await hasPaidAccessServer({ firestore, appId, uid });
-    if (!isPaid) {
-      throw new functions.https.HttpsError('permission-denied', 'Upgrade required.');
-    }
+    allowDemoOnly = !isPaid;
   }
 
   const casesSnap = await firestore
@@ -1579,6 +1894,11 @@ exports.startCaseAttempt = functions.https.onCall(async (data, context) => {
   const visibleCases = rawCases.filter(({ data: caseData }) => {
     const status = typeof caseData?.status === 'string' ? caseData.status.toLowerCase() : 'assigned';
     if (!allowedStatuses.has(status)) return false;
+    if (allowDemoOnly) {
+      const accessLevel =
+        typeof caseData?.accessLevel === 'string' ? caseData.accessLevel.trim().toLowerCase() : 'paid';
+      return caseData?.publicVisible === true && accessLevel === 'demo';
+    }
     if (caseData?.publicVisible === true) return true;
     const visibleToUserIds = Array.isArray(caseData?.visibleToUserIds) ? caseData.visibleToUserIds : [];
     return visibleToUserIds.includes(uid);
@@ -1694,7 +2014,7 @@ exports.startCaseAttempt = functions.https.onCall(async (data, context) => {
   };
 });
 
-exports.seedCasePool = functions.https.onCall(async (data, context) => {
+exports.seedCasePool = callable.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
   }
@@ -1784,8 +2104,137 @@ exports.seedCasePool = functions.https.onCall(async (data, context) => {
   };
 });
 
+exports.setDemoCase = callable.https.onCall(async (data, context) => {
+  try {
+    if (!context.auth) {
+      throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
+    }
+
+    const appId = data?.appId;
+    const caseId = data?.caseId;
+    const backfillPaid = data?.backfillPaid !== false;
+    const queueDocuments = data?.queueDocuments !== false;
+
+    if (!appId || typeof appId !== 'string') {
+      throw new functions.https.HttpsError('invalid-argument', 'appId is required.');
+    }
+    if (!caseId || typeof caseId !== 'string') {
+      throw new functions.https.HttpsError('invalid-argument', 'caseId is required.');
+    }
+
+    const firestore = admin.firestore();
+    const { resolvedRole } = await resolveRequesterIdentity({
+      context,
+      appId,
+      firestore,
+      logLabel: 'setDemoCase',
+    });
+
+    if (resolvedRole !== 'admin' && resolvedRole !== 'owner') {
+      throw new functions.https.HttpsError('permission-denied', 'Admin access required.');
+    }
+
+    const caseRef = firestore.doc(`artifacts/${appId}/public/data/cases/${caseId}`);
+    const caseSnap = await caseRef.get();
+    if (!caseSnap.exists) {
+      throw new functions.https.HttpsError('not-found', 'Case not found.');
+    }
+    const caseData = caseSnap.data() || {};
+    if (caseData._deleted === true) {
+      throw new functions.https.HttpsError('failed-precondition', 'Cannot set a deleted case as demo.');
+    }
+
+    const demoPatch = {
+      accessLevel: 'demo',
+      publicVisible: true,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    await caseRef.set(demoPatch, { merge: true });
+
+    let updatedCount = 1;
+    if (backfillPaid) {
+      const casesSnap = await firestore
+        .collection(`artifacts/${appId}/public/data/cases`)
+        .where('_deleted', '==', false)
+        .get();
+      const updates = [];
+      casesSnap.forEach((docSnap) => {
+        if (docSnap.id === caseId) return;
+        const data = docSnap.data() || {};
+        const rawAccess = typeof data.accessLevel === 'string' ? data.accessLevel.trim().toLowerCase() : '';
+        const hasAccessLevel = typeof data.accessLevel === 'string' && data.accessLevel.trim().length > 0;
+        if (!hasAccessLevel || rawAccess !== 'paid') {
+          updates.push({
+            ref: docSnap.ref,
+            data: {
+              accessLevel: 'paid',
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
+          });
+        }
+      });
+      if (updates.length > 0) {
+        await commitBatches({ firestore, updates });
+        updatedCount += updates.length;
+      }
+    }
+
+    const configRef = firestore.doc(`artifacts/${appId}/public/config/demo/config`);
+    await configRef.set(
+      {
+        caseId,
+        caseName: caseData.caseName || caseData.title || null,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    let generationJobId = null;
+    let generationStatus = null;
+    if (queueDocuments) {
+      const needsGeneration = !isCaseReady(caseData);
+      if (needsGeneration) {
+        const planSnap = await firestore
+          .doc(`artifacts/${appId}/private/data/case_generation_plans/${caseId}`)
+          .get();
+        const plan = planSnap.exists ? planSnap.data()?.plan : null;
+        if (plan) {
+          const job = await queueGenerationJob({
+            firestore,
+            appId,
+            caseId,
+            plan,
+            requestedBy: context.auth.uid,
+            orgId: null,
+          });
+          generationJobId = job?.jobId || null;
+          generationStatus = job?.status || null;
+        } else {
+          generationStatus = 'missing-plan';
+        }
+      } else {
+        generationStatus = 'ready';
+      }
+    }
+
+    return {
+      demoCaseId: caseId,
+      updatedCount,
+      generationJobId,
+      generationStatus,
+    };
+  } catch (err) {
+    if (err instanceof functions.https.HttpsError) {
+      throw err;
+    }
+    console.error('[setDemoCase] Failed to update demo case', err);
+    throw new functions.https.HttpsError('internal', err?.message || 'Unable to set demo case.');
+  }
+});
+
 exports.generateDebugRefdoc = functions
-  .runWith({ memory: '512MB', timeoutSeconds: 60 })
+  .runWith({ enforceAppCheck: true, memory: '512MB', timeoutSeconds: 60 })
   .https.onCall(async (data, context) => {
   try {
     if (!context.auth) {
@@ -1870,7 +2319,7 @@ exports.generateDebugRefdoc = functions
   }
   });
 
-exports.deleteRetakeAttempt = functions.https.onCall(async (data, context) => {
+exports.deleteRetakeAttempt = callable.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
   }
@@ -2782,7 +3231,7 @@ exports.gradeSubmission = onDocumentWritten(
   }
 );
 
-exports.createStripeCheckoutSession = functions.https.onCall(async (data, context) => {
+exports.createStripeCheckoutSession = callable.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'Sign in to start checkout.');
   }
@@ -2847,11 +3296,14 @@ exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
     const db = admin.firestore();
     const eventObject = event.data?.object || {};
     const eventMetadata = eventObject.metadata || {};
-    const inferredAppId = eventMetadata.appId || DEFAULT_APP_ID;
+    const appIdFromMetadata =
+      typeof eventMetadata.appId === 'string' && eventMetadata.appId.trim()
+        ? eventMetadata.appId.trim()
+        : null;
+    const inferredAppId = appIdFromMetadata || DEFAULT_APP_ID;
 
-    const { alreadyProcessed } = await recordStripeEvent({
+    const { alreadyProcessed, eventRef } = await recordStripeEvent({
       firestore: db,
-      appIdValue: inferredAppId,
       event,
     });
     if (alreadyProcessed) {
@@ -2883,7 +3335,15 @@ exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
         );
 
         if (session.customer) {
-          await db.doc(buildStripeCustomerPath(appIdValue, session.customer)).set(
+          await db.doc(buildStripeCustomerScopedPath(appIdValue, session.customer)).set(
+            {
+              uid,
+              appId: appIdValue,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          );
+          await db.doc(buildStripeCustomerGlobalPath(session.customer)).set(
             {
               uid,
               appId: appIdValue,
@@ -2893,7 +3353,15 @@ exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
           );
         }
         if (session.payment_intent) {
-          await db.doc(buildStripePaymentIntentPath(appIdValue, session.payment_intent)).set(
+          await db.doc(buildStripePaymentIntentScopedPath(appIdValue, session.payment_intent)).set(
+            {
+              uid,
+              appId: appIdValue,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          );
+          await db.doc(buildStripePaymentIntentGlobalPath(session.payment_intent)).set(
             {
               uid,
               appId: appIdValue,
@@ -2911,12 +3379,12 @@ exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
       const paymentIntentId = charge.payment_intent || null;
       const { uid, appIdValue } = await resolveBillingIdentityFromStripe({
         firestore: db,
-        appIdValue: inferredAppId,
+        appIdValue: appIdFromMetadata,
         customerId,
         paymentIntentId,
       });
 
-      if (uid) {
+      if (uid && appIdValue) {
         await db.doc(buildBillingPath(appIdValue, uid)).set(
           {
             status: 'revoked',
@@ -2927,17 +3395,50 @@ exports.stripeWebhook = functions.https.onRequest(async (req, res) => {
           },
           { merge: true }
         );
+      } else {
+        console.warn('[stripeWebhook] Unable to resolve billing identity for revocation', {
+          eventId: event.id,
+          customerId,
+          paymentIntentId,
+        });
       }
+    }
+
+    if (eventRef) {
+      await eventRef.set(
+        {
+          state: 'processed',
+          processedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          lastError: admin.firestore.FieldValue.delete(),
+        },
+        { merge: true }
+      );
     }
 
     res.json({ received: true });
   } catch (err) {
+    try {
+      const db = admin.firestore();
+      if (event?.id) {
+        await db.doc(buildStripeEventPath(event.id)).set(
+          {
+            state: 'processing',
+            lastError: err?.message || String(err),
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+    } catch (updateErr) {
+      console.error('[stripeWebhook] Failed to record webhook error', updateErr);
+    }
     console.error('[stripeWebhook] handler failed', err);
     res.status(500).send('Webhook handler failed');
   }
 });
 
-exports.trackAnalyticsEvent = functions.https.onCall(async (data, context) => {
+exports.trackAnalyticsEvent = callable.https.onCall(async (data, context) => {
   const appIdValue = resolveAppId(data);
   const eventType = normalizeEventType(data?.eventType);
   const allowedEvents = new Set([

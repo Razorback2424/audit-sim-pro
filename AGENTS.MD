@@ -1,174 +1,223 @@
-# AGENTS.md — Audit Flight Simulator (Codex Operating Guide)
+# AGENTS.md
 
-> Read this first. If you’re unsure what to build next, re-read the **North Star** and ship the smallest thing that increases *realism + detection skill + immediate feedback*.
+This repository is optimized for Codex-style, multi-threaded work (app, CLI, IDE). These rules are non-negotiable. If a request conflicts with any rule below, stop and ask before proceeding.
 
-## North Star (Product Vision)
-We are replacing passive, generic audit training with **active, high-stakes simulation**—turning “auditor judgment” from an abstract concept into a **measurable skill**.
+## 0) Mission of this repo (what we are building)
+AuditSim Pro is a training simulator where a trainee selects disbursements and instantly retrieves the correct invoice support (PDFs). The core value is fidelity, speed, correctness, and observability. Anything that does not improve those is likely out of scope.
 
-Traditional training is a **lecture hall**. This product is a **flight simulator**:
-- Briefing → cockpit (workpaper) → realistic disaster (“the trap”) → crash safely → learn instantly.
+## 1) Operating principles (always)
+1) Smallest change that achieves the goal (YAGNI, KISS).
+2) No speculative refactors. No “cleanup” unless it is required for the task and tied to a concrete bug, risk, or measurable benefit.
+3) Preserve behavior unless the task explicitly requires a behavior change. If behavior changes, call it out clearly.
+4) Single-source-of-truth for business logic. Do not duplicate core rules in multiple places (especially UI).
+5) “Every pixel must serve a purpose.” No decorative UI additions. Anything new must reduce confusion, reduce steps, or prevent mistakes.
 
-**10X differentiator**
-- We don’t teach “rules.” We teach **detection**.
-- We don’t provide perfect data. We provide **defective data** and make the user find the needle in the haystack.
+## 2) Default work loop (how you should operate)
+Follow this every time unless explicitly told otherwise.
 
-If the user doesn’t feel a spike of adrenaline when they find the error, we haven’t done our job.
+Step A: Orient
+- Identify the exact user goal and “definition of done.”
+- Identify which files/modules are the likely source-of-truth for the behavior.
 
----
+Step B: Plan (required before non-trivial edits)
+In the thread, write a short plan:
+- Objective (1 sentence)
+- Scope (what will change)
+- Non-scope (what will NOT change)
+- Approach (3–7 bullets)
+- Verification (exact commands / steps)
 
-## What this repo is (and is not)
+Step C: Implement
+- Make the smallest changes possible.
+- Prefer incremental diffs over large rewrites.
+- Keep changes localized; do not ripple across modules unless necessary.
 
-### Is
-A **content-agnostic simulation OS** that can run many audit scenarios (“cartridges”) with consistent mechanics:
-- Just-in-time instruction
-- Workpaper simulation (evidence + work)
-- Real-time/instant feedback
-- Mastery tracking (competency, not completion)
+Step D: Verify
+- Run the required checks for the change type (see section 9).
+- If you cannot run them, explain why and provide an alternative verification method.
 
-### Is not
-- A generic LMS
-- A video library with quizzes
-- A course builder full of “nice-to-have” UI
-- A project that prioritizes “login page polish” over the core simulation loop
+Step E: Review package (always)
+When done, provide:
+- Objective
+- What changed (bullets)
+- What did NOT change (explicit)
+- Files touched (with one-line reason each)
+- How verified (commands + results)
+- Risks / edge cases
+- Follow-ups (only if necessary)
 
-When tempted by scope creep, ship the next improvement to the **core loop** instead.
+## 3) Hard scope boundaries (do not cross)
+Do not do any of the following unless explicitly requested:
 
----
+Architecture / structure:
+- No broad folder reorganizations.
+- No mass renames.
+- No “modernization passes.”
+- No changing state management approach.
 
-## The Universal Audit Engine (4 layers)
+Product behavior:
+- No changes to pricing, paywalls, gating, plans, or entitlement rules.
+- No changes to roles/permissions definitions (RBAC) or enforcement model.
+- No changes to analytics event taxonomy/names/shapes.
 
-### Layer 1 — The Academy (Instruction Engine)
-**Metaphor:** the senior’s desk  
-**Function:** deliver Just-in-Time theory that enables correct judgment inside the sim.
+Data:
+- No schema changes (Firestore collections/fields) or migrations.
+- No rewriting historical data semantics (attempts/submissions snapshots).
+- No “backfills” unless explicitly requested.
 
-Required components:
-- **Hook:** high-stakes context (why it matters, fraud/misstatement risk)
-- **Asset:** embedded visual (video/diagram/timeline)
-- **Heuristic:** the “golden rule” (memorable detection rule)
-- **Gate:** forcing function quiz that blocks cockpit entry until grasped
+## 4) When you MUST ask before proceeding (stop points)
+Ask first if any of the following becomes necessary:
 
-Implementation rule: the Academy exists to make the cockpit decisions *meaningful*, not to be a standalone course.
+Dependencies/tooling:
+- Adding a new dependency or upgrading a major version
+- Changing bundler/build tooling, linting, formatting, or test frameworks
 
----
+Security/access:
+- Authentication flow changes
+- Roles/RBAC changes
+- Firestore rules or Storage rules changes
+- Any change that widens access to data or documents
 
-### Layer 2 — The Workpaper (Simulation Engine)
-**Metaphor:** the cockpit  
-**Function:** a split-screen environment that mimics real work.
+Billing:
+- Touching Stripe checkout, webhook handlers, customer portal, subscription logic, or payment gating
 
-- **Left panel (Evidence):** PDFs, emails, bank statements, supporting docs
-- **Right panel (Work):** interactive grid/spreadsheet, ticking/tying, assertions, classification choices
+Data operations:
+- Data migrations, backfills, destructive deletes, or changes that affect historical submissions
 
-**Trap logic**
-- **Distractors:** realistic noise that should be “passed”
-- **Triggers:** specific embedded errors that should be flagged
-- The engine validates against a hidden **Answer Key** in real time (or on submit), then routes feedback through the Reviewer.
+Ops:
+- Deployments, environment config, secrets, CI changes, cron/schedulers/background jobs
 
-Design constraint: realism comes from the *shape* of the workflow and imperfect data—not from UI decoration.
+Performance-sensitive changes:
+- Anything that increases per-row reads/calls in large tables
+- Any new logging/analytics on hot paths
 
----
+If you’re unsure whether something qualifies, ask.
 
-### Layer 3 — The Reviewer (Feedback Engine)
-**Metaphor:** review note  
-**Function:** instant, context-aware correction.
+## 5) High-risk zones (extra caution)
+These areas must be treated as fragile and security-critical. Make minimal edits and add explicit verification notes.
 
-- If the user is correct: crisp “good catch” dopamine hit
-- If incorrect: immediate remediation explaining *why* the judgment was wrong and what heuristic applies
+- Auth, RBAC, entitlement/gating (paid vs demo, accessLevel logic)
+- Firestore rules, Storage rules
+- Stripe + billing state transitions + webhook handling
+- Document delivery: secure PDF access, signed URLs, viewer permissions
+- Case attempt lifecycle: start/resume/submit/complete
+- Dataset import and mapping (disbursement → document links), especially one-to-many mappings
+- Any “admin authoring” workflows that can break content at scale
 
-Hard constraint: **no waiting for a grade**. Feedback must be immediate.
+## 6) Coding standards (pragmatic)
+- Prefer plain, readable code over clever abstractions.
+- Avoid introducing new patterns unless the repo already uses them.
+- Keep functions small and explicit in inputs/outputs.
+- Do not create generalized frameworks for one-off use cases.
+- Add comments only when they explain non-obvious intent or invariants.
 
----
+## 7) UI rules (strict)
+Trainee UX:
+- Remove ambiguity. A trainee should always know: what to do next, what is required, and what state they are in.
+- Do not add UI noise. No decorative badges/cards unless they encode real state or prevent mistakes.
+- Microcopy must be plain-English and action-oriented.
 
-### Layer 4 — The Partner (Mastery Dashboard)
-**Metaphor:** performance review  
-**Function:** aggregate learning across modules.
+Admin UX:
+- Optimize for throughput and error prevention (mapping health, validation, bulk ops).
+- Show actionable errors (e.g., unmapped items) rather than silent failure.
 
-Tracks **competency**, not just completion.
-Example: “User has mastered SURL but struggles with Existence assertions.”
+General:
+- If you add a status label, it must map to a real backend state or a clearly defined computed invariant.
+- Do not change visual style/theme unless requested.
 
----
+## 8) Behavior-change policy
+If your change alters behavior in any way, you must:
+- Explicitly state the behavior change in the review package
+- Explain why it is necessary for the task
+- Identify who it affects (trainee/admin)
+- Call out any migration or backward-compat risk (even if you are not doing a migration)
 
-## Launch content (Vertical slices / “Cartridges”)
-We prove the engine is universal by shipping distinct scenarios that reuse the same underlying mechanics.
+## 9) Verification requirements (required before marking done)
+Do not guess commands. Locate the repo’s actual scripts (package.json, functions package.json, README) and run those.
 
-### Module A — Search for Unrecorded Liabilities (SURL)
-- **Risk:** timing / cutoff
-- **Trap:** invoice dated Jan 3 for services performed Dec 28
-- **Lesson:** expenses follow the work, not the paper
-- **Mechanic:** document inspection (PDF vs GL)
+Typical verification expectations (adapt to this repo’s real scripts):
 
-### Module B — Cash & Bank Recs
-- **Risk:** existence / completeness
-- **Trap:** “phantom check” outstanding that never clears subsequent bank statement
-- **Lesson:** just because it balances doesn’t mean it’s real
-- **Mechanic:** recon logic (bank vs GL vs outstanding list)
+Frontend-only changes:
+- Lint (repo command)
+- Unit tests (repo command, if present)
+- Build (repo command)
 
-### Module C — Expenses & Vouching (future)
-- **Risk:** classification / occurrence
-- **Trap:** R&M expense that should be capitalized (CapEx)
-- **Lesson:** big numbers need to be capitalized
-- **Mechanic:** classification choice (expense vs capitalize)
+Backend/Cloud Functions changes:
+- Lint/typecheck functions (repo command)
+- Emulator run or minimal local flow test (if present)
+- For webhooks: verify signature verification path and event handling (at least one happy path + one failure path)
 
----
+Rules/security changes:
+- Validate rules compile
+- Verify at least:
+  - 1 positive allow case (expected access works)
+  - 1 negative deny case (unauthorized access blocked)
 
-## The “Happy Path” user journey (the core loop)
-1. User enters dashboard: **SURL open**, **Cash locked**
-2. User opens SURL → Academy briefing → passes Gate question
-3. Cockpit (split screen):
-   - Left: invoice stack
-   - Right: January check register (or GL view)
-   - User passes first 3 distractors, flags the 4th trap as exception
-4. User submits audit
-5. Results modal:
-   - “Audit complete. You found the unrecorded liability. Net income adjusted by -$4,500.”
-6. SURL marked **Mastered** → Cash module unlocks
+If you cannot run verification:
+- Say exactly what you could not run and why
+- Provide alternative evidence (static reasoning + targeted code pointers)
 
-If a change does not strengthen steps 2–6, it’s probably not the next thing to build.
+## 10) Performance guardrails
+- Large disbursement listings must stay responsive.
+- Avoid per-row network reads; prefer batched reads or pre-aggregated views when the repo already supports them.
+- Do not introduce expensive analytics logging in render loops.
+- Any new indexing requirement must be documented.
 
----
+## 11) Git hygiene (for multi-agent parallelism)
+Branches:
+- `agent/<short-task-name>`
+- `feat/<short-task-name>`
+- `fix/<short-task-name>`
 
-## Business goals (what “success” means)
-- Immediate: validate “realism sells”
-- Short term: reach **$2,000/month** via individual sales (lifetime deal / manager toolkit)
-- Long term: enterprise licensing to regional firms lacking L&D
-- Ultimate: acquisition by major training provider (Becker/Wiley/etc.) or a major firm
+Commits:
+- Small, reviewable commits.
+- Use prefixes: `feat:`, `fix:`, `chore:`, `refactor:` (refactor only when behavior does not change).
 
-Product implication: prioritize features that make the sim feel **credible, tense, and teachable**, not features that make it feel like “another platform.”
+Worktrees:
+- One agent thread = one branch/worktree = one objective.
+- Do not mix unrelated objectives in one branch.
 
----
+## 12) Output format (the required “review package” template)
+When delivering work, use exactly this template:
 
-## Codex working agreement (how to operate in this repo)
-When you’re asked to implement something:
+Objective:
+- <1 sentence>
 
-1. **Restate the user-visible outcome** in one sentence.
-2. Identify where it fits (Academy / Workpaper / Reviewer / Partner).
-3. Ship the **smallest vertical slice** that improves the core loop.
-4. Prefer **existing repo patterns** over new frameworks.
-5. Avoid large refactors unless they directly unblock the slice.
+What changed:
+- <bullets>
 
-### Guardrails
-- Don’t introduce features that delay feedback.
-- Don’t “perfect” UI at the expense of trap realism.
-- Don’t add complexity to make it “future-proof” unless today’s slice needs it.
-- Don’t store or ship anything that looks like real client data (keep all content fictional).
+What did NOT change:
+- <bullets>
 
-### Quality bar (“Fully Baked” standard)
-A feature is done when:
-- The user can complete an end-to-end loop (brief → gate → sim → feedback → mastery impact).
-- The trap is detectable via the heuristic (not guesswork).
-- Feedback is specific, immediate, and teaches judgment.
-- The module can be replayed without breaking state or logic.
+Files touched (reason):
+- <path> — <reason>
+- ...
 
----
+How verified:
+- <command> — <result>
+- <manual check> — <result>
 
-## Product principles (defaults)
-- **Realism over gamification** (but keep the dopamine: crisp success/fail feedback)
-- **Detection over memorization**
-- **Defective data is a feature**
-- **Immediate feedback always**
-- **Competency tracking > completion tracking**
-- **Unlocks are earned** (mastery gates future modules)
+Risks / edge cases:
+- <bullets>
 
----
+Follow-ups (only if necessary):
+- <bullets>
 
-## Reference mantra
-“We do not build courses. We build experience.”
+## 13) Security and secrets
+- Never commit secrets or credentials.
+- Never print secrets in logs/output.
+- Do not modify `.env*` or secret manager config unless explicitly requested.
+- Do not widen access “to make it work.”
+- Documents must remain non-public. Use secure viewer access or time-limited signed URLs where applicable.
+
+## 14) If you are unsure
+Stop and ask. Provide:
+- The specific decision you are stuck on
+- The options you see
+- Your smallest recommendation and why
+- The risk of proceeding without confirmation
+
+## 15) Preferred posture
+Be blunt and execution-focused. Optimize for correctness, minimalism, and reviewability.
+
+End of file.

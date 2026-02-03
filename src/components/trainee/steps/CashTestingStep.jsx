@@ -4,6 +4,7 @@ import { Send } from 'lucide-react';
 import CashReconciliationWorkbench from '../workspaces/CashReconciliationWorkbench';
 
 export default function CashTestingStep({
+  caseId,
   testingIntro,
   cashOutstandingList,
   cashCutoffList,
@@ -33,6 +34,7 @@ export default function CashTestingStep({
       </div>
       <div className="bg-white border border-gray-200 rounded-lg shadow-sm p-4">
         <CashReconciliationWorkbench
+          caseId={caseId}
           ledgerItems={cashOutstandingList}
           cutoffItems={cashCutoffList}
           artifacts={cashArtifacts}

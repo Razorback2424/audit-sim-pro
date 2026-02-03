@@ -14,12 +14,9 @@ jest.mock('../services/caseService', () => ({
 
 jest.mock('../services/progressService', () => ({
   fetchProgressForCases: jest.fn(),
+  saveProgress: jest.fn(),
 }));
 
-jest.mock('firebase/storage', () => ({
-  ref: jest.fn(),
-  getDownloadURL: jest.fn(),
-}));
 
 const mockNavigate = jest.fn();
 const mockShowModal = jest.fn();
@@ -29,6 +26,7 @@ jest.mock('../AppCore', () => ({
   useRoute: () => ({ navigate: mockNavigate }),
   useAuth: () => ({ userId: 'u1' }),
   useModal: () => ({ showModal: mockShowModal }),
+  useUser: () => ({ role: 'trainee', loadingRole: false, userProfile: { uid: 'u1' } }),
   appId: 'test-app',
   storage: {},
 }));
@@ -56,7 +54,7 @@ describe('TraineeSubmissionHistoryPage', () => {
             submittedAt: { toMillis: () => 2, toDate: () => new Date('2024-01-02T00:00:00Z') },
             selectedPaymentIds: ['p1'],
             disbursementClassifications: { p1: { properlyIncluded: 100 } },
-            retrievedDocuments: [{ paymentId: 'p1', fileName: 'invoice.pdf', downloadURL: 'https://example.com/doc.pdf' }],
+            retrievedDocuments: [{ paymentId: 'p1', fileName: 'invoice.pdf', storagePath: 'artifacts/app/case-1/invoice.pdf' }],
           },
         ],
       },
@@ -132,7 +130,7 @@ describe('TraineeSubmissionHistoryPage', () => {
     expect(mockNavigate).toHaveBeenCalledWith('/trainee/case/case-1');
   });
 
-  it('requires a second confirmation before restarting an in-progress draft', async () => {
+  it('restarts the case when choosing restart with an in-progress draft', async () => {
     listUserSubmissions.mockResolvedValueOnce([
       {
         caseId: 'case-1',
@@ -157,6 +155,8 @@ describe('TraineeSubmissionHistoryPage', () => {
       draft: { selectedPaymentIds: ['p1'], classificationDraft: {} },
     };
     fetchProgressForCases.mockResolvedValueOnce(new Map([['case-1', progress]]));
+    const { saveProgress } = require('../services/progressService');
+    saveProgress.mockResolvedValueOnce();
 
     render(<TraineeSubmissionHistoryPage />);
 
@@ -168,18 +168,12 @@ describe('TraineeSubmissionHistoryPage', () => {
     const firstActions = mockShowModal.mock.calls[0][2];
     const closeFirst = jest.fn();
     const { getByRole } = render(firstActions(closeFirst));
-    getByRole('button', { name: /Start over/i }).click();
+    getByRole('button', { name: /Restart case/i }).click();
 
     expect(closeFirst).toHaveBeenCalled();
-    await waitFor(() => expect(mockShowModal).toHaveBeenCalledTimes(2));
-
-    const secondActions = mockShowModal.mock.calls[1][2];
-    const closeSecond = jest.fn();
-    const second = render(secondActions(closeSecond));
-    second.getByRole('button', { name: /Yes, start over/i }).click();
-
-    expect(closeSecond).toHaveBeenCalled();
-    expect(mockNavigate).toHaveBeenCalledWith('/trainee/case/case-1?retake=true');
+    await waitFor(() => expect(saveProgress).toHaveBeenCalled());
+    expect(mockShowModal).toHaveBeenCalledTimes(1);
+    expect(mockNavigate).toHaveBeenCalledWith('/trainee/case/case-1');
   });
 
   it('starts a fresh retake when no newer draft exists', async () => {
@@ -207,6 +201,8 @@ describe('TraineeSubmissionHistoryPage', () => {
       draft: { selectedPaymentIds: ['p1'], classificationDraft: {} },
     };
     fetchProgressForCases.mockResolvedValueOnce(new Map([['case-1', progress]]));
+    const { saveProgress } = require('../services/progressService');
+    saveProgress.mockResolvedValueOnce();
 
     render(<TraineeSubmissionHistoryPage />);
 
@@ -215,7 +211,8 @@ describe('TraineeSubmissionHistoryPage', () => {
 
     await waitFor(() => expect(fetchProgressForCases).toHaveBeenCalled());
     expect(mockShowModal).not.toHaveBeenCalled();
-    expect(mockNavigate).toHaveBeenCalledWith('/trainee/case/case-1?retake=true');
+    expect(saveProgress).toHaveBeenCalled();
+    expect(mockNavigate).toHaveBeenCalledWith('/trainee/case/case-1');
   });
 
   it('does not prompt when no draft exists', async () => {
@@ -243,6 +240,8 @@ describe('TraineeSubmissionHistoryPage', () => {
       draft: { selectedPaymentIds: [], classificationDraft: {} },
     };
     fetchProgressForCases.mockResolvedValueOnce(new Map([['case-1', progress]]));
+    const { saveProgress } = require('../services/progressService');
+    saveProgress.mockResolvedValueOnce();
 
     render(<TraineeSubmissionHistoryPage />);
 
@@ -251,7 +250,8 @@ describe('TraineeSubmissionHistoryPage', () => {
 
     await waitFor(() => expect(fetchProgressForCases).toHaveBeenCalled());
     expect(mockShowModal).not.toHaveBeenCalled();
-    expect(mockNavigate).toHaveBeenCalledWith('/trainee/case/case-1?retake=true');
+    expect(saveProgress).toHaveBeenCalled();
+    expect(mockNavigate).toHaveBeenCalledWith('/trainee/case/case-1');
   });
 
   it('does not prompt when progress is submitted but has a non-empty percentComplete', async () => {
@@ -279,6 +279,8 @@ describe('TraineeSubmissionHistoryPage', () => {
       draft: { selectedPaymentIds: ['p1'], classificationDraft: { p1: { properlyIncluded: '100' } } },
     };
     fetchProgressForCases.mockResolvedValueOnce(new Map([['case-1', progress]]));
+    const { saveProgress } = require('../services/progressService');
+    saveProgress.mockResolvedValueOnce();
 
     render(<TraineeSubmissionHistoryPage />);
 
@@ -287,6 +289,7 @@ describe('TraineeSubmissionHistoryPage', () => {
 
     await waitFor(() => expect(fetchProgressForCases).toHaveBeenCalled());
     expect(mockShowModal).not.toHaveBeenCalled();
-    expect(mockNavigate).toHaveBeenCalledWith('/trainee/case/case-1?retake=true');
+    expect(saveProgress).toHaveBeenCalled();
+    expect(mockNavigate).toHaveBeenCalledWith('/trainee/case/case-1');
   });
 });

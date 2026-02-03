@@ -3,11 +3,6 @@ const { surlIntermediateCutoffV1 } = require('./recipes/surlIntermediateCutoffV1
 const { surlAdvancedCutoffV1 } = require('./recipes/surlAdvancedCutoffV1');
 const { outstandingCheckTestingBasicV1 } = require('./recipes/outstandingCheckTestingBasicV1');
 const { fixedAssetsCoreV1 } = require('./recipes/fixedAssetsCoreV1');
-const { fixedAssetsRollforwardV1 } = require('./recipes/fixedAssetsRollforwardV1');
-const { fixedAssetsScopingV1 } = require('./recipes/fixedAssetsScopingV1');
-const { fixedAssetsAdditionsV1 } = require('./recipes/fixedAssetsAdditionsV1');
-const { fixedAssetsDisposalsV1 } = require('./recipes/fixedAssetsDisposalsV1');
-const { fixedAssetsAnalyticsV1 } = require('./recipes/fixedAssetsAnalyticsV1');
 
 const RECIPES = [
   surlSeedAlphaCutoffV1,
@@ -15,11 +10,6 @@ const RECIPES = [
   surlAdvancedCutoffV1,
   outstandingCheckTestingBasicV1,
   fixedAssetsCoreV1,
-  fixedAssetsRollforwardV1,
-  fixedAssetsScopingV1,
-  fixedAssetsAdditionsV1,
-  fixedAssetsDisposalsV1,
-  fixedAssetsAnalyticsV1,
 ];
 
 const listCaseRecipes = () =>

@@ -1,9 +1,9 @@
 import { useCallback, useMemo, useState } from 'react';
-import { ref as storageRef, getDownloadURL } from 'firebase/storage';
-import { Button, storage } from '../AppCore';
+import { Button } from '../AppCore';
 import { Download } from 'lucide-react';
+import { getSignedDocumentUrl } from '../services/documentService';
 
-export default function useReferenceDownloads(referenceDocuments = [], showModal) {
+export default function useReferenceDownloads(referenceDocuments = [], showModal, caseId) {
   const [downloading, setDownloading] = useState(false);
 
   const triggerFileDownload = useCallback(async (url, filename) => {
@@ -39,22 +39,14 @@ export default function useReferenceDownloads(referenceDocuments = [], showModal
 
       const displayName = (doc.fileName || 'reference-document').trim() || 'reference-document';
       let url = '';
-      const fallbackUrl = (doc.downloadURL || '').trim();
-
-      if (doc.storagePath) {
-        try {
-          url = await getDownloadURL(storageRef(storage, doc.storagePath));
-        } catch (err) {
-          if (fallbackUrl) {
-            url = fallbackUrl;
-          } else {
-            throw err;
-          }
-        }
-      } else if (fallbackUrl) {
-        url = fallbackUrl;
+      if (doc.storagePath || doc.downloadURL) {
+        url = await getSignedDocumentUrl({
+          caseId,
+          storagePath: doc.storagePath,
+          downloadURL: doc.downloadURL,
+        });
       } else {
-        throw new Error('Reference document is missing a download link.');
+        throw new Error('Reference document is missing a storage path.');
       }
 
       await triggerFileDownload(url, displayName);

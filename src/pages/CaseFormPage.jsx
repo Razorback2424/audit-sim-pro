@@ -8,6 +8,7 @@ import { AUDIT_AREAS, AUDIT_AREA_LABELS } from '../models/caseConstants';
 export { mergeDisbursementDocuments } from '../utils/caseFormTransforms';
 
 export default function CaseFormPage({ params }) {
+  const caseId = params?.caseId || '';
   const {
     meta: { isEditing },
     status: { loading },
@@ -585,6 +586,7 @@ export default function CaseFormPage({ params }) {
                 generationReview={generationReview}
                 onQueueGeneration={generationPlan ? handleQueueGenerationJob : null}
                 isQueueing={queueBusy}
+                caseId={caseId}
               />
             ) : null}
 

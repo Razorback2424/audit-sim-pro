@@ -4,8 +4,9 @@ import { PlusCircle, Trash2, CheckCircle2, AlertTriangle, ChevronDown, ChevronRi
 import { AUDIT_AREAS } from '../../models/caseConstants';
 import StepIntro from './StepIntro';
 import { CASH_ARTIFACT_TYPES } from '../../constants/caseFormOptions';
+import { getSignedDocumentUrl } from '../../services/documentService';
 
-export default function AttachmentsStep({ attachments, files, generation }) {
+export default function AttachmentsStep({ attachments, files, generation, caseId }) {
   const {
     disbursements,
     referenceDocuments,
@@ -88,7 +89,7 @@ export default function AttachmentsStep({ attachments, files, generation }) {
                   </p>
                 ) : (
                   (disbursement.mappings || []).map((mapping) => (
-                    <InvoiceMappingSummaryRow key={mapping._tempId} mapping={mapping} />
+                    <InvoiceMappingSummaryRow key={mapping._tempId} mapping={mapping} caseId={caseId} />
                   ))
                 )}
               </div>
@@ -243,7 +244,7 @@ export default function AttachmentsStep({ attachments, files, generation }) {
   );
 }
 
-const InvoiceMappingSummaryRow = ({ mapping }) => {
+const InvoiceMappingSummaryRow = ({ mapping, caseId }) => {
   const summary = (() => {
     if (mapping.uploadError) return { text: mapping.uploadError, tone: 'text-red-600' };
     if (typeof mapping.uploadProgress === 'number' && mapping.uploadProgress < 100) {
@@ -263,6 +264,20 @@ const InvoiceMappingSummaryRow = ({ mapping }) => {
 
   const label = mapping.fileName || mapping.clientSideFile?.name || mapping.storagePath || mapping.downloadURL || 'Unnamed file';
 
+  const handleOpen = async () => {
+    if (!caseId || (!mapping.storagePath && !mapping.downloadURL)) return;
+    try {
+      const url = await getSignedDocumentUrl({
+        caseId,
+        storagePath: mapping.storagePath,
+        downloadURL: mapping.downloadURL,
+      });
+      window.open(url, '_blank');
+    } catch (error) {
+      console.error('[AttachmentsStep] Failed to open mapping document', error);
+    }
+  };
+
   return (
     <div className="flex flex-col rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-600">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -276,15 +291,14 @@ const InvoiceMappingSummaryRow = ({ mapping }) => {
           {mapping.storagePath}
         </span>
       ) : null}
-      {mapping.downloadURL ? (
-        <a
-          href={mapping.downloadURL}
-          target="_blank"
-          rel="noreferrer"
+      {caseId && (mapping.storagePath || mapping.downloadURL) ? (
+        <button
+          type="button"
+          onClick={handleOpen}
           className="mt-1 inline-flex items-center text-[11px] text-blue-600 underline"
         >
           View file
-        </a>
+        </button>
       ) : null}
     </div>
   );

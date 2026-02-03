@@ -92,11 +92,17 @@ describe('submissionService', () => {
     });
 
     const [, payload] = setDoc.mock.calls[0];
-    expect(payload.attempts.attemptIndex).toBe(3);
-    expect(payload.attempts.attemptType).toBe('practice');
-    expect(payload.attempts.attemptSummary.attemptIndex).toBe(3);
-    expect(payload.attempts.attemptSummary.attemptType).toBe('practice');
-    expect(payload.attempts.attemptSummary.isBaseline).toBe(false);
+    expect(arrayUnion).toHaveBeenCalledWith(
+      expect.objectContaining({
+        attemptIndex: 3,
+        attemptType: 'practice',
+        attemptSummary: expect.objectContaining({
+          attemptIndex: 3,
+          attemptType: 'practice',
+          isBaseline: false,
+        }),
+      })
+    );
   });
 
   test('fetchSubmissionsForCase returns submissions', async () => {

@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { Button, useRoute, useModal, useUser, appId, storage } from '../AppCore';
-import { getDownloadURL, listAll, ref as storageRef, deleteObject } from 'firebase/storage';
+import { listAll, ref as storageRef, deleteObject } from 'firebase/storage';
 import { generateDebugReferenceDoc } from '../services/debugDocService';
+import { getSignedDocumentUrl } from '../services/documentService';
 
 const buildTemplatePath = (templateId) =>
   String(templateId || '')
@@ -106,7 +107,10 @@ export default function AdminDebugDocsPage() {
   const handleView = async (doc) => {
     if (!doc?.fullPath) return;
     try {
-      const url = await getDownloadURL(storageRef(storage, doc.fullPath));
+      const url = await getSignedDocumentUrl({
+        caseId: 'debug',
+        storagePath: doc.fullPath,
+      });
       window.open(url, '_blank', 'noopener,noreferrer');
     } catch (err) {
       console.error('[AdminDebugDocs] Failed to open debug doc', err);

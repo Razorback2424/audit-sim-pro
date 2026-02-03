@@ -32,9 +32,9 @@ service firebase.storage {
 
     function hasPaidAccess(appId) {
       return request.auth != null &&
-        firestore.exists(/databases/(default)/documents/artifacts/$(appId)/users/$(request.auth.uid)/billing) &&
+        firestore.exists(/databases/(default)/documents/artifacts/$(appId)/users/$(request.auth.uid)/billing/status) &&
         (
-          firestore.get(/databases/(default)/documents/artifacts/$(appId)/users/$(request.auth.uid)/billing).data.status in ['paid', 'active']
+          firestore.get(/databases/(default)/documents/artifacts/$(appId)/users/$(request.auth.uid)/billing/status).data.status in ['paid', 'active']
         );
     }
 
@@ -54,28 +54,38 @@ service firebase.storage {
 
     // ---------- Trainee visibility helper ----------
     // artifacts/{appId}/public/data/cases/{caseId} with visibleToUserIds (list)
+    function caseIsVisibleToUser(appId, caseId) {
+      return (
+        firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.publicVisible == true ||
+        (
+          (firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds is list) &&
+          firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds.hasAny([request.auth.uid])
+        )
+      );
+    }
+
+    function caseNotDeleted(appId, caseId) {
+      return firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data._deleted == false;
+    }
+
+    function unpaidDemoCaseAccessible(appId, caseId) {
+      return isDemoCase(appId, caseId) &&
+        firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.publicVisible == true &&
+        caseNotDeleted(appId, caseId);
+    }
+
+    function paidCaseAccessible(appId, caseId) {
+      return caseNotDeleted(appId, caseId) && caseIsVisibleToUser(appId, caseId);
+    }
+
     function traineeHasAccessToCase(appId, caseId) {
       return (
         (
           request.auth != null &&
           caseDocExists(appId, caseId) &&
-          (hasPaidAccess(appId) || isDemoCase(appId, caseId)) &&
           (
-            // Public case
-            firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.publicVisible == true ||
-            // Backward compatibility: if no roster, treat non-false publicVisible as accessible
-            (
-              (
-                !(firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds is list) ||
-                firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds.size() == 0
-              ) &&
-              firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.publicVisible != false
-            ) ||
-            // Rostered access
-            (
-              (firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds is list) &&
-              firestore.get(/databases/(default)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds.hasAny([request.auth.uid])
-            )
+            (hasPaidAccess(appId) && paidCaseAccessible(appId, caseId)) ||
+            (!hasPaidAccess(appId) && unpaidDemoCaseAccessible(appId, caseId))
           )
         ) ||
         (
@@ -137,6 +147,13 @@ service firebase.storage {
 
     // ---------- Highlighted evidence (admin-prepared answer key snippets) ----------
     match /artifacts/{appId}/case_highlight/{caseId}/{file=**} {
+      allow create, update: if isAdmin(appId) && isAllowedArtifactUpload();
+      allow get, list: if isAdmin(appId) || traineeHasAccessToCase(appId, caseId);
+      allow delete: if isAdmin(appId);
+    }
+
+    // Backwards-compat: pluralized highlight storage prefix
+    match /artifacts/{appId}/case_highlights/{caseId}/{file=**} {
       allow create, update: if isAdmin(appId) && isAllowedArtifactUpload();
       allow get, list: if isAdmin(appId) || traineeHasAccessToCase(appId, caseId);
       allow delete: if isAdmin(appId);

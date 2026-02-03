@@ -26,6 +26,13 @@ jest.mock('../AppCore', () => ({
   useRoute: () => ({ navigate: jest.fn() }),
   useModal: () => ({ showModal: jest.fn(), hideModal: jest.fn() }),
   useAuth: () => ({ userId: 'u1' }),
+  useUser: () => ({
+    role: 'trainee',
+    loadingRole: false,
+    userProfile: { uid: 'u1' },
+    billing: { status: 'paid' },
+    loadingBilling: false,
+  }),
   appId: 'test-app'
 }));
 

@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ref as storageRef, getDownloadURL } from 'firebase/storage';
 import { isInlinePreviewable } from '../utils/evidenceUtils';
+import { getSignedDocumentUrl } from '../services/documentService';
 
 export default function useEvidenceViewer({
   viewerEnabled,
   evidenceItems,
-  storage,
+  caseId,
   activeEvidenceId: controlledEvidenceId,
   onActiveEvidenceChange,
 }) {
@@ -121,32 +121,8 @@ export default function useEvidenceViewer({
       target.evidenceFileName || target.storagePath || target.downloadURL
     );
 
-    if (target.downloadURL) {
-      if (inlinePreviewAllowed) {
-        setActiveEvidenceUrl(target.downloadURL);
-        setActiveEvidenceError('');
-        setActiveEvidenceLoading(false);
-        lastResolvedEvidenceRef.current = {
-          evidenceId: target.evidenceId,
-          storagePath: target.storagePath || null,
-          url: target.downloadURL,
-          inlineNotSupported: false,
-        };
-      } else {
-        setActiveEvidenceUrl(null);
-        setActiveEvidenceError('Preview not available for this file type. Use "Open in new tab" to download.');
-        setActiveEvidenceLoading(false);
-        lastResolvedEvidenceRef.current = {
-          evidenceId: target.evidenceId,
-          storagePath: target.storagePath || null,
-          url: null,
-          inlineNotSupported: true,
-        };
-      }
-      return;
-    }
-
-    if (!target.storagePath) {
+    const sourceKey = target.storagePath || target.downloadURL || null;
+    if (!sourceKey) {
       setActiveEvidenceUrl(null);
       setActiveEvidenceError('Document not linked for this disbursement.');
       setActiveEvidenceLoading(false);
@@ -159,23 +135,10 @@ export default function useEvidenceViewer({
       return;
     }
 
-    if (!storage?.app) {
-      setActiveEvidenceUrl(null);
-      setActiveEvidenceError('Document preview unavailable in this environment.');
-      setActiveEvidenceLoading(false);
-      lastResolvedEvidenceRef.current = {
-        evidenceId: target.evidenceId,
-        storagePath: target.storagePath,
-        url: null,
-        inlineNotSupported: false,
-      };
-      return;
-    }
-
     const lastResolved = lastResolvedEvidenceRef.current;
     if (
       lastResolved.evidenceId === target.evidenceId &&
-      lastResolved.storagePath === target.storagePath &&
+      lastResolved.storagePath === sourceKey &&
       (lastResolved.url || lastResolved.inlineNotSupported)
     ) {
       if (lastResolved.inlineNotSupported) {
@@ -195,7 +158,7 @@ export default function useEvidenceViewer({
     setActiveEvidenceUrl(null);
     lastResolvedEvidenceRef.current = {
       evidenceId: target.evidenceId,
-      storagePath: target.storagePath,
+      storagePath: sourceKey,
       url: null,
       inlineNotSupported: false,
     };
@@ -215,14 +178,18 @@ export default function useEvidenceViewer({
       };
     }
 
-    getDownloadURL(storageRef(storage, target.storagePath))
+    getSignedDocumentUrl({
+      caseId,
+      storagePath: target.storagePath,
+      downloadURL: target.downloadURL,
+    })
       .then((url) => {
         if (cancelled) return;
         setActiveEvidenceUrl(url);
         setActiveEvidenceError('');
         lastResolvedEvidenceRef.current = {
           evidenceId: target.evidenceId,
-          storagePath: target.storagePath,
+          storagePath: sourceKey,
           url,
           inlineNotSupported: false,
         };
@@ -230,15 +197,12 @@ export default function useEvidenceViewer({
       .catch((error) => {
         if (cancelled) return;
         console.error('Error loading evidence document:', error);
-        const message =
-          error?.code === 'storage/object-not-found'
-            ? 'Document is missing from storage.'
-            : 'Unable to load document preview.';
+        const message = 'Unable to load document preview.';
         setActiveEvidenceUrl(null);
         setActiveEvidenceError(message);
         lastResolvedEvidenceRef.current = {
           evidenceId: target.evidenceId,
-          storagePath: target.storagePath,
+          storagePath: sourceKey,
           url: null,
           inlineNotSupported: false,
         };
@@ -251,7 +215,7 @@ export default function useEvidenceViewer({
     return () => {
       cancelled = true;
     };
-  }, [viewerEnabled, evidenceSource, activeEvidenceId, storage]);
+  }, [viewerEnabled, evidenceSource, activeEvidenceId, caseId]);
 
   const setActiveEvidenceId = useCallback(
     (id) => {

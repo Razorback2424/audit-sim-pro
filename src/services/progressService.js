@@ -11,7 +11,7 @@ import {
   deleteField,
 } from 'firebase/firestore';
 import { db, FirestorePaths } from '../AppCore';
-import { toProgressModel } from '../models/progress';
+import { deriveProgressState, toProgressModel } from '../models/progress';
 
 const BATCH_SIZE = 10;
 const MAX_RETRIES = 3;
@@ -193,13 +193,7 @@ export const saveProgress = async ({
 
   let { state } = patch;
   if (!state) {
-    if (percentComplete === 0) {
-      state = 'not_started';
-    } else if (percentComplete === 100) {
-      state = 'submitted';
-    } else {
-      state = 'in_progress';
-    }
+    state = deriveProgressState({ step: patch.step, percentComplete });
   }
 
   const progressRef = doc(db, FirestorePaths.STUDENT_PROGRESS_COLLECTION(appId, uid), caseId);
@@ -220,13 +214,10 @@ export const saveProgress = async ({
 
       if (!forceOverwrite && serverData && serverUpdatedAtMs > patchUpdatedAtMs) {
         patch.percentComplete = Math.max(patch.percentComplete, serverData.percentComplete);
-        if (patch.percentComplete === 100) {
-          patch.state = 'submitted';
-        } else if (patch.percentComplete > 0) {
-          patch.state = 'in_progress';
-        } else {
-          patch.state = 'not_started';
-        }
+        patch.state = deriveProgressState({
+          step: patch.step ?? serverData?.step,
+          percentComplete: patch.percentComplete,
+        });
       }
 
       if (patch.hasSuccessfulAttempt === undefined) {

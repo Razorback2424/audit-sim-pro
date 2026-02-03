@@ -5,7 +5,7 @@ import { subscribeToCase } from '../services/caseService';
 import { saveSubmission, subscribeToSubmission } from '../services/submissionService';
 import { saveProgress, subscribeProgressForCases } from '../services/progressService';
 import { fetchRecipeProgress, saveRecipeProgress } from '../services/recipeProgressService';
-import { getDownloadURL } from 'firebase/storage';
+import { getSignedDocumentUrl } from '../services/documentService';
 
 const mockFetch = jest.fn(() =>
   Promise.resolve({
@@ -178,9 +178,8 @@ afterEach(() => {
   window.confirm?.mockRestore?.();
 });
 
-jest.mock('firebase/storage', () => ({
-  getDownloadURL: jest.fn(),
-  ref: jest.fn((_, path) => ({ path })),
+jest.mock('../services/documentService', () => ({
+  getSignedDocumentUrl: jest.fn(),
 }));
 
 const mockModal = {
@@ -209,6 +208,13 @@ jest.mock('../AppCore', () => {
     useRoute: () => ({ navigate: navigateMock }),
     useModal: () => mockModal,
     useAuth: () => ({ userId: 'u1' }),
+    useUser: () => ({
+      role: 'trainee',
+      loadingRole: false,
+      userProfile: { uid: 'u1' },
+      billing: { status: 'paid' },
+      loadingBilling: false,
+    }),
     storage: { app: {} },
     appId: 'test-app',
   };
@@ -276,7 +282,7 @@ describe('TraineeCaseViewPage', () => {
     saveProgress.mockResolvedValue();
     fetchRecipeProgress.mockResolvedValue({ recipeId: 'case-1', passedVersion: 0, passedAt: null });
     consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    getDownloadURL.mockReset();
+    getSignedDocumentUrl.mockReset();
     subscribeProgressForCases.mockImplementation((_params, onNext) => {
       if (typeof onNext === 'function') {
         onNext(new Map());
@@ -363,7 +369,7 @@ describe('TraineeCaseViewPage', () => {
   });
 
   test('fetches evidence for storage-backed documents on classification step', async () => {
-    getDownloadURL.mockResolvedValue('https://example.com/doc.pdf');
+    getSignedDocumentUrl.mockResolvedValue('https://example.com/doc.pdf');
     renderCase({
       caseName: 'Case',
       disbursements: [
@@ -379,7 +385,7 @@ describe('TraineeCaseViewPage', () => {
 
     await advanceToClassification();
     await flushAsync();
-    await waitFor(() => expect(getDownloadURL).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(getSignedDocumentUrl).toHaveBeenCalledTimes(1));
     expect(screen.getByRole('button', { name: /open in new tab/i })).toBeInTheDocument();
   });
 
@@ -400,7 +406,7 @@ describe('TraineeCaseViewPage', () => {
 
     await advanceToClassification();
     await flushAsync();
-    expect(getDownloadURL).not.toHaveBeenCalled();
+    expect(getSignedDocumentUrl).not.toHaveBeenCalled();
     expect(screen.getByText(/Now viewing: invoice\.pdf/i)).toBeInTheDocument();
   });
 
@@ -432,7 +438,7 @@ describe('TraineeCaseViewPage', () => {
   });
 
   test('shows storage error when evidence document fails to load', async () => {
-    getDownloadURL.mockRejectedValue({ code: 'storage/object-not-found' });
+    getSignedDocumentUrl.mockRejectedValue({ code: 'storage/object-not-found' });
     renderCase({
       caseName: 'Case',
       disbursements: [
@@ -470,7 +476,7 @@ describe('TraineeCaseViewPage', () => {
       ],
     });
 
-    getDownloadURL.mockResolvedValueOnce('https://example.com/generated/ref-b.pdf');
+    getSignedDocumentUrl.mockResolvedValueOnce('https://example.com/generated/ref-b.pdf');
 
     await advanceToClassification();
 
@@ -484,7 +490,14 @@ describe('TraineeCaseViewPage', () => {
 
     const storageDownloadButton = screen.getByRole('button', { name: /Reference B\.pdf/i });
     await userEvent.click(storageDownloadButton);
-    await waitFor(() => expect(getDownloadURL).toHaveBeenCalledWith({ path: 'artifacts/app/reference/ref-b.pdf' }));
+    await waitFor(() =>
+      expect(getSignedDocumentUrl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          caseId: 'case-123',
+          storagePath: 'artifacts/app/reference/ref-b.pdf',
+        })
+      )
+    );
     await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('https://example.com/generated/ref-b.pdf'));
   });
 

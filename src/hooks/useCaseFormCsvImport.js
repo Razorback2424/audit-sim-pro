@@ -6,6 +6,20 @@ export function createCaseFormCsvImportHandler({ disbursementCsvInputRef, setDis
     const file = event.target.files?.[0];
     if (!file) return;
 
+    const isValidIsoDate = (value) => {
+      if (!value) return false;
+      const trimmed = String(value).trim();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return false;
+      const [year, month, day] = trimmed.split('-').map((part) => Number(part));
+      if (!year || !month || !day) return false;
+      const date = new Date(Date.UTC(year, month - 1, day));
+      return (
+        date.getUTCFullYear() === year &&
+        date.getUTCMonth() === month - 1 &&
+        date.getUTCDate() === day
+      );
+    };
+
     const reader = new FileReader();
     reader.onload = (loadEvent) => {
       try {
@@ -32,22 +46,49 @@ export function createCaseFormCsvImportHandler({ disbursementCsvInputRef, setDis
           return;
         }
 
-        const imported = dataLines.map((line) => {
+        const errors = [];
+        const imported = dataLines.map((line, index) => {
           const cells = line.split(',');
+          const rowNumber = index + 2;
           const amountValue = cells[amountIdx]?.trim() || '';
-          const amountNumber = Number(amountValue) || 0;
+          const amountNumber = Number(amountValue);
+          const paymentId = cells[paymentIdIdx]?.trim() || '';
+          const paymentDate = cells[paymentDateIdx]?.trim() || '';
+
+          if (!paymentId) {
+            errors.push(`Row ${rowNumber}: missing PaymentID.`);
+          }
+          if (!amountValue || Number.isNaN(amountNumber)) {
+            errors.push(`Row ${rowNumber}: invalid Amount "${amountValue || 'blank'}".`);
+          }
+          if (!isValidIsoDate(paymentDate)) {
+            errors.push(`Row ${rowNumber}: invalid PaymentDate "${paymentDate || 'blank'}" (expected YYYY-MM-DD).`);
+          }
+
+          if (!paymentId || !amountValue || Number.isNaN(amountNumber) || !isValidIsoDate(paymentDate)) {
+            return null;
+          }
+
           return {
             _tempId: getUUID(),
-            paymentId: cells[paymentIdIdx]?.trim() || '',
+            paymentId,
             payee: cells[payeeIdx]?.trim() || '',
             amount: amountValue,
-            paymentDate: cells[paymentDateIdx]?.trim() || '',
+            paymentDate,
             answerKeyMode: 'single',
             answerKeySingleClassification: DEFAULT_ANSWER_KEY_CLASSIFICATION,
             answerKey: buildSingleAnswerKey(null, amountNumber, ''),
             mappings: [],
           };
-        });
+        }).filter(Boolean);
+
+        if (errors.length > 0) {
+          const preview = errors.slice(0, 5).join(' ');
+          const suffix = errors.length > 5 ? ` (+${errors.length - 5} more).` : '';
+          showModal(`CSV import failed. ${preview}${suffix}`, 'Import Error');
+          if (disbursementCsvInputRef.current) disbursementCsvInputRef.current.value = '';
+          return;
+        }
 
         if (imported.length === 0) {
           showModal('No rows found in CSV after header.', 'Import Error');
@@ -80,4 +121,3 @@ export function createCaseFormCsvImportHandler({ disbursementCsvInputRef, setDis
     reader.readAsText(file);
   };
 }
-

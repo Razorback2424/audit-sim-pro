@@ -1,4 +1,4 @@
-import { ref as storageRef, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
+import { ref as storageRef, uploadBytesResumable } from 'firebase/storage';
 import { storage, appId } from '../AppCore';
 import { createCase } from '../services/caseService';
 import { getCurrentUserOrgId } from '../services/userService';
@@ -27,6 +27,24 @@ const getArtifactFileRejection = (file, { unsupportedLabel, tooLargeLabel, suppo
     };
   }
   return null;
+};
+
+const normalizeStoragePath = (value) => {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('gs://')) {
+    return trimmed.replace(/^gs:\/\/[^/]+\//, '');
+  }
+  if (trimmed.startsWith('https://firebasestorage.googleapis.com/')) {
+    const match = trimmed.match(/^https:\/\/firebasestorage\.googleapis\.com\/v0\/b\/[^/]+\/o\/([^?]+)/);
+    return match ? decodeURIComponent(match[1]) : '';
+  }
+  if (trimmed.startsWith('https://storage.googleapis.com/')) {
+    const match = trimmed.match(/^https:\/\/storage\.googleapis\.com\/[^/]+\/(.+)$/);
+    return match ? match[1] : '';
+  }
+  return trimmed.replace(/^\/+/, '');
 };
 
 export function createCaseFormUploadHandlers({
@@ -166,11 +184,13 @@ export function createCaseFormUploadHandlers({
           downloadURL: '',
         };
       }
+      const fallbackStoragePath =
+        mappingItem.storagePath || normalizeStoragePath(mappingItem.downloadURL || '') || '';
       return {
         paymentId: mappingItem.paymentId,
         fileName: fallbackName,
-        storagePath: mappingItem.storagePath || '',
-        downloadURL: mappingItem.downloadURL || '',
+        storagePath: fallbackStoragePath,
+        downloadURL: '',
         contentType: mappingItem.contentType || '',
       };
     }
@@ -248,14 +268,13 @@ export function createCaseFormUploadHandlers({
           },
         };
         const task = uploadBytesResumable(fileRef, file, metadata);
-        const snapshot = await awaitResumable(task);
-        const downloadURL = await getDownloadURL(snapshot.ref);
-        ulog(uploadId, 'success:resumable', { downloadURL });
+        await awaitResumable(task);
+        ulog(uploadId, 'success:resumable', { storagePath: finalStoragePath });
         return {
           paymentId: mappingItem.paymentId,
           fileName: safeName,
           storagePath: finalStoragePath,
-          downloadURL,
+          downloadURL: '',
           contentType: desiredContentType || 'application/octet-stream',
         };
       } catch (error) {
@@ -403,7 +422,7 @@ export function createCaseFormUploadHandlers({
         ...mapping,
         fileName: result.fileName || mapping.fileName,
         storagePath: result.storagePath || mapping.storagePath,
-        downloadURL: result.downloadURL || mapping.downloadURL,
+        downloadURL: '',
         contentType: result.contentType || mapping.contentType,
         clientSideFile: null,
         uploadProgress: 100,
@@ -618,8 +637,9 @@ export function createCaseFormUploadHandlers({
       if (!fallbackName) {
         return null;
       }
-      const storagePath = (docItem.storagePath || '').trim();
-      const downloadURL = (docItem.downloadURL || '').trim();
+      const storagePath =
+        (docItem.storagePath || '').trim() ||
+        normalizeStoragePath(docItem.downloadURL || '');
       const generationSpec =
         docItem.generationSpec && typeof docItem.generationSpec === 'object'
           ? docItem.generationSpec
@@ -632,7 +652,6 @@ export function createCaseFormUploadHandlers({
       };
       if (docItem.generationSpecId) payload.generationSpecId = docItem.generationSpecId;
       if (storagePath) payload.storagePath = storagePath;
-      if (downloadURL) payload.downloadURL = downloadURL;
       if (docItem.contentType) payload.contentType = docItem.contentType;
       if (generationSpec) payload.generationSpec = generationSpec;
       return payload;
@@ -749,17 +768,16 @@ export function createCaseFormUploadHandlers({
           },
         };
         const task = uploadBytesResumable(fileRef, file, metadata);
-        const snapshot = await awaitResumable(task);
-        const downloadURL = await getDownloadURL(snapshot.ref);
-        ulog(uploadId, 'reference:success', { downloadURL });
+        await awaitResumable(task);
+        ulog(uploadId, 'reference:success', { storagePath: finalStoragePath });
         applyDocUpdate((doc) =>
-          doc._tempId === docItem._tempId ? { ...doc, uploadProgress: 100, downloadURL, uploadError: null } : doc
+          doc._tempId === docItem._tempId ? { ...doc, uploadProgress: 100, downloadURL: '', uploadError: null } : doc
         );
         return {
           _tempId: docItem._tempId,
           fileName: displayName,
           storagePath: finalStoragePath,
-          downloadURL,
+          downloadURL: '',
           contentType: desiredContentType || 'application/octet-stream',
           type: docItem.type,
           confirmedBalance: docItem.confirmedBalance,
@@ -859,16 +877,17 @@ export function createCaseFormUploadHandlers({
 
     if (!docItem.clientSideFile) {
       const fileName = (docItem.fileName || '').trim();
-      const storagePath = (docItem.storagePath || '').trim();
-      const downloadURL = (docItem.downloadURL || '').trim();
-      if (!fileName || (!storagePath && !downloadURL)) {
+      const storagePath =
+        (docItem.storagePath || '').trim() ||
+        normalizeStoragePath(docItem.downloadURL || '');
+      if (!fileName || !storagePath) {
         ulog('highlight:skip:no-file', { disbursementTempId, fileName });
         return { disbursementTempId, payload: null };
       }
       const payload = {
         fileName,
         storagePath,
-        downloadURL,
+        downloadURL: '',
         contentType: docItem.contentType || '',
       };
       return { disbursementTempId, payload };
@@ -984,15 +1003,14 @@ export function createCaseFormUploadHandlers({
           },
         };
         const task = uploadBytesResumable(fileRef, file, metadata);
-        const snapshot = await awaitResumable(task);
-        const downloadURL = await getDownloadURL(snapshot.ref);
-        ulog(uploadId, 'highlight:success', { downloadURL });
+        await awaitResumable(task);
+        ulog(uploadId, 'highlight:success', { storagePath: finalStoragePath });
         return {
           disbursementTempId,
           payload: {
             fileName: displayName,
             storagePath: finalStoragePath,
-            downloadURL,
+            downloadURL: '',
             contentType: desiredContentType || 'application/octet-stream',
           },
         };

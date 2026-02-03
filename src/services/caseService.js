@@ -372,6 +372,40 @@ const normalizeReferenceDocuments = (documents = []) => {
   return normalized;
 };
 
+const stripDownloadUrlFromDoc = (doc) => {
+  if (!doc || typeof doc !== 'object') return doc;
+  const { downloadURL: _ignoredDownloadUrl, ...rest } = doc;
+  return rest;
+};
+
+const stripDownloadUrlsFromCaseData = (caseData) => {
+  if (!caseData || typeof caseData !== 'object') return caseData;
+  const next = { ...caseData };
+  if (Array.isArray(next.invoiceMappings)) {
+    next.invoiceMappings = next.invoiceMappings.map((doc) => stripDownloadUrlFromDoc(doc));
+  }
+  if (Array.isArray(next.referenceDocuments)) {
+    next.referenceDocuments = next.referenceDocuments.map((doc) => stripDownloadUrlFromDoc(doc));
+  }
+  if (Array.isArray(next.cashArtifacts)) {
+    next.cashArtifacts = next.cashArtifacts.map((doc) => stripDownloadUrlFromDoc(doc));
+  }
+  if (Array.isArray(next.auditItems)) {
+    next.auditItems = next.auditItems.map((item) => {
+      if (!item || typeof item !== 'object') return item;
+      const cleaned = stripDownloadUrlFromDoc(item);
+      if (Array.isArray(cleaned.supportingDocuments)) {
+        cleaned.supportingDocuments = cleaned.supportingDocuments.map((doc) => stripDownloadUrlFromDoc(doc));
+      }
+      if (cleaned.highlightedDocument && typeof cleaned.highlightedDocument === 'object') {
+        cleaned.highlightedDocument = stripDownloadUrlFromDoc(cleaned.highlightedDocument);
+      }
+      return cleaned;
+    });
+  }
+  return next;
+};
+
 const groupInvoiceMappings = (mappings = []) => {
   const groups = new Map();
   mappings.forEach((mapping) => {
@@ -725,9 +759,14 @@ const buildAdminCasesQueryParts = ({
 const toTimestampOrNull = (value) => {
   if (value === null || value === undefined) return null;
   if (value instanceof Timestamp) return value;
-  if (typeof value?.seconds === 'number' && typeof value?.nanoseconds === 'number') {
+  if (
+    (typeof value?.seconds === 'number' || typeof value?._seconds === 'number') &&
+    (typeof value?.nanoseconds === 'number' || typeof value?._nanoseconds === 'number')
+  ) {
     try {
-      return new Timestamp(value.seconds, value.nanoseconds);
+      const seconds = typeof value.seconds === 'number' ? value.seconds : value._seconds;
+      const nanoseconds = typeof value.nanoseconds === 'number' ? value.nanoseconds : value._nanoseconds;
+      return new Timestamp(seconds, nanoseconds);
     } catch (err) {
       /* ignore malformed timestamp */
     }
@@ -739,6 +778,16 @@ const toTimestampOrNull = (value) => {
     }
   }
   return null;
+};
+
+const normalizeCaseTemporalFields = (raw) => {
+  if (!raw || typeof raw !== 'object') return raw;
+  const sanitized = { ...raw };
+  if ('opensAt' in sanitized) sanitized.opensAt = toTimestampOrNull(sanitized.opensAt);
+  if ('dueAt' in sanitized) sanitized.dueAt = toTimestampOrNull(sanitized.dueAt);
+  if ('createdAt' in sanitized) sanitized.createdAt = toTimestampOrNull(sanitized.createdAt);
+  if ('updatedAt' in sanitized) sanitized.updatedAt = toTimestampOrNull(sanitized.updatedAt);
+  return sanitized;
 };
 
 const sanitizeCaseWriteData = (rawData = {}, { isCreate = false } = {}) => {
@@ -824,7 +873,8 @@ const sanitizeCaseWriteData = (rawData = {}, { isCreate = false } = {}) => {
     updatedAt: serverTimestamp(),
   });
 
-  return { caseData: stripUndefinedDeep(sanitized), caseKeysDoc };
+  const strippedCaseData = stripDownloadUrlsFromCaseData(stripUndefinedDeep(sanitized));
+  return { caseData: strippedCaseData, caseKeysDoc };
 };
 
 const buildCaseRepairPatch = (data = {}) => {
@@ -1252,15 +1302,57 @@ const toMillis = (timestamp) => {
   return null;
 };
 
+const normalizePaymentId = (value) => {
+  if (value === null || value === undefined) return '';
+  return String(value).trim();
+};
+
+export const getCaseMappingHealth = (caseData) => {
+  const disbursements = Array.isArray(caseData?.disbursements) ? caseData.disbursements : [];
+  const totalDisbursements = disbursements.length;
+  if (totalDisbursements === 0) {
+    return {
+      totalDisbursements: 0,
+      mappedDisbursements: 0,
+      unmappedDisbursements: 0,
+      mappedPercent: 0,
+    };
+  }
+
+  const mappedPayments = new Set(
+    (Array.isArray(caseData?.invoiceMappings) ? caseData.invoiceMappings : [])
+      .map((mapping) => normalizePaymentId(mapping?.paymentId))
+      .filter(Boolean)
+  );
+
+  let mappedDisbursements = 0;
+
+  disbursements.forEach((item) => {
+    const normalizedPaymentId = normalizePaymentId(item?.paymentId);
+    const hasSupportingDocs = Array.isArray(item?.supportingDocuments) && item.supportingDocuments.length > 0;
+    const isMapped = normalizedPaymentId ? mappedPayments.has(normalizedPaymentId) : false;
+    if (isMapped || hasSupportingDocs) {
+      mappedDisbursements += 1;
+    }
+  });
+
+  const unmappedDisbursements = Math.max(totalDisbursements - mappedDisbursements, 0);
+  const mappedPercent = totalDisbursements > 0
+    ? Math.round((mappedDisbursements / totalDisbursements) * 100)
+    : 0;
+
+  return {
+    totalDisbursements,
+    mappedDisbursements,
+    unmappedDisbursements,
+    mappedPercent,
+  };
+};
+
 const computeDisbursementAlerts = (caseData) => {
   const alerts = [];
   const disbursements = Array.isArray(caseData.disbursements) ? caseData.disbursements : [];
   if (disbursements.length === 0) return alerts;
-
-  const normalizePaymentId = (value) => {
-    if (value === null || value === undefined) return '';
-    return String(value).trim();
-  };
 
   const caseId = caseData?.id;
   const caseName = caseData?.caseName || caseData?.title || 'Untitled case';
@@ -1380,9 +1472,8 @@ export const listStudentCases = async ({
   appId,
   uid,
 }) => {
-  const q = buildStudentCasesQuery({ appId, uid, pageSize, cursor, includeOpensAtGate, statusFilter, sortBy });
   if (process.env.NODE_ENV !== 'production') {
-    console.info('[caseService] listStudentCases', {
+    console.info('[caseService] listStudentCases (callable)', {
       appId,
       uid,
       pageSize,
@@ -1392,18 +1483,44 @@ export const listStudentCases = async ({
       statusFilter,
     });
   }
-  const snap = await getDocs(q);
-  const items = snap.docs.map((docSnap) => toNormalizedCaseModel(docSnap.id, docSnap.data()));
-  const lastDoc = snap.docs[snap.docs.length - 1];
 
-  let nextCursor = null;
-  if (lastDoc) {
-    const data = lastDoc.data();
-    nextCursor = {
-      dueAt: data.dueAt ?? null,
-      title: data.title ?? data.caseName ?? '',
-    };
-  }
+  const listStudentCasesCallable = httpsCallable(functions, 'listStudentCases');
+  const result = await listStudentCasesCallable({
+    appId,
+    uid,
+    pageSize,
+    cursor,
+    includeOpensAtGate,
+    statusFilter,
+    sortBy,
+  });
+
+  const payload = result?.data || {};
+  const rawItems = Array.isArray(payload?.items) ? payload.items : [];
+  const items = rawItems
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return null;
+      if (entry.data && typeof entry.data === 'object' && entry.id) {
+        const normalized = normalizeCaseTemporalFields(entry.data);
+        return toNormalizedCaseModel(entry.id, normalized);
+      }
+      if (entry.id) {
+        const { id, ...rest } = entry;
+        const normalized = normalizeCaseTemporalFields(rest);
+        return toNormalizedCaseModel(id, normalized);
+      }
+      return null;
+    })
+    .filter(Boolean);
+
+  const rawCursor = payload?.nextCursor;
+  const nextCursor =
+    rawCursor && typeof rawCursor === 'object'
+      ? {
+          dueAt: rawCursor.dueAt ?? null,
+          title: toTrimmedString(rawCursor.title ?? ''),
+        }
+      : null;
 
   return { items, nextCursor };
 };

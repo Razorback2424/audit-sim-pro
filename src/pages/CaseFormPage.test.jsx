@@ -91,8 +91,7 @@ describe('mergeDisbursementDocuments', () => {
         _tempId: '1',
         paymentId: 'p1',
         storagePath: 'artifacts/app/case_documents/case/old.pdf',
-        fileName: 'old.pdf',
-        downloadURL: 'https://example.com/old.pdf'
+        fileName: 'old.pdf'
       }
     ];
     const result = mergeDisbursementDocuments(disbursements, []);
@@ -116,19 +115,16 @@ describe('mergeDisbursementDocuments', () => {
       {
         paymentId: 'p1',
         storagePath: 'artifacts/app/case_documents/case/new.pdf',
-        fileName: 'new.pdf',
-        downloadURL: 'https://example.com/new.pdf'
+        fileName: 'new.pdf'
       }
     ];
     const result = mergeDisbursementDocuments(disbursements, invoiceMappings);
     expect(result[0].storagePath).toBe('artifacts/app/case_documents/case/new.pdf');
     expect(result[0].fileName).toBe('new.pdf');
-    expect(result[0].downloadURL).toBe('https://example.com/new.pdf');
     expect(result[0].supportingDocuments).toEqual([
       {
         storagePath: 'artifacts/app/case_documents/case/new.pdf',
         fileName: 'new.pdf',
-        downloadURL: 'https://example.com/new.pdf',
         contentType: ''
       }
     ]);
@@ -145,8 +141,7 @@ describe('mergeDisbursementDocuments', () => {
         supportingDocuments: [
           {
             storagePath: 'artifacts/app/case_documents/case/original.pdf',
-            fileName: 'original.pdf',
-            downloadURL: 'https://example.com/original.pdf'
+            fileName: 'original.pdf'
           }
         ]
       }
@@ -155,14 +150,12 @@ describe('mergeDisbursementDocuments', () => {
       {
         paymentId: 'p1',
         storagePath: 'artifacts/app/case_documents/case/new.pdf',
-        fileName: 'new.pdf',
-        downloadURL: 'https://example.com/new.pdf'
+        fileName: 'new.pdf'
       },
       {
         paymentId: 'p1',
         storagePath: 'artifacts/app/case_documents/case/extra.pdf',
-        fileName: 'extra.pdf',
-        downloadURL: 'https://example.com/extra.pdf'
+        fileName: 'extra.pdf'
       }
     ];
     const result = mergeDisbursementDocuments(disbursements, invoiceMappings);

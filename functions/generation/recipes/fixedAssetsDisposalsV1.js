@@ -1,6 +1,6 @@
 const { fixedAssetsCoreV1 } = require('./fixedAssetsCoreV1');
-const { AUDIT_AREAS } = require('../../models/caseConstants');
-const { initialInstruction } = require('../../constants/caseFormDefaults');
+const { AUDIT_AREAS } = require('../caseConstants');
+const { initialInstruction } = require('../caseFormDefaults');
 
 const fixedAssetsDisposalsV1 = {
   id: 'case.fixed-assets.disposals.basic.v1',

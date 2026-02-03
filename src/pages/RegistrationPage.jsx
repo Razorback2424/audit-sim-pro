@@ -14,7 +14,7 @@ const RegistrationPage = () => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
-  const [role, setSelectedRole] = useState('admin'); // allow choosing owner/admin/trainee for testing
+  const [role] = useState('trainee');
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const plan = typeof query?.plan === 'string' ? query.plan.trim().toLowerCase() : '';
@@ -25,11 +25,7 @@ const RegistrationPage = () => {
     if (emailRef.current) emailRef.current.focus();
   }, []);
 
-  useEffect(() => {
-    if (plan === 'individual') {
-      setSelectedRole('trainee');
-    }
-  }, [plan]);
+  // Role is fixed to trainee for self-serve registrations.
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -46,8 +42,8 @@ const RegistrationPage = () => {
       showModal?.('Passwords do not match.', 'Confirmation mismatch');
       return;
     }
-    if (role !== 'admin' && role !== 'owner' && role !== 'trainee') {
-      showModal?.('Please choose a role.', 'Missing role');
+    if (role !== 'trainee') {
+      showModal?.('Invalid role selection. Please try again.', 'Registration Error');
       return;
     }
 
@@ -103,7 +99,7 @@ const RegistrationPage = () => {
       <p className="text-sm text-gray-500 mb-6">
         {plan === 'individual'
           ? 'Register to unlock individual access.'
-          : 'Register with email and password, and choose your role.'}
+          : 'Register with email and password to start your trainee account.'}
       </p>
 
       <form onSubmit={handleSubmit} className="space-y-4" noValidate>
@@ -162,40 +158,8 @@ const RegistrationPage = () => {
         </div>
 
         {plan === 'individual' ? null : (
-          <div>
-            <span className="block text-xs font-medium text-gray-700 mb-1">Choose role</span>
-            <div className="space-y-2">
-              <label className="flex items-center gap-2 text-sm text-gray-800">
-                <input
-                  type="radio"
-                  name="role"
-                  value="owner"
-                  checked={role === 'owner'}
-                  onChange={() => setSelectedRole('owner')}
-                />
-                <span>Owner</span>
-              </label>
-              <label className="flex items-center gap-2 text-sm text-gray-800">
-                <input
-                  type="radio"
-                  name="role"
-                  value="admin"
-                  checked={role === 'admin'}
-                  onChange={() => setSelectedRole('admin')}
-                />
-                <span>Administrator / Instructor</span>
-              </label>
-              <label className="flex items-center gap-2 text-sm text-gray-800">
-                <input
-                  type="radio"
-                  name="role"
-                  value="trainee"
-                  checked={role === 'trainee'}
-                  onChange={() => setSelectedRole('trainee')}
-                />
-                <span>Auditor Trainee</span>
-              </label>
-            </div>
+          <div className="rounded-md bg-blue-50 border border-blue-100 px-3 py-2 text-xs text-blue-700">
+            New accounts start as trainee access. Contact support for instructor/admin setup.
           </div>
         )}
 

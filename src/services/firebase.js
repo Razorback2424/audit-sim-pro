@@ -3,6 +3,7 @@ import { getAuth } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 import { getFunctions } from 'firebase/functions';
 import { getStorage } from 'firebase/storage';
+import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check';
 
 /* global __firebase_config, __app_id */
 
@@ -46,6 +47,28 @@ export const appId = typeof __app_id !== 'undefined' ? __app_id : window.__app_i
 export const firebaseApp = initializeApp(firebaseConfig);
 export const auth = getAuth(firebaseApp);
 export const db = getFirestore(firebaseApp);
+const appCheckSiteKey =
+  process.env.REACT_APP_APPCHECK_SITE_KEY ||
+  firebaseConfig.appCheckSiteKey ||
+  '';
+const appCheckDebugToken = process.env.REACT_APP_APPCHECK_DEBUG_TOKEN || '';
+
+try {
+  if (appCheckDebugToken && typeof window !== 'undefined') {
+    window.FIREBASE_APPCHECK_DEBUG_TOKEN =
+      appCheckDebugToken === 'true' ? true : appCheckDebugToken;
+  }
+  if (appCheckSiteKey) {
+    initializeAppCheck(firebaseApp, {
+      provider: new ReCaptchaV3Provider(appCheckSiteKey),
+      isTokenAutoRefreshEnabled: true,
+    });
+  } else if (process.env.NODE_ENV === 'production') {
+    console.warn('[app-check] Missing REACT_APP_APPCHECK_SITE_KEY; App Check not initialized.');
+  }
+} catch (err) {
+  console.error('[app-check] Failed to initialize App Check:', err);
+}
 const functionsRegion =
   process.env.REACT_APP_FUNCTIONS_REGION ||
   firebaseConfig.functionsRegion ||
@@ -97,6 +120,7 @@ export const FirestorePaths = {
   CASE_DOCUMENT: (caseId) => `artifacts/${appId}/public/data/cases/${caseId}`,
   RECIPES_COLLECTION: () => `artifacts/${appId}/public/data/recipes`,
   RECIPE_DOCUMENT: (recipeId) => `artifacts/${appId}/public/data/recipes/${recipeId}`,
+  DEMO_CONFIG_DOCUMENT: (appIdValue = appId) => `artifacts/${appIdValue}/public/config/demo/config`,
   // Keys are stored under /private/data/case_keys (keep doc/collection parity for Firestore).
   CASE_KEYS_COLLECTION: () => `artifacts/${appId}/private/data/case_keys`,
   CASE_KEYS_DOCUMENT: (caseId) => `artifacts/${appId}/private/data/case_keys/${caseId}`,
@@ -108,7 +132,7 @@ export const FirestorePaths = {
   USER_CASE_SUBMISSION: (userId, caseId) =>
     `artifacts/${appId}/users/${userId}/caseSubmissions/${caseId}`,
   BILLING_DOCUMENT: (appIdValue, userId) =>
-    `artifacts/${appIdValue || appId}/users/${userId}/billing`,
+    `artifacts/${appIdValue || appId}/users/${userId}/billing/status`,
   ROLE_DOCUMENT: (userId) => `roles/${userId}`,
   STUDENT_PROGRESS_COLLECTION: (appIdValue, uid) =>
     `artifacts/${appIdValue}/student_progress/${uid}/cases`,

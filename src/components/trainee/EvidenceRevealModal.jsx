@@ -1,23 +1,13 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { X, Loader2 } from 'lucide-react';
-import { ref as storageRef, getDownloadURL } from 'firebase/storage';
-import { storage } from '../../AppCore';
-
-const resolveDocumentUrl = async (doc) => {
-  if (!doc) return '';
-  if (doc.downloadURL) return doc.downloadURL;
-  if (doc.storagePath) {
-    const fileRef = storageRef(storage, doc.storagePath);
-    return await getDownloadURL(fileRef);
-  }
-  return '';
-};
+import { getSignedDocumentUrl } from '../../services/documentService';
 
 export default function EvidenceRevealModal({
   isOpen,
   onClose,
   cleanDocument,
   highlightedDocument,
+  caseId,
   setupCaption = 'Start with the clean document, then toggle to the highlighted version to see the exact evidence that makes this an exception.',
   revealCaption = 'This highlighted version shows the specific evidence that makes this an exception.',
   title = 'Evidence Reveal',
@@ -27,6 +17,19 @@ export default function EvidenceRevealModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [activeView, setActiveView] = useState('clean');
+
+  const resolveDocumentUrl = useCallback(
+    async (doc) => {
+      if (!doc || (!doc.storagePath && !doc.downloadURL)) return '';
+      if (!caseId) throw new Error('Case ID is required to open documents.');
+      return getSignedDocumentUrl({
+        caseId,
+        storagePath: doc.storagePath,
+        downloadURL: doc.downloadURL,
+      });
+    },
+    [caseId]
+  );
 
   useEffect(() => {
     if (!isOpen) {
@@ -62,7 +65,7 @@ export default function EvidenceRevealModal({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, cleanDocument, highlightedDocument]);
+  }, [isOpen, cleanDocument, highlightedDocument, resolveDocumentUrl]);
 
   const viewerCaption = useMemo(
     () => (activeView === 'highlighted' ? revealCaption : setupCaption),

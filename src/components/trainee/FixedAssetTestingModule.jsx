@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Timestamp } from 'firebase/firestore';
-import { getDownloadURL, ref as storageRef } from 'firebase/storage';
-import { appId, storage } from '../../AppCore';
+import { appId } from '../../AppCore';
 import { saveSubmission, subscribeToSubmission } from '../../services/submissionService';
 import { saveProgress, subscribeProgressForCases } from '../../services/progressService';
+import { getSignedDocumentUrl } from '../../services/documentService';
 import InstructionView from '../InstructionView';
 import FixedAssetSelectionStep from './steps/FixedAssetSelectionStep';
 import FixedAssetScopingStep from './steps/FixedAssetScopingStep';
@@ -239,6 +239,14 @@ export default function FixedAssetTestingModule({ caseId, caseData, userId, navi
   const lastLocalChangeRef = useRef(0);
   const progressSaveTimeoutRef = useRef(null);
 
+  const requestSignedUrl = useCallback(
+    async ({ storagePath, downloadURL }) => {
+      if (!caseId) throw new Error('Case ID is required to open documents.');
+      return getSignedDocumentUrl({ caseId, storagePath, downloadURL });
+    },
+    [caseId]
+  );
+
   const fixedAssetSummary = useMemo(
     () => (Array.isArray(caseData?.faSummary) ? caseData.faSummary : []),
     [caseData]
@@ -419,16 +427,15 @@ export default function FixedAssetTestingModule({ caseId, caseData, userId, navi
       setActiveEvidenceLoading(true);
       setActiveEvidenceError('');
       try {
-        if (selected.downloadURL) {
-          setActiveEvidenceUrl(selected.downloadURL);
+        if (!selected.storagePath && !selected.downloadURL) {
+          setActiveEvidenceUrl('');
           return;
         }
-        if (selected.storagePath) {
-          const url = await getDownloadURL(storageRef(storage, selected.storagePath));
-          setActiveEvidenceUrl(url);
-          return;
-        }
-        setActiveEvidenceUrl('');
+        const url = await requestSignedUrl({
+          storagePath: selected.storagePath,
+          downloadURL: selected.downloadURL,
+        });
+        setActiveEvidenceUrl(url);
       } catch (error) {
         console.error('[FixedAssetTesting] Failed to resolve evidence URL', error);
         setActiveEvidenceUrl('');
@@ -439,7 +446,7 @@ export default function FixedAssetTestingModule({ caseId, caseData, userId, navi
     };
 
     resolveEvidence();
-  }, [activeEvidenceId, selectedEvidenceItems]);
+  }, [activeEvidenceId, selectedEvidenceItems, requestSignedUrl]);
 
   useEffect(() => {
     if (isLocked) return;
@@ -560,17 +567,14 @@ export default function FixedAssetTestingModule({ caseId, caseData, userId, navi
       return;
     }
 
-    if (docInfo.downloadURL) {
-      window.open(docInfo.downloadURL, '_blank');
-      return;
-    }
-
     try {
-      const fileRef = storageRef(storage, docInfo.storagePath);
-      const url = await getDownloadURL(fileRef);
+      const url = await requestSignedUrl({
+        storagePath: docInfo.storagePath,
+        downloadURL: docInfo.downloadURL,
+      });
       window.open(url, '_blank');
     } catch (error) {
-      console.error('Error getting download URL:', error);
+      console.error('Error getting signed URL:', error);
       showModal?.('Unable to open the document. Please try again.', 'Error');
     }
   };

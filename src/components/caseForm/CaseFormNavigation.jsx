@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { CheckCircle2, AlertTriangle } from 'lucide-react';
 import StepIntro from './StepIntro';
+import { getSignedDocumentUrl } from '../../services/documentService';
 
 function CaseFormStepNav({ steps, activeStep, onStepChange, disabled }) {
   const progressPct = Math.round(((activeStep + 1) / steps.length) * 100);
@@ -166,7 +167,21 @@ function ReviewStep({
   generationReview = null,
   onQueueGeneration,
   isQueueing = false,
+  caseId,
 }) {
+  const handleOpenDoc = async (doc) => {
+    if (!caseId || !doc || (!doc.storagePath && !doc.downloadURL)) return;
+    try {
+      const url = await getSignedDocumentUrl({
+        caseId,
+        storagePath: doc.storagePath,
+        downloadURL: doc.downloadURL,
+      });
+      window.open(url, '_blank');
+    } catch (error) {
+      console.error('[CaseFormNavigation] Failed to open document', error);
+    }
+  };
   const generationTotal = summaryData.generationTotalCount || 0;
   const generationPending = summaryData.generationPendingCount || 0;
   const generationReady = Math.max(0, generationTotal - generationPending);
@@ -376,15 +391,14 @@ function ReviewStep({
                             {invoice.templateId}
                           </span>
                         ) : null}
-                        {invoice.downloadURL ? (
-                          <a
-                            href={invoice.downloadURL}
-                            target="_blank"
-                            rel="noreferrer"
+                        {caseId && (invoice.storagePath || invoice.downloadURL) ? (
+                          <button
+                            type="button"
+                            onClick={() => handleOpenDoc(invoice)}
                             className="text-blue-600 underline"
                           >
                             View PDF
-                          </a>
+                          </button>
                         ) : invoice.storagePath ? (
                           <span className="text-gray-500">Stored in Firebase</span>
                         ) : (
@@ -401,15 +415,14 @@ function ReviewStep({
                 {generationReview.apAgingDoc ? (
                   <div className="mt-2 flex items-center justify-between text-xs text-gray-600">
                     <span>{generationReview.apAgingDoc.fileName}</span>
-                    {generationReview.apAgingDoc.downloadURL ? (
-                      <a
-                        href={generationReview.apAgingDoc.downloadURL}
-                        target="_blank"
-                        rel="noreferrer"
+                    {caseId && (generationReview.apAgingDoc.storagePath || generationReview.apAgingDoc.downloadURL) ? (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenDoc(generationReview.apAgingDoc)}
                         className="text-blue-600 underline"
                       >
                         View PDF
-                      </a>
+                      </button>
                     ) : generationReview.apAgingDoc.storagePath ? (
                       <span className="text-gray-500">Stored in Firebase</span>
                     ) : (

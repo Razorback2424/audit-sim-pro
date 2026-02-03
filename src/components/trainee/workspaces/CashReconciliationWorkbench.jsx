@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Button, Input, Textarea } from '../../../AppCore';
 import { currencyFormatter } from '../../../utils/formatters';
+import { getSignedDocumentUrl } from '../../../services/documentService';
 
 const STATUS_OPTIONS = [
   { value: 'cleared', label: 'Cleared (matched in cutoff)' },
@@ -65,7 +66,44 @@ const getLedgerValidation = ({ statusEntry, linkedBankId }) => {
   };
 };
 
-function EvidenceDocumentViewer({ artifact, title }) {
+function EvidenceDocumentViewer({ artifact, title, caseId }) {
+  const [resolvedUrl, setResolvedUrl] = useState('');
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!artifact || (!artifact.storagePath && !artifact.downloadURL) || !caseId) {
+      setResolvedUrl('');
+      setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+    setLoading(true);
+    getSignedDocumentUrl({
+      caseId,
+      storagePath: artifact.storagePath,
+      downloadURL: artifact.downloadURL,
+    })
+      .then((url) => {
+        if (cancelled) return;
+        setResolvedUrl(url || '');
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.warn('[CashReconciliationWorkbench] Failed to resolve artifact URL', err);
+        setResolvedUrl('');
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [artifact, caseId]);
+
   if (!artifact) {
     return (
       <div className="rounded-md border border-dashed border-gray-300 bg-gray-50 px-4 py-6 text-center text-sm text-gray-600">
@@ -73,7 +111,7 @@ function EvidenceDocumentViewer({ artifact, title }) {
       </div>
     );
   }
-  const url = artifact.downloadURL || '';
+  const url = resolvedUrl;
   return (
     <div className="rounded-md border border-gray-200 bg-white shadow-sm">
       <div className="flex items-center justify-between border-b border-gray-100 px-4 py-2">
@@ -88,7 +126,9 @@ function EvidenceDocumentViewer({ artifact, title }) {
         ) : null}
       </div>
       <div className="min-h-[320px] bg-gray-50">
-        {url ? (
+        {loading ? (
+          <div className="px-4 py-6 text-sm text-gray-600">Loading document…</div>
+        ) : url ? (
           <iframe title={title} src={url} className="h-[320px] w-full rounded-b-md" />
         ) : (
           <div className="px-4 py-6 text-sm text-gray-600">No download URL provided.</div>
@@ -553,6 +593,7 @@ export default function CashReconciliationWorkbench({
   cutoffItems = [],
   artifacts = [],
   cashContext = {},
+  caseId,
   classificationAmounts = {},
   links = {},
   adjustments = [],
@@ -789,10 +830,10 @@ export default function CashReconciliationWorkbench({
             </div>
             <div className="p-4">
               {activeTab === TAB_KEYS.YEAR_END ? (
-                <EvidenceDocumentViewer artifact={yearEndArtifact} title="Year-End Bank Statement" />
+                <EvidenceDocumentViewer artifact={yearEndArtifact} title="Year-End Bank Statement" caseId={caseId} />
               ) : null}
               {activeTab === TAB_KEYS.CONFIRMATION ? (
-                <EvidenceDocumentViewer artifact={confirmationArtifact} title="Bank Confirmation" />
+                <EvidenceDocumentViewer artifact={confirmationArtifact} title="Bank Confirmation" caseId={caseId} />
               ) : null}
               {activeTab === TAB_KEYS.CUTOFF ? (
                 <div className="grid gap-3 lg:grid-cols-2">
@@ -806,7 +847,7 @@ export default function CashReconciliationWorkbench({
                     onPropose={(bankItem) => handlePropose(bankItem)}
                     isLocked={isLocked}
                   />
-                  <EvidenceDocumentViewer artifact={cutoffArtifact} title="Cutoff Statement PDF" />
+                  <EvidenceDocumentViewer artifact={cutoffArtifact} title="Cutoff Statement PDF" caseId={caseId} />
                 </div>
               ) : null}
             </div>

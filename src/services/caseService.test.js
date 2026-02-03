@@ -95,7 +95,6 @@ describe('caseService', () => {
           paymentDate: '2024-01-01',
           highlightedDocument: {
             storagePath: 'artifacts/app/case_highlight/case-1/highlight.pdf',
-            downloadURL: 'https://example.com/highlight.pdf',
             fileName: 'highlight.pdf',
             contentType: 'application/pdf',
           },
@@ -107,7 +106,6 @@ describe('caseService', () => {
     expect(payload.auditItems).toHaveLength(1);
     expect(payload.auditItems[0].highlightedDocument).toEqual({
       storagePath: 'artifacts/app/case_highlight/case-1/highlight.pdf',
-      downloadURL: 'https://example.com/highlight.pdf',
       fileName: 'highlight.pdf',
       contentType: 'application/pdf',
     });
