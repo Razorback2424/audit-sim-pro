@@ -290,14 +290,10 @@ service cloud.firestore {
 
     // Role documents store whether a user is an admin, owner, or trainee
     match /roles/{userId} {
-      // Allow users to read their own role document (for display/initial setup)
-      allow read: if request.auth != null && request.auth.uid == userId;
-      // Allow a user to create their own role document as trainee only.
-      allow create: if request.auth != null &&
-        request.auth.uid == userId &&
-        request.resource.data.role == 'trainee';
-      // Role updates should primarily be handled by a trusted backend service (e.g., Cloud Function)
-      allow update: if request.auth != null && isAdmin(); // Still allow admin client-side if needed, but custom claims are source of truth
+      // Allow users to read their own role document (optional for UI display).
+      allow read: if request.auth != null && (request.auth.uid == userId || isAdmin());
+      // Client writes are disallowed; roles are managed by backend admin tooling only.
+      allow create, update, delete: if false;
     }
 
     // Case documents accessible to trainees if authorized

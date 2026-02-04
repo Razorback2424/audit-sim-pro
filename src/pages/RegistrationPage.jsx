@@ -1,20 +1,18 @@
 
 
 import React, { useEffect, useRef, useState } from 'react';
-import { useAuth, useUser, useModal, Input, Button, useRoute } from '../AppCore';
+import { useAuth, useModal, Input, Button, useRoute } from '../AppCore';
 import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
 import { trackAnalyticsEvent } from '../services/analyticsService';
 
 const RegistrationPage = () => {
   const { currentUser } = useAuth();
-  const { setRole } = useUser();
   const { showModal } = useModal();
   const { navigate, route, query } = useRoute();
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
-  const [role] = useState('trainee');
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const plan = typeof query?.plan === 'string' ? query.plan.trim().toLowerCase() : '';
@@ -24,8 +22,6 @@ const RegistrationPage = () => {
   useEffect(() => {
     if (emailRef.current) emailRef.current.focus();
   }, []);
-
-  // Role is fixed to trainee for self-serve registrations.
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -42,18 +38,10 @@ const RegistrationPage = () => {
       showModal?.('Passwords do not match.', 'Confirmation mismatch');
       return;
     }
-    if (role !== 'trainee') {
-      showModal?.('Invalid role selection. Please try again.', 'Registration Error');
-      return;
-    }
-
     setSubmitting(true);
     try {
       const auth = getAuth();
       const cred = await createUserWithEmailAndPassword(auth, trimmedEmail, password);
-      const user = cred.user;
-      // Create the role document via existing helper (writes to Firestore: roles/{uid})
-      await setRole(role, user);
       showModal?.('Account created successfully. You are now signed in.', 'Success');
       // Respect any ?next=... redirect in the current hash route
       const [, queryString] = (route || '').split('?');

@@ -3,22 +3,12 @@ import {
   doc,
   getDoc,
   onSnapshot,
-  serverTimestamp,
-  setDoc,
 } from 'firebase/firestore';
 import { useAuth } from './AuthContext';
-import { useModal } from './ModalContext';
 import { cacheRole, getCachedRole } from '../services/roleService';
-import { fetchUserProfile, upsertUserProfile, ensureOrgIdForUser } from '../services/userService';
+import { fetchUserProfile, ensureOrgIdForUser } from '../services/userService';
 import { fetchUserBilling, subscribeUserBilling } from '../services/billingService';
 import { db, FirestorePaths } from '../services/firebase';
-
-const ROLE_PRIORITY = {
-  trainee: 1,
-  instructor: 2,
-  admin: 3,
-  owner: 4,
-};
 
 const DEBUG_LOGS = process.env.REACT_APP_DEBUG_LOGS === 'true';
 
@@ -28,29 +18,16 @@ const normalizeRoleValue = (value) => {
   return trimmed ? trimmed.toLowerCase() : null;
 };
 
-const shouldUpdateRoleDoc = (existingRole, incomingRole) => {
-  const normalizedExisting = normalizeRoleValue(existingRole);
-  const normalizedIncoming = normalizeRoleValue(incomingRole);
-  if (!normalizedIncoming) return false;
-  if (!normalizedExisting) return true;
-  if (normalizedExisting === normalizedIncoming) return false;
-  const existingRank = ROLE_PRIORITY[normalizedExisting] ?? 0;
-  const incomingRank = ROLE_PRIORITY[normalizedIncoming] ?? 0;
-  return incomingRank >= existingRank;
-};
-
 const UserContext = createContext({
   role: null,
   loadingRole: true,
   userProfile: null,
   billing: null,
   loadingBilling: true,
-  setRole: () => {},
 });
 
 export const UserProvider = ({ children }) => {
   const { currentUser } = useAuth();
-  const { showModal } = useModal();
   const [role, setRoleState] = useState(null);
   const [loadingRole, setLoadingRole] = useState(true);
   const [userProfile, setUserProfile] = useState(null);
@@ -197,16 +174,6 @@ export const UserProvider = ({ children }) => {
               orgId: nextProfile?.orgId ?? null,
             });
           }
-          // Fall back to profile role if we still don't have a resolved role from claims/doc.
-          setRoleState((prev) => {
-            if (prev) return prev;
-            const profileRole = normalizeRoleValue(nextProfile?.role ?? null);
-            if (profileRole) {
-              cacheRole(currentUser.uid, profileRole);
-              return profileRole;
-            }
-            return prev;
-          });
         }
       } catch (err) {
         if (DEBUG_LOGS) {
@@ -261,140 +228,8 @@ export const UserProvider = ({ children }) => {
     };
   }, [currentUser]);
 
-  const profileRole = userProfile?.role;
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const mirrorProfileRole = async () => {
-      if (!currentUser || !currentUser.uid || !profileRole) return;
-
-      try {
-        const roleRef = doc(db, 'roles', currentUser.uid);
-        const roleSnap = await getDoc(roleRef);
-        if (cancelled) return;
-
-        const existingRole = roleSnap.exists() ? roleSnap.data()?.role ?? null : null;
-        if (shouldUpdateRoleDoc(existingRole, profileRole)) {
-          await setDoc(roleRef, { role: profileRole }, { merge: true });
-        }
-      } catch (e) {
-        if (!cancelled) {
-          if (DEBUG_LOGS) {
-            console.warn('Mirror role to roles/{uid} skipped:', e);
-          }
-        }
-      }
-    };
-
-    mirrorProfileRole();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [currentUser, profileRole]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    const mirrorRoleState = async () => {
-      if (!currentUser || !currentUser.uid || !role) return;
-
-      try {
-        const roleRef = doc(db, 'roles', currentUser.uid);
-        const roleSnap = await getDoc(roleRef);
-        if (cancelled) return;
-
-        const existingRole = roleSnap.exists() ? roleSnap.data()?.role ?? null : null;
-        if (shouldUpdateRoleDoc(existingRole, role)) {
-          await setDoc(roleRef, { role }, { merge: true });
-        }
-      } catch (e) {
-        if (!cancelled) {
-          if (DEBUG_LOGS) {
-            console.warn('Mirror role (from state) effect error:', e);
-          }
-        }
-      }
-    };
-
-    mirrorRoleState();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [currentUser, role]);
-
-  const setRole = async (newRole, userOverride = null) => {
-    const normalizedRole = normalizeRoleValue(newRole);
-    const user = userOverride || currentUser;
-    if (!user) {
-      if (showModal) showModal('Cannot set role: not signed in.', 'Authentication Error');
-      return;
-    }
-
-    try {
-      const roleRef = doc(db, FirestorePaths.ROLE_DOCUMENT(user.uid));
-      const roleSnap = await getDoc(roleRef);
-      const existingRole = roleSnap.exists() ? roleSnap.data()?.role ?? null : null;
-
-      if (shouldUpdateRoleDoc(existingRole, normalizedRole)) {
-        await setDoc(roleRef, { role: normalizedRole }, { merge: true });
-        if (DEBUG_LOGS) {
-          console.info('[UserProvider] Role document updated', { uid: user.uid, normalizedRole });
-        }
-      } else {
-        if (DEBUG_LOGS) {
-          console.info('[UserProvider] Role document already up-to-date', {
-            uid: user.uid,
-            existingRole,
-            normalizedRole,
-          });
-        }
-      }
-
-      const existingProfile = await fetchUserProfile(user.uid);
-      if (!existingProfile) {
-        const newProfile = {
-          uid: user.uid,
-          email: user.email ?? `anon-${user.uid}@example.com`,
-          role: normalizedRole,
-          createdAt: serverTimestamp(),
-          lastUpdatedAt: serverTimestamp(),
-        };
-        await upsertUserProfile(user.uid, newProfile);
-        setUserProfile(newProfile);
-      } else {
-        const update = { role: normalizedRole, lastUpdatedAt: serverTimestamp() };
-        await upsertUserProfile(user.uid, update);
-        setUserProfile((prev) => ({ ...prev, ...update }));
-      }
-
-      setRoleState(normalizedRole);
-      cacheRole(user.uid, normalizedRole);
-      await user.getIdToken(true);
-      if (DEBUG_LOGS) {
-        console.log('ID token refreshed after role set.');
-      }
-    } catch (err) {
-      if (DEBUG_LOGS) {
-        console.error('setRole error:', err);
-      }
-      if (err.code === 'permission-denied') {
-        if (showModal) {
-          showModal(
-            'You do not have permission to change your role once it has been set. Please contact an administrator.',
-            'Permission Denied'
-          );
-        }
-      } else if (showModal) {
-        showModal(`Error setting role: ${err.message} (Code: ${err.code})`, 'Error Setting Role');
-      }
-    }
-  };
-
   return (
-    <UserContext.Provider value={{ role, loadingRole, userProfile, billing, loadingBilling, setRole }}>
+    <UserContext.Provider value={{ role, loadingRole, userProfile, billing, loadingBilling }}>
       {children}
     </UserContext.Provider>
   );
