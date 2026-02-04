@@ -14,8 +14,9 @@ import {
   Timestamp,
   where,
 } from 'firebase/firestore';
-import { db, FirestorePaths, appId as defaultAppId } from '../AppCore';
+import { db, FirestorePaths, appId as defaultAppId, functions } from '../AppCore';
 import { validateAttemptSummary } from '../utils/attemptSummaryValidator';
+import { httpsCallable } from 'firebase/functions';
 
 const ALLOWED_ATTEMPT_TYPES = new Set(['baseline', 'practice', 'final']);
 const REQUIRED_ATTEMPT_SUMMARY_FIELDS = [
@@ -148,6 +149,13 @@ export const saveSubmission = async (userId, caseId, data) => {
     docPayload,
     { merge: true }
   );
+};
+
+export const scoreCaseAttempt = async ({ appId = defaultAppId, caseId, submission }) => {
+  const callable = httpsCallable(functions, 'scoreCaseAttempt');
+  const payload = { appId, caseId, submission };
+  const result = await callable(payload);
+  return result?.data || {};
 };
 
 export const subscribeToSubmission = (userId, caseId, onData, onError) => {

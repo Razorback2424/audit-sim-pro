@@ -263,15 +263,6 @@ service cloud.firestore {
             request.auth.token.orgId
         ) ||
         (
-          isTrainee() &&
-          exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)) &&
-          (
-            hasPaidAccess(appId) ||
-            isDemoCase(get(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data)
-          ) &&
-          request.auth.uid in get(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data.visibleToUserIds
-        ) ||
-        (
           request.auth == null &&
           exists(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)) &&
           isDemoCase(get(/databases/$(database)/documents/artifacts/$(appId)/public/data/cases/$(caseId)).data) &&
@@ -343,7 +334,7 @@ service cloud.firestore {
 
     // Private answer keys stored under artifacts/{appId}/private/data/case_keys/{caseId}
     match /artifacts/{appId}/private/data/case_keys/{caseId} {
-      allow read: if request.auth != null && request.auth.token.role == "admin";
+      allow read: if request.auth != null && (isAdmin() || isInstructor());
       allow create, update: if request.auth != null &&
                                request.auth.token.role == "admin" &&
                                isValidCaseKeyDocument(request.resource.data);

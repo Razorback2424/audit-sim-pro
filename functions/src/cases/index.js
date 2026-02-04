@@ -5,10 +5,178 @@ const { buildCaseDraftFromRecipe } = require('../../generation/buildCaseDraft');
 const { getCaseRecipe } = require('../../generation/recipeRegistry');
 
 const ANSWER_TOLERANCE = 0.01;
+const CLASSIFICATION_KEYS = Object.freeze([
+  'properlyIncluded',
+  'properlyExcluded',
+  'improperlyIncluded',
+  'improperlyExcluded',
+]);
 
 const toNumber = (value) => {
   const num = Number(value);
   return Number.isFinite(num) ? num : 0;
+};
+
+const normalizeText = (val) => (typeof val === 'string' ? val.trim().toLowerCase() : '');
+
+const parseNumber = (value) => {
+  if (value === null || value === undefined) return 0;
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string') return 0;
+  const cleaned = value.replace(/[^0-9.-]/g, '');
+  const parsed = Number(cleaned);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const normalizeExpectedClassificationKey = (raw) => {
+  if (!raw) return '';
+  const text = normalizeText(raw);
+  if (text.includes('missing') || text.includes('unrecorded')) return 'improperlyExcluded';
+  if (text.includes('improperly') && text.includes('excluded')) return 'improperlyExcluded';
+  if (text.includes('improperly') && text.includes('included')) return 'improperlyIncluded';
+  if (text.includes('properly') && text.includes('excluded')) return 'properlyExcluded';
+  if (text.includes('properly') && text.includes('included')) return 'properlyIncluded';
+  if (CLASSIFICATION_KEYS.includes(text)) return text;
+  return '';
+};
+
+const extractBreakdown = (source) =>
+  CLASSIFICATION_KEYS.map((key) => ({ key, amount: parseNumber(source?.[key]) }))
+    .filter(({ amount }) => Math.abs(amount) > 0.0001)
+    .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+
+const extractDecisionFromAllocation = (allocation) => {
+  if (!allocation || typeof allocation !== 'object') {
+    return { primaryKey: '' };
+  }
+
+  const explicitKey = typeof allocation.singleClassification === 'string' ? allocation.singleClassification : '';
+  if (CLASSIFICATION_KEYS.includes(explicitKey)) {
+    return { primaryKey: explicitKey };
+  }
+
+  const breakdown = extractBreakdown(
+    allocation?.splitValues && typeof allocation.splitValues === 'object'
+      ? allocation.splitValues
+      : allocation
+  );
+  if (breakdown.length > 0) {
+    return { primaryKey: breakdown[0].key };
+  }
+
+  if (allocation.isException === true) return { primaryKey: 'improperlyIncluded' };
+  if (allocation.isException === false) return { primaryKey: 'properlyIncluded' };
+  return { primaryKey: '' };
+};
+
+const extractCorrectDecision = (item) => {
+  const explicitKey =
+    typeof item?.answerKeySingleClassification === 'string' ? item.answerKeySingleClassification : '';
+  if (CLASSIFICATION_KEYS.includes(explicitKey)) {
+    return { primaryKey: explicitKey };
+  }
+
+  const answerKey = item?.answerKey && typeof item.answerKey === 'object' ? item.answerKey : null;
+  const breakdown = answerKey ? extractBreakdown(answerKey) : [];
+  if (breakdown.length > 0) {
+    return { primaryKey: breakdown[0].key };
+  }
+
+  const expectedKey = normalizeExpectedClassificationKey(item?.expectedClassification);
+  if (expectedKey) {
+    return { primaryKey: expectedKey };
+  }
+
+  return { primaryKey: '' };
+};
+
+const computeDisbursementAttemptSummary = ({ disbursements = [], studentAnswers = {} }) => {
+  const selectedIds = new Set(
+    studentAnswers && typeof studentAnswers === 'object' ? Object.keys(studentAnswers) : []
+  );
+
+  let missedExceptionsCount = 0;
+  let falsePositivesCount = 0;
+  let wrongClassificationCount = 0;
+  let wrongRoutineClassificationCount = 0;
+  let routineCorrectCount = 0;
+  let caughtTrapsCount = 0;
+
+  (disbursements || []).forEach((item) => {
+    if (!item || !item.paymentId) return;
+    const isTrap = !!item.shouldFlag;
+    const answer = studentAnswers[item.paymentId] || null;
+    const hasAnswer = selectedIds.has(item.paymentId);
+    const studentDecision = extractDecisionFromAllocation(answer);
+    const correctDecision = extractCorrectDecision(item);
+
+    if (isTrap) {
+      if (!answer?.isException) {
+        missedExceptionsCount += 1;
+        return;
+      }
+
+      const expectedKey = correctDecision.primaryKey;
+      if (expectedKey) {
+        const matches = normalizeText(studentDecision.primaryKey) === normalizeText(expectedKey);
+        if (!matches) {
+          wrongClassificationCount += 1;
+        } else {
+          caughtTrapsCount += 1;
+        }
+      } else {
+        caughtTrapsCount += 1;
+      }
+      return;
+    }
+
+    if (!hasAnswer) return;
+    if (answer?.isException === true) {
+      falsePositivesCount += 1;
+      return;
+    }
+
+    if (
+      correctDecision.primaryKey &&
+      normalizeText(studentDecision.primaryKey) === normalizeText(correctDecision.primaryKey)
+    ) {
+      routineCorrectCount += 1;
+      return;
+    }
+
+    if (correctDecision.primaryKey) {
+      wrongRoutineClassificationCount += 1;
+    }
+  });
+
+  const criticalIssuesCount = missedExceptionsCount + wrongClassificationCount;
+  const totalConsidered =
+    caughtTrapsCount +
+    missedExceptionsCount +
+    wrongClassificationCount +
+    routineCorrectCount +
+    falsePositivesCount +
+    wrongRoutineClassificationCount;
+  const score =
+    totalConsidered > 0
+      ? Math.round(
+          ((totalConsidered - criticalIssuesCount - falsePositivesCount - wrongRoutineClassificationCount) /
+            totalConsidered) *
+            100
+        )
+      : null;
+
+  return {
+    score,
+    totalConsidered,
+    trapsCount: caughtTrapsCount + missedExceptionsCount + wrongClassificationCount,
+    routineCount: routineCorrectCount + falsePositivesCount + wrongRoutineClassificationCount,
+    missedExceptionsCount,
+    falsePositivesCount,
+    wrongClassificationCount,
+    wrongRoutineClassificationCount,
+    criticalIssuesCount,
+  };
 };
 
 const stableStringify = (value) => {
@@ -56,6 +224,24 @@ const toOptionalString = (value) => {
 };
 
 const buildBillingPath = (appIdValue, uid) => `artifacts/${appIdValue}/users/${uid}/billing/status`;
+const buildCaseKeysPath = (appIdValue, caseId) =>
+  `artifacts/${appIdValue}/private/data/case_keys/${caseId}`;
+
+const loadCaseKeyItems = async ({ firestore, appId, caseId, logLabel }) => {
+  try {
+    const privateDoc = await firestore.doc(buildCaseKeysPath(appId, caseId)).get();
+    if (!privateDoc.exists) return null;
+    const caseKeysData = privateDoc.data() || {};
+    const items =
+      caseKeysData && typeof caseKeysData.items === 'object' && caseKeysData.items !== null
+        ? caseKeysData.items
+        : null;
+    return items;
+  } catch (err) {
+    console.warn(`[${logLabel}] Failed to load case keys for ${caseId} under app ${appId}`, err);
+    return null;
+  }
+};
 
 const commitBatches = async ({ firestore, updates }) => {
   const batchSize = 450;
@@ -998,6 +1184,341 @@ const buildGradingDetail = (disbursement, userAllocations = {}) => {
   };
 };
 
+const buildDisbursementMap = ({ disbursementList = [], caseKeyItems = null }) => {
+  const disbursementMap = new Map();
+  disbursementList.forEach((item) => {
+    if (!item || !item.paymentId) {
+      return;
+    }
+    const normalized = { ...item };
+    const caseKeyEntry = caseKeyItems?.[item.paymentId];
+    if (caseKeyEntry) {
+      if (caseKeyEntry.answerKey) {
+        normalized.answerKey = caseKeyEntry.answerKey;
+      }
+      if (caseKeyEntry.answerKeyMode) {
+        normalized.answerKeyMode = caseKeyEntry.answerKeyMode;
+      }
+      if (caseKeyEntry.answerKeySingleClassification) {
+        normalized.answerKeySingleClassification = caseKeyEntry.answerKeySingleClassification;
+      }
+      if (caseKeyEntry.groundTruths) {
+        normalized.groundTruths = caseKeyEntry.groundTruths;
+      }
+      if (caseKeyEntry.riskLevel && !normalized.riskLevel) {
+        normalized.riskLevel = caseKeyEntry.riskLevel;
+      }
+    }
+    disbursementMap.set(item.paymentId, normalized);
+  });
+  return disbursementMap;
+};
+
+const computeGradingOutput = ({ caseData = {}, caseKeyItems = null, submission = {} }) => {
+  const disbursementList = Array.isArray(caseData.disbursements) ? caseData.disbursements : [];
+  const cashContext = caseData.cashContext || {};
+  const cashOutstandingItems = Array.isArray(caseData.cashOutstandingItems)
+    ? caseData.cashOutstandingItems
+    : [];
+  const cashCutoffItems = Array.isArray(caseData.cashCutoffItems) ? caseData.cashCutoffItems : [];
+  const cashReconciliationMap = Array.isArray(caseData.cashReconciliationMap)
+    ? caseData.cashReconciliationMap
+    : [];
+
+  const caseKeyMap = buildDisbursementMap({ disbursementList, caseKeyItems });
+
+  const normalizeRef = (value) => (value || '').toString().trim().toLowerCase();
+  const outstandingById = new Map();
+  cashOutstandingItems.forEach((item) => {
+    if (item && item._tempId) {
+      outstandingById.set(item._tempId, item);
+    }
+  });
+  const cutoffById = new Map();
+  cashCutoffItems.forEach((item) => {
+    if (item && item._tempId) {
+      cutoffById.set(item._tempId, item);
+    }
+  });
+  const scenarioByRef = new Map();
+  const cutoffByScenarioRef = new Map();
+  const scenarioClassificationMap = {
+    clean: 'properlyExcluded',
+    unrecorded: 'improperlyExcluded',
+    fictitious: 'improperlyIncluded',
+  };
+  cashReconciliationMap.forEach((entry) => {
+    const scenario = entry?.scenarioType;
+    if (!scenario) return;
+    let refKey = '';
+    let cutoffRef = '';
+    let cutoffDate = null;
+    if (entry.outstandingTempId && outstandingById.has(entry.outstandingTempId)) {
+      const outItem = outstandingById.get(entry.outstandingTempId);
+      refKey = normalizeRef(outItem?.reference || outItem?.paymentId);
+    }
+    if (!refKey && entry.cutoffTempId && cutoffById.has(entry.cutoffTempId)) {
+      const cutItem = cutoffById.get(entry.cutoffTempId);
+      refKey = normalizeRef(cutItem?.reference);
+      cutoffRef = refKey;
+      cutoffDate = toSafeDate(cutItem?.clearDate || cutItem?.clear_date);
+    }
+    if (refKey) {
+      scenarioByRef.set(refKey, scenario);
+      if (cutoffRef) {
+        cutoffByScenarioRef.set(refKey, cutoffDate);
+      }
+    }
+  });
+
+  let headerNoteAdded = false;
+  const cutoffBaseDate =
+    toSafeDate(cashContext.reportingDate || cashContext.reconciliationDate) ||
+    toSafeDate(caseData.auditYearEnd || caseData.yearEnd || caseData.periodEnd);
+  const cutoffWindowDays = Number(cashContext.cutoffWindowDays);
+  const applyCutoffWindow = Number.isFinite(cutoffWindowDays) && cutoffWindowDays > 0;
+  const testingThreshold = Number(cashContext.testingThreshold);
+  const applyThreshold = Number.isFinite(testingThreshold) && testingThreshold > 0;
+
+  const afterClassifications = submission?.disbursementClassifications || {};
+  const afterSelection = normalizeSelection(submission?.selectedPaymentIds || []);
+  const selectedIds =
+    afterSelection.length > 0 ? afterSelection : Object.keys(afterClassifications).filter(Boolean);
+
+  let correctCount = 0;
+  let totalCount = 0;
+  const gradingDetails = {};
+  const reviewNotes = [];
+  const workspaceNotes = submission?.workspaceNotes || {};
+  const globalAuditAreaRaw =
+    typeof caseData.auditArea === 'string' && caseData.auditArea.trim()
+      ? caseData.auditArea.trim()
+      : '';
+  const globalAuditArea = globalAuditAreaRaw || 'PAYABLES';
+
+  selectedIds.forEach((paymentId) => {
+    const disbursement = caseKeyMap.get(paymentId);
+    if (!disbursement) {
+      return;
+    }
+    const userAllocations = afterClassifications[paymentId] || {};
+    const detail = buildGradingDetail(disbursement, userAllocations);
+    const issues = [];
+    const workspaceEntry = workspaceNotes[paymentId] || {};
+    const noteValue =
+      (typeof userAllocations.notes === 'string' && userAllocations.notes) ||
+      (typeof workspaceEntry.workpaperNote === 'string' && workspaceEntry.workpaperNote) ||
+      (typeof workspaceEntry.notes === 'string' && workspaceEntry.notes) ||
+      '';
+    const trimmedNote = noteValue.trim();
+    const userClassification =
+      detail?.userClassification || userAllocations.singleClassification || '';
+    const isException =
+      typeof userClassification === 'string' &&
+      ['improperlyIncluded', 'improperlyExcluded'].includes(userClassification);
+    const hasNote = trimmedNote.length > 5;
+
+    if (isException && !hasNote) {
+      issues.push(
+        'Documentation Deficiency: You proposed an adjustment but failed to document your evidence.'
+      );
+      detail.isCorrect = false;
+    }
+
+    const groundTruths = disbursement.groundTruths || {};
+    const itemAuditAreaRaw =
+      typeof disbursement.auditArea === 'string' && disbursement.auditArea.trim()
+        ? disbursement.auditArea.trim()
+        : '';
+    const auditArea = itemAuditAreaRaw || globalAuditArea;
+
+    const normalizedTotals = Object.keys(userAllocations).reduce((acc, key) => {
+      const value = userAllocations[key];
+      const numericValue = typeof value === 'number' ? value : Number(value);
+      acc[key] = Number.isFinite(numericValue) ? numericValue : 0;
+      return acc;
+    }, {});
+
+    const classificationSource =
+      (typeof workspaceEntry.classification === 'string' && workspaceEntry.classification) ||
+      userClassification ||
+      findPrimaryClassification(normalizedTotals) ||
+      '';
+    const normalizedClassification = classificationSource.toLowerCase().replace(/[\s-]/g, '');
+    const isProperlyIncluded =
+      normalizedClassification === 'properly_included' || normalizedClassification === 'properlyincluded';
+    const interactionDuration =
+      typeof workspaceEntry.interactionDuration === 'number'
+        ? workspaceEntry.interactionDuration
+        : null;
+
+    if (disbursement.riskLevel === 'high' && typeof interactionDuration === 'number' && interactionDuration < 5) {
+      issues.push(
+        'Review Note: You concluded on this high-risk item too quickly. Did you review all attachments?'
+      );
+    }
+
+    switch (auditArea) {
+      case 'PAYABLES': {
+        if (
+          groundTruths.servicePeriodEnd &&
+          disbursement.paymentDate &&
+          typeof groundTruths.servicePeriodEnd === 'string' &&
+          typeof disbursement.paymentDate === 'string'
+        ) {
+          const glDate = new Date(disbursement.paymentDate);
+          const svcDate = new Date(groundTruths.servicePeriodEnd);
+          if (
+            !Number.isNaN(glDate.getTime()) &&
+            !Number.isNaN(svcDate.getTime()) &&
+            svcDate > glDate &&
+            svcDate.getMonth() !== glDate.getMonth()
+          ) {
+            if (userClassification === 'properlyIncluded') {
+              issues.push(
+                'Cut-off Error: You accepted this item, but the service period indicates it belongs in the next period.'
+              );
+              detail.isCorrect = false;
+            }
+          }
+          const yearEnd = toSafeDate(
+            disbursement.yearEnd || caseData?.yearEnd || caseData?.auditYearEnd || caseData?.periodEnd
+          );
+          if (yearEnd && !Number.isNaN(yearEnd.getTime())) {
+            if (svcDate <= yearEnd && glDate > yearEnd && normalizedClassification === 'properlyexcluded') {
+              issues.push(
+                'Unrecorded Liability: Service occurred before year-end but payment was after. You should propose an accrued liability (improperly excluded).'
+              );
+              detail.isCorrect = false;
+            }
+          }
+          if (
+            workspaceEntry.selectedAssertion === 'cutoff' &&
+            workspaceEntry.serviceEndInput &&
+            typeof workspaceEntry.serviceEndInput === 'string'
+          ) {
+            const userDate = new Date(workspaceEntry.serviceEndInput);
+            const trueDate = new Date(groundTruths.servicePeriodEnd);
+            if (!Number.isNaN(userDate.getTime()) && !Number.isNaN(trueDate.getTime())) {
+              const diffTime = Math.abs(userDate.getTime() - trueDate.getTime());
+              const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+              if (diffDays > 1) {
+                issues.push(
+                  'Review Note: Your conclusion is correct, but the Service Period date you documented does not match the invoice. Re-examine the document.'
+                );
+              }
+            }
+          }
+        }
+        break;
+      }
+      case 'INVENTORY': {
+        const actualRaw =
+          groundTruths.actualCount ??
+          groundTruths.actualValue ??
+          groundTruths.confirmedValue ??
+          null;
+        const actualQty = actualRaw !== null ? Number(actualRaw) : NaN;
+        const ledgerQty = Number(disbursement.amount);
+        if (Number.isFinite(actualQty) && Number.isFinite(ledgerQty) && actualQty < ledgerQty) {
+          if (userClassification === 'properlyIncluded') {
+            issues.push(
+              `Existence Error: Physical count (${actualQty}) is lower than the system record (${ledgerQty}). You should have proposed an adjustment.`
+            );
+            detail.isCorrect = false;
+          }
+        }
+        if (typeof groundTruths.condition === 'string' && groundTruths.condition.trim()) {
+          const conditionLower = groundTruths.condition.toLowerCase();
+          if (conditionLower.includes('damaged') && !trimmedNote.toLowerCase().includes('damaged')) {
+            issues.push(
+              'Valuation Missing: Inventory noted as damaged in the evidence. Document the condition and consider an adjustment.'
+            );
+          }
+        }
+        break;
+      }
+      case 'CASH': {
+        if (isException && hasNote) {
+          const noteLower = trimmedNote.toLowerCase();
+          if (!noteLower.includes('outstanding') && !noteLower.includes('transit')) {
+            issues.push(
+              "Terminology Warning: Cash variances are typically due to 'Outstanding Checks' or 'Deposits in Transit'. Please use precise terminology."
+            );
+          }
+        }
+        const refKey = normalizeRef(disbursement.paymentId || disbursement.payee);
+        const scenario = scenarioByRef.get(refKey);
+        const expectedClassification = scenario ? scenarioClassificationMap[scenario] : null;
+        const cutoffRefDate = cutoffByScenarioRef.get(refKey);
+        const outsideCutoffWindow =
+          applyCutoffWindow &&
+          cutoffBaseDate &&
+          cutoffRefDate &&
+          !Number.isNaN(cutoffRefDate.getTime()) &&
+          cutoffRefDate.getTime() - cutoffBaseDate.getTime() > cutoffWindowDays * 24 * 60 * 60 * 1000;
+        const belowThreshold = applyThreshold && Number(disbursement.amount) < testingThreshold;
+        if (
+          scenario &&
+          expectedClassification &&
+          expectedClassification !== normalizedClassification &&
+          !outsideCutoffWindow &&
+          !belowThreshold
+        ) {
+          issues.push(
+            `Bank Rec Mismatch: Expected ${expectedClassification} based on reconciliation scenario (${scenario}).`
+          );
+          detail.isCorrect = false;
+        }
+        break;
+      }
+      default:
+        break;
+    }
+
+    if (isProperlyIncluded && !workspaceEntry.evidenceLinked) {
+      issues.push(
+        'Documentation Deficiency: You vouched for existence but failed to link the supporting evidence in the workpaper.'
+      );
+    }
+
+    if (issues.length > 0) {
+      reviewNotes.push({
+        paymentId,
+        payee: disbursement.payee || null,
+        notes: issues,
+      });
+    }
+
+    gradingDetails[paymentId] = detail;
+    totalCount += 1;
+    if (detail.isCorrect) {
+      correctCount += 1;
+    }
+  });
+
+  const score = totalCount > 0 ? (correctCount / totalCount) * 100 : 0;
+  const roundedScore = Math.round(score * 100) / 100;
+
+  if (cashContext.simulateMathError && !headerNoteAdded) {
+    reviewNotes.push({
+      paymentId: 'cash_header',
+      payee: null,
+      notes: [
+        'Header Check: Client bank rec may contain a math/transposition error. Ensure student ties bank and book balances.',
+      ],
+    });
+    headerNoteAdded = true;
+  }
+
+  return {
+    grade: roundedScore,
+    gradingDetails,
+    virtualSeniorFeedback: reviewNotes,
+    disbursements: Array.from(caseKeyMap.values()),
+  };
+};
+
 exports.onCaseDeletedCleanupStorage = functions.firestore
   .document('artifacts/{appId}/public/data/cases/{caseId}')
   .onWrite(async (change, context) => {
@@ -1180,11 +1701,7 @@ exports.listStudentCases = callable.https.onCall(async (data, context) => {
   const isPaid = resolvedRole === 'trainee' ? await hasPaidAccessServer({ firestore, appId, uid }) : true;
 
   const casesCollection = firestore.collection(`artifacts/${appId}/public/data/cases`);
-  const baseVisibilityFilter = admin.firestore.Filter.or(
-    admin.firestore.Filter.where('publicVisible', '==', true),
-    admin.firestore.Filter.where('visibleToUserIds', 'array-contains', uid)
-  );
-  const filters = [admin.firestore.Filter.where('_deleted', '==', false), baseVisibilityFilter];
+  const filters = [admin.firestore.Filter.where('_deleted', '==', false)];
 
   if (statusFilter && statusFilter.length > 0) {
     filters.push(admin.firestore.Filter.where('status', 'in', statusFilter));
@@ -1195,6 +1712,11 @@ exports.listStudentCases = callable.https.onCall(async (data, context) => {
   }
 
   if (!isPaid) {
+    const demoVisibilityFilter = admin.firestore.Filter.or(
+      admin.firestore.Filter.where('publicVisible', '==', true),
+      admin.firestore.Filter.where('visibleToUserIds', 'array-contains', uid)
+    );
+    filters.push(demoVisibilityFilter);
     filters.push(admin.firestore.Filter.where('accessLevel', '==', 'demo'));
     filters.push(admin.firestore.Filter.where('publicVisible', '==', true));
   }
@@ -1894,6 +2416,165 @@ exports.startCaseAttempt = callable.https.onCall(async (data, context) => {
     totalCases: visibleCases.length,
     remainingCount,
     backfillCaseId,
+  };
+});
+
+exports.scoreCaseAttempt = callable.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
+  }
+
+  const appId = toOptionalString(data?.appId);
+  const caseId = toOptionalString(data?.caseId);
+  const submission = isRecord(data?.submission) ? data.submission : null;
+
+  if (!appId) {
+    throw new functions.https.HttpsError('invalid-argument', 'appId is required.');
+  }
+  if (!caseId) {
+    throw new functions.https.HttpsError('invalid-argument', 'caseId is required.');
+  }
+  if (!submission) {
+    throw new functions.https.HttpsError('invalid-argument', 'submission is required.');
+  }
+
+  const firestore = admin.firestore();
+  const uid = context.auth.uid;
+
+  const caseSnapshot = await firestore
+    .doc(`artifacts/${appId}/public/data/cases/${caseId}`)
+    .get();
+
+  if (!caseSnapshot.exists) {
+    throw new functions.https.HttpsError('not-found', 'Case not found.');
+  }
+
+  const caseData = caseSnapshot.data() || {};
+  if (caseData._deleted === true) {
+    throw new functions.https.HttpsError('failed-precondition', 'Case is not available.');
+  }
+
+  const hasPaid = await hasPaidAccessServer({ firestore, appId, uid });
+  const isPublicVisible = caseData.publicVisible === true;
+  if (!isPublicVisible && !hasPaid) {
+    throw new functions.https.HttpsError('permission-denied', 'Access to this case is restricted.');
+  }
+
+  const caseKeyItems = await loadCaseKeyItems({
+    firestore,
+    appId,
+    caseId,
+    logLabel: 'scoreCaseAttempt',
+  });
+
+  const gradingOutput = computeGradingOutput({
+    caseData,
+    caseKeyItems,
+    submission,
+  });
+
+  const disbursementClassifications = isRecord(submission.disbursementClassifications)
+    ? submission.disbursementClassifications
+    : {};
+  const attemptSummaryBase = computeDisbursementAttemptSummary({
+    disbursements: gradingOutput.disbursements,
+    studentAnswers: disbursementClassifications,
+  });
+  const summaryOverrides = isRecord(submission.attemptSummary) ? submission.attemptSummary : {};
+  const requiredDocsOpened =
+    typeof summaryOverrides.requiredDocsOpened === 'boolean' ? summaryOverrides.requiredDocsOpened : null;
+  const timeToCompleteSecondsRaw = Number(summaryOverrides.timeToCompleteSeconds);
+  const timeToCompleteSeconds =
+    Number.isFinite(timeToCompleteSecondsRaw) && timeToCompleteSecondsRaw >= 0
+      ? timeToCompleteSecondsRaw
+      : null;
+
+  const submissionRef = firestore.doc(
+    `artifacts/${appId}/users/${uid}/caseSubmissions/${caseId}`
+  );
+
+  let attemptIndex = Number(submission.attemptIndex);
+  if (!Number.isFinite(attemptIndex) || attemptIndex <= 0) {
+    try {
+      const existingSnap = await submissionRef.get();
+      const existingAttempts = Array.isArray(existingSnap.data()?.attempts)
+        ? existingSnap.data().attempts
+        : [];
+      attemptIndex = existingAttempts.length + 1;
+    } catch (error) {
+      attemptIndex = 1;
+    }
+  }
+
+  const attemptTypeRaw = typeof submission.attemptType === 'string' ? submission.attemptType.trim() : '';
+  const attemptTypeCandidate = attemptTypeRaw || (attemptIndex === 1 ? 'baseline' : 'practice');
+  const attemptType = ['baseline', 'practice', 'final'].includes(attemptTypeCandidate)
+    ? attemptTypeCandidate
+    : attemptIndex === 1
+    ? 'baseline'
+    : 'practice';
+
+  const attemptSummary = {
+    ...attemptSummaryBase,
+    requiredDocsOpened,
+    timeToCompleteSeconds,
+    attemptIndex,
+    attemptType,
+    isBaseline: attemptIndex === 1,
+  };
+
+  const {
+    grade: _ignoredGrade,
+    gradedAt: _ignoredGradedAt,
+    gradingDetails: _ignoredGradingDetails,
+    virtualSeniorFeedback: _ignoredFeedback,
+    attemptSummary: _ignoredAttemptSummary,
+    status,
+    ...attemptData
+  } = submission;
+
+  const attemptPayload = {
+    ...attemptData,
+    attemptIndex,
+    attemptType,
+    submittedAt: admin.firestore.Timestamp.now(),
+    attemptSummary,
+  };
+
+  const docPayload = {
+    submittedAt: admin.firestore.FieldValue.serverTimestamp(),
+    attempts: admin.firestore.FieldValue.arrayUnion(attemptPayload),
+    grade: gradingOutput.grade,
+    gradedAt: admin.firestore.FieldValue.serverTimestamp(),
+    gradingDetails: gradingOutput.gradingDetails,
+    virtualSeniorFeedback: gradingOutput.virtualSeniorFeedback,
+    scoredBy: 'callable',
+  };
+
+  if (status) docPayload.status = status;
+
+  [
+    'selectedPaymentIds',
+    'retrievedDocuments',
+    'disbursementClassifications',
+    'expectedClassifications',
+    'workspaceNotes',
+    'fixedAssetResponses',
+  ].forEach((key) => {
+    if (submission[key] !== undefined) {
+      docPayload[key] = submission[key];
+    }
+  });
+
+  await submissionRef.set(docPayload, { merge: true });
+
+  return {
+    grade: gradingOutput.grade,
+    gradingDetails: gradingOutput.gradingDetails,
+    virtualSeniorFeedback: gradingOutput.virtualSeniorFeedback,
+    attemptSummary,
+    attemptIndex,
+    attemptType,
   };
 });
 
@@ -2752,362 +3433,24 @@ exports.gradeSubmission = onDocumentWritten(
     }
 
     const caseData = caseSnapshot.data() || {};
-    const disbursementList = Array.isArray(caseData.disbursements)
-      ? caseData.disbursements
-      : [];
-    const cashContext = caseData.cashContext || {};
-    const cashOutstandingItems = Array.isArray(caseData.cashOutstandingItems)
-      ? caseData.cashOutstandingItems
-      : [];
-    const cashCutoffItems = Array.isArray(caseData.cashCutoffItems) ? caseData.cashCutoffItems : [];
-    const cashReconciliationMap = Array.isArray(caseData.cashReconciliationMap)
-      ? caseData.cashReconciliationMap
-      : [];
-    let caseKeyItems = null;
-    try {
-      const privateDoc = await firestore
-        .doc(`artifacts/${event.params.appId}/private/case_keys/${event.params.caseId}`)
-        .get();
-      if (privateDoc.exists) {
-        const caseKeysData = privateDoc.data() || {};
-        caseKeyItems =
-          caseKeysData && typeof caseKeysData.items === 'object' && caseKeysData.items !== null
-            ? caseKeysData.items
-            : null;
-      }
-    } catch (err) {
-      console.warn(
-        `[gradeSubmission] Failed to load case keys for ${event.params.caseId} under app ${event.params.appId}`,
-        err
-      );
-    }
-
-    const disbursementMap = new Map();
-    disbursementList.forEach((item) => {
-      if (item && item.paymentId) {
-        const normalized = { ...item };
-        const caseKeyEntry = caseKeyItems?.[item.paymentId];
-        if (caseKeyEntry) {
-          if (caseKeyEntry.answerKey) {
-            normalized.answerKey = caseKeyEntry.answerKey;
-          }
-          if (caseKeyEntry.answerKeyMode) {
-            normalized.answerKeyMode = caseKeyEntry.answerKeyMode;
-          }
-          if (caseKeyEntry.answerKeySingleClassification) {
-            normalized.answerKeySingleClassification =
-              caseKeyEntry.answerKeySingleClassification;
-          }
-          if (caseKeyEntry.groundTruths) {
-            normalized.groundTruths = caseKeyEntry.groundTruths;
-          }
-          if (caseKeyEntry.riskLevel && !normalized.riskLevel) {
-            normalized.riskLevel = caseKeyEntry.riskLevel;
-          }
-        }
-        disbursementMap.set(item.paymentId, normalized);
-      }
+    const caseKeyItems = await loadCaseKeyItems({
+      firestore,
+      appId: event.params.appId,
+      caseId: event.params.caseId,
+      logLabel: 'gradeSubmission',
     });
-
-    const normalizeRef = (value) => (value || '').toString().trim().toLowerCase();
-    const outstandingById = new Map();
-    const outstandingByRef = new Map();
-    cashOutstandingItems.forEach((item) => {
-      if (item && item._tempId) {
-        outstandingById.set(item._tempId, item);
-      }
-      const refKey = normalizeRef(item?.reference || item?.paymentId);
-      if (refKey) {
-        outstandingByRef.set(refKey, item);
-      }
+    const gradingOutput = computeGradingOutput({
+      caseData,
+      caseKeyItems,
+      submission,
     });
-    const cutoffById = new Map();
-    const cutoffByRef = new Map();
-    cashCutoffItems.forEach((item) => {
-      if (item && item._tempId) {
-        cutoffById.set(item._tempId, item);
-      }
-      const refKey = normalizeRef(item?.reference);
-      if (refKey) {
-        cutoffByRef.set(refKey, item);
-      }
-    });
-    const scenarioByRef = new Map();
-    const cutoffByScenarioRef = new Map();
-    const scenarioClassificationMap = {
-      clean: 'properlyExcluded',
-      unrecorded: 'improperlyExcluded',
-      fictitious: 'improperlyIncluded',
-    };
-    cashReconciliationMap.forEach((entry) => {
-      const scenario = entry?.scenarioType;
-      if (!scenario) return;
-      let refKey = '';
-      let cutoffRef = '';
-      let cutoffDate = null;
-      if (entry.outstandingTempId && outstandingById.has(entry.outstandingTempId)) {
-        const outItem = outstandingById.get(entry.outstandingTempId);
-        refKey = normalizeRef(outItem?.reference || outItem?.paymentId);
-      }
-      if (!refKey && entry.cutoffTempId && cutoffById.has(entry.cutoffTempId)) {
-        const cutItem = cutoffById.get(entry.cutoffTempId);
-        refKey = normalizeRef(cutItem?.reference);
-        cutoffRef = refKey;
-        cutoffDate = toSafeDate(cutItem?.clearDate || cutItem?.clear_date);
-      }
-      if (refKey) {
-        scenarioByRef.set(refKey, scenario);
-        if (cutoffRef) {
-          cutoffByScenarioRef.set(refKey, cutoffDate);
-        }
-      }
-    });
-    let headerNoteAdded = false;
-    const cutoffBaseDate =
-      toSafeDate(cashContext.reportingDate || cashContext.reconciliationDate) ||
-      toSafeDate(caseData.auditYearEnd || caseData.yearEnd || caseData.periodEnd);
-    const cutoffWindowDays = Number(cashContext.cutoffWindowDays);
-    const applyCutoffWindow = Number.isFinite(cutoffWindowDays) && cutoffWindowDays > 0;
-    const testingThreshold = Number(cashContext.testingThreshold);
-    const applyThreshold = Number.isFinite(testingThreshold) && testingThreshold > 0;
-
-    const selectedIds =
-      afterSelection.length > 0
-        ? afterSelection
-        : Object.keys(afterClassifications).filter(Boolean);
-
-    let correctCount = 0;
-    let totalCount = 0;
-    const gradingDetails = {};
-    const reviewNotes = [];
-    const workspaceNotes = submission?.workspaceNotes || {};
-    const globalAuditAreaRaw =
-      typeof caseData.auditArea === 'string' && caseData.auditArea.trim()
-        ? caseData.auditArea.trim()
-        : '';
-    const globalAuditArea = globalAuditAreaRaw || 'PAYABLES';
-
-    selectedIds.forEach((paymentId) => {
-      const disbursement = disbursementMap.get(paymentId);
-      if (!disbursement) {
-        return;
-      }
-      const userAllocations = afterClassifications[paymentId] || {};
-      const detail = buildGradingDetail(disbursement, userAllocations);
-      const issues = [];
-      const workspaceEntry = workspaceNotes[paymentId] || {};
-      const noteValue =
-        (typeof userAllocations.notes === 'string' && userAllocations.notes) ||
-        (typeof workspaceEntry.workpaperNote === 'string' && workspaceEntry.workpaperNote) ||
-        (typeof workspaceEntry.notes === 'string' && workspaceEntry.notes) ||
-        '';
-      const trimmedNote = noteValue.trim();
-      const userClassification =
-        detail?.userClassification || userAllocations.singleClassification || '';
-      const isException =
-        typeof userClassification === 'string' &&
-        ['improperlyIncluded', 'improperlyExcluded'].includes(userClassification);
-      const hasNote = trimmedNote.length > 5;
-
-      if (isException && !hasNote) {
-        issues.push(
-          'Documentation Deficiency: You proposed an adjustment but failed to document your evidence.'
-        );
-        detail.isCorrect = false;
-      }
-
-      const groundTruths = disbursement.groundTruths || {};
-      const itemAuditAreaRaw =
-        typeof disbursement.auditArea === 'string' && disbursement.auditArea.trim()
-          ? disbursement.auditArea.trim()
-          : '';
-      const auditArea = itemAuditAreaRaw || globalAuditArea;
-
-      const normalizedTotals = Object.keys(userAllocations).reduce((acc, key) => {
-        const value = userAllocations[key];
-        const numericValue = typeof value === 'number' ? value : Number(value);
-        acc[key] = Number.isFinite(numericValue) ? numericValue : 0;
-        return acc;
-      }, {});
-
-      const classificationSource =
-        (typeof workspaceEntry.classification === 'string' && workspaceEntry.classification) ||
-        userClassification ||
-        findPrimaryClassification(normalizedTotals) ||
-        '';
-      const normalizedClassification = classificationSource.toLowerCase().replace(/[\s-]/g, '');
-      const isProperlyIncluded =
-        normalizedClassification === 'properly_included' || normalizedClassification === 'properlyincluded';
-      const interactionDuration =
-        typeof workspaceEntry.interactionDuration === 'number'
-          ? workspaceEntry.interactionDuration
-          : null;
-
-      if (disbursement.riskLevel === 'high' && typeof interactionDuration === 'number' && interactionDuration < 5) {
-        issues.push(
-          'Review Note: You concluded on this high-risk item too quickly. Did you review all attachments?'
-        );
-      }
-
-      switch (auditArea) {
-        case 'PAYABLES': {
-          if (
-            groundTruths.servicePeriodEnd &&
-            disbursement.paymentDate &&
-            typeof groundTruths.servicePeriodEnd === 'string' &&
-            typeof disbursement.paymentDate === 'string'
-          ) {
-            const glDate = new Date(disbursement.paymentDate);
-            const svcDate = new Date(groundTruths.servicePeriodEnd);
-            if (
-              !Number.isNaN(glDate.getTime()) &&
-              !Number.isNaN(svcDate.getTime()) &&
-              svcDate > glDate &&
-              svcDate.getMonth() !== glDate.getMonth()
-            ) {
-              if (userClassification === 'properlyIncluded') {
-                issues.push(
-                  'Cut-off Error: You accepted this item, but the service period indicates it belongs in the next period.'
-                );
-                detail.isCorrect = false;
-              }
-            }
-            const yearEnd = toSafeDate(
-              disbursement.yearEnd || caseData?.yearEnd || caseData?.auditYearEnd || caseData?.periodEnd
-            );
-            if (yearEnd && !Number.isNaN(yearEnd.getTime())) {
-              if (svcDate <= yearEnd && glDate > yearEnd && normalizedClassification === 'properlyexcluded') {
-                issues.push(
-                  'Unrecorded Liability: Service occurred before year-end but payment was after. You should propose an accrued liability (improperly excluded).'
-                );
-                detail.isCorrect = false;
-              }
-            }
-            if (
-              workspaceEntry.selectedAssertion === 'cutoff' &&
-              workspaceEntry.serviceEndInput &&
-              typeof workspaceEntry.serviceEndInput === 'string'
-            ) {
-              const userDate = new Date(workspaceEntry.serviceEndInput);
-              const trueDate = new Date(groundTruths.servicePeriodEnd);
-              if (!Number.isNaN(userDate.getTime()) && !Number.isNaN(trueDate.getTime())) {
-                const diffTime = Math.abs(userDate.getTime() - trueDate.getTime());
-                const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-                if (diffDays > 1) {
-                  issues.push(
-                    'Review Note: Your conclusion is correct, but the Service Period date you documented does not match the invoice. Re-examine the document.'
-                  );
-                }
-              }
-            }
-          }
-          break;
-        }
-        case 'INVENTORY': {
-          const actualRaw =
-            groundTruths.actualCount ??
-            groundTruths.actualValue ??
-            groundTruths.confirmedValue ??
-            null;
-          const actualQty = actualRaw !== null ? Number(actualRaw) : NaN;
-          const ledgerQty = Number(disbursement.amount);
-          if (Number.isFinite(actualQty) && Number.isFinite(ledgerQty) && actualQty < ledgerQty) {
-            if (userClassification === 'properlyIncluded') {
-              issues.push(
-                `Existence Error: Physical count (${actualQty}) is lower than the system record (${ledgerQty}). You should have proposed an adjustment.`
-              );
-              detail.isCorrect = false;
-            }
-          }
-          if (typeof groundTruths.condition === 'string' && groundTruths.condition.trim()) {
-            const conditionLower = groundTruths.condition.toLowerCase();
-            if (conditionLower.includes('damaged') && !trimmedNote.toLowerCase().includes('damaged')) {
-              issues.push(
-                'Valuation Missing: Inventory noted as damaged in the evidence. Document the condition and consider an adjustment.'
-              );
-            }
-          }
-          break;
-        }
-        case 'CASH': {
-          if (isException && hasNote) {
-            const noteLower = trimmedNote.toLowerCase();
-            if (!noteLower.includes('outstanding') && !noteLower.includes('transit')) {
-              issues.push(
-                "Terminology Warning: Cash variances are typically due to 'Outstanding Checks' or 'Deposits in Transit'. Please use precise terminology."
-              );
-            }
-          }
-          const refKey = normalizeRef(disbursement.paymentId || disbursement.payee);
-          const scenario = scenarioByRef.get(refKey);
-          const expectedClassification = scenario ? scenarioClassificationMap[scenario] : null;
-          const cutoffRefDate = cutoffByScenarioRef.get(refKey);
-          const outsideCutoffWindow =
-            applyCutoffWindow &&
-            cutoffBaseDate &&
-            cutoffRefDate &&
-            !Number.isNaN(cutoffRefDate.getTime()) &&
-            cutoffRefDate.getTime() - cutoffBaseDate.getTime() > cutoffWindowDays * 24 * 60 * 60 * 1000;
-          const belowThreshold = applyThreshold && Number(disbursement.amount) < testingThreshold;
-          if (
-            scenario &&
-            expectedClassification &&
-            expectedClassification !== normalizedClassification &&
-            !outsideCutoffWindow &&
-            !belowThreshold
-          ) {
-            issues.push(
-              `Bank Rec Mismatch: Expected ${expectedClassification} based on reconciliation scenario (${scenario}).`
-            );
-            detail.isCorrect = false;
-          }
-          break;
-        }
-        default:
-          break;
-      }
-
-      if (isProperlyIncluded && !workspaceEntry.evidenceLinked) {
-        issues.push(
-          'Documentation Deficiency: You vouched for existence but failed to link the supporting evidence in the workpaper.'
-        );
-      }
-
-      if (issues.length > 0) {
-        reviewNotes.push({
-          paymentId,
-          payee: disbursement.payee || null,
-          notes: issues,
-        });
-      }
-
-      gradingDetails[paymentId] = detail;
-      totalCount += 1;
-      if (detail.isCorrect) {
-        correctCount += 1;
-      }
-    });
-
-    const score = totalCount > 0 ? (correctCount / totalCount) * 100 : 0;
-    const roundedScore = Math.round(score * 100) / 100;
-
-    if (cashContext.simulateMathError && !headerNoteAdded) {
-      reviewNotes.push({
-        paymentId: 'cash_header',
-        payee: null,
-        notes: [
-          'Header Check: Client bank rec may contain a math/transposition error. Ensure student ties bank and book balances.',
-        ],
-      });
-      headerNoteAdded = true;
-    }
 
     return event.data.after.ref.set(
       {
-        grade: roundedScore,
+        grade: gradingOutput.grade,
         gradedAt: admin.firestore.FieldValue.serverTimestamp(),
-        gradingDetails,
-        virtualSeniorFeedback: reviewNotes,
+        gradingDetails: gradingOutput.gradingDetails,
+        virtualSeniorFeedback: gradingOutput.virtualSeniorFeedback,
       },
       { merge: true }
     );

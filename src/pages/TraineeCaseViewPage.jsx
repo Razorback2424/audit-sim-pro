@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Timestamp } from 'firebase/firestore';
 import { Button, useRoute, useAuth, useUser, useModal, appId } from '../AppCore';
 import { listStudentCases, subscribeToCase } from '../services/caseService';
-import { saveSubmission } from '../services/submissionService';
+import { scoreCaseAttempt } from '../services/submissionService';
 import { fetchProgressForCases, saveProgress, subscribeProgressForCases } from '../services/progressService';
 import { fetchRecipeProgress, saveRecipeProgress } from '../services/recipeProgressService';
 import { startCaseAttemptFromPool } from '../services/attemptService';
@@ -421,6 +420,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
   const [furthestStepIndex, setFurthestStepIndex] = useState(0);
   const [levelGate, setLevelGate] = useState({ locked: false, message: '' });
   const [modulePassed, setModulePassed] = useState(null);
+  const [serverAttemptSummary, setServerAttemptSummary] = useState(null);
   const [tieOutSelectionId, setTieOutSelectionId] = useState('');
   const [tieOutAssessmentFeedback, setTieOutAssessmentFeedback] = useState('');
   const [tieOutActionSelectionId, setTieOutActionSelectionId] = useState('');
@@ -665,6 +665,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       });
       attemptStartedAtRef.current = null;
       setModulePassed(null);
+      setServerAttemptSummary(null);
       lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null, inlineNotSupported: false };
 
       if (!canPersist) {
@@ -933,14 +934,11 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       caseId,
       (caseDoc) => {
         if (caseDoc && !caseDoc._deleted) {
-          const isPublic =
-            typeof caseDoc.publicVisible === 'boolean'
-              ? caseDoc.publicVisible
-              : !(Array.isArray(caseDoc.visibleToUserIds) && caseDoc.visibleToUserIds.length > 0);
+          const isPublic = caseDoc.publicVisible === true;
           const isRostered =
             Boolean(userId) && Array.isArray(caseDoc.visibleToUserIds) && caseDoc.visibleToUserIds.includes(userId);
           const fallbackPath = isDemo ? '/' : '/trainee';
-          if (!isPublic && !isRostered) {
+          if (!isPublic && !isRostered && !isBillingPaid(billing)) {
             showModal('You do not have permission to view this case.', 'Access Denied');
             navigate(fallbackPath);
             return;
@@ -978,6 +976,10 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
 
     return () => unsubscribe();
   }, [caseId, navigate, userId, showModal, isDemo, isDemoCase, billing, loadingBilling]);
+
+  useEffect(() => {
+    setServerAttemptSummary(null);
+  }, [caseId]);
 
   useEffect(() => {
     if (!caseData || !canPersist || !recipeGateId) return;
@@ -2378,10 +2380,6 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
         storagePath: doc.storagePath,
       }))
     );
-    const attemptSummary = computeDisbursementAttemptSummary({
-      disbursements: disbursementList,
-      studentAnswers: allocationPayload,
-    });
     const startedAtMs = attemptStartedAtRef.current;
     const timeToCompleteSeconds =
       startedAtMs ? Math.max(0, Math.round((Date.now() - startedAtMs) / 1000)) : null;
@@ -2430,25 +2428,30 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
         clearTimeout(progressSaveTimeoutRef.current);
       }
 
-      await saveSubmission(userId, caseId, {
+      const scoringResult = await scoreCaseAttempt({
+        appId,
         caseId,
-        caseName: caseTitle,
-        selectedPaymentIds: selectedIds,
-        retrievedDocuments: documents,
-        disbursementClassifications: allocationPayload,
-        expectedClassifications: expectedPayload,
-        surlGateResults: {
-          tieOut: tieOutGateResult,
-          completeness: completenessGateResult,
-          selection: selectionGateResult,
+        submission: {
+          caseId,
+          caseName: caseTitle,
+          selectedPaymentIds: selectedIds,
+          retrievedDocuments: documents,
+          disbursementClassifications: allocationPayload,
+          expectedClassifications: expectedPayload,
+          surlGateResults: {
+            tieOut: tieOutGateResult,
+            completeness: completenessGateResult,
+            selection: selectionGateResult,
+          },
+          attemptSummary: {
+            requiredDocsOpened,
+            timeToCompleteSeconds,
+          },
         },
-        attemptSummary: {
-          ...attemptSummary,
-          requiredDocsOpened,
-          timeToCompleteSeconds,
-        },
-        submittedAt: Timestamp.now(),
       });
+      if (scoringResult?.attemptSummary) {
+        setServerAttemptSummary(scoringResult.attemptSummary);
+      }
 
       await saveProgress({
         appId,
@@ -3684,10 +3687,12 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
 
   const renderResultsStep = () => {
     const resultsDisbursements = disbursementList;
-    const completionSummary = computeDisbursementAttemptSummary({
-      disbursements: resultsDisbursements,
-      studentAnswers: classificationAmounts,
-    });
+    const completionSummary =
+      serverAttemptSummary ||
+      computeDisbursementAttemptSummary({
+        disbursements: resultsDisbursements,
+        studentAnswers: classificationAmounts,
+      });
     const requiredSelectionIds = new Set(
       Array.isArray(selectionGateResult?.requiredIds) ? selectionGateResult.requiredIds : []
     );

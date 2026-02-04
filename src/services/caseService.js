@@ -5,6 +5,7 @@ export {
   fetchCasesPage,
   buildStudentCasesQuery,
   listStudentCases,
+  listStudentDemoCases,
 } from './cases/caseQueries';
 
 export {

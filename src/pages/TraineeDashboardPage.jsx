@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, Loader2 } from 'lucide-react';
 import { Button, useRoute, useModal, useAuth, useUser, appId } from '../AppCore';
-import { listStudentCases, deleteRetakeAttempt } from '../services/caseService';
+import { listStudentCases, listStudentDemoCases, deleteRetakeAttempt } from '../services/caseService';
 import { listRecipes } from '../services/recipeService';
 import { listCaseRecipes } from '../generation/recipeRegistry';
 import { subscribeProgressForCases } from '../services/progressService';
@@ -145,7 +145,7 @@ export default function TraineeDashboardPage() {
   }, [showPaywall]);
 
   const fetchCases = useCallback(async () => {
-    if (!userId || loadingBilling || showPaywall) return;
+    if (!userId || loadingBilling) return;
     try {
       setLoading(true);
       setCases([]);
@@ -164,7 +164,8 @@ export default function TraineeDashboardPage() {
       const maxPages = 50;
 
       while (pageCount < maxPages) {
-        const result = await listStudentCases({
+        const listFn = showPaywall ? listStudentDemoCases : listStudentCases;
+        const result = await listFn({
           appId,
           uid: userId,
           pageSize: PAGE_SIZE,
@@ -238,7 +239,7 @@ export default function TraineeDashboardPage() {
   }, [userId, fetchCases]);
 
   useEffect(() => {
-    if (!userId || loadingBilling || showPaywall) return;
+    if (!userId || loadingBilling) return;
     let isActive = true;
     const loadRecipes = async () => {
       try {

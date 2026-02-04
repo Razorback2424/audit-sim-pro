@@ -320,16 +320,23 @@ export const buildStudentCasesQuery = ({
   includeOpensAtGate = false,
   statusFilter = DEFAULT_STUDENT_STATUSES,
   sortBy = 'due',
+  hasPaidAccess = false,
 } = {}) => {
   if (!appId) throw new Error('buildStudentCasesQuery requires appId');
   if (!uid) throw new Error('buildStudentCasesQuery requires uid');
 
   const casesCollection = collection(db, FirestorePaths.CASES_COLLECTION());
   const now = getNow();
-  let filterConstraint = and(
-    where('_deleted', '==', false),
-    or(where('publicVisible', '==', true), where('visibleToUserIds', 'array-contains', uid))
-  );
+  let filterConstraint = and(where('_deleted', '==', false));
+
+  if (!hasPaidAccess) {
+    filterConstraint = and(
+      filterConstraint,
+      or(where('publicVisible', '==', true), where('visibleToUserIds', 'array-contains', uid)),
+      where('accessLevel', '==', 'demo'),
+      where('publicVisible', '==', true)
+    );
+  }
 
   if (statusFilter && statusFilter.length > 0) {
     filterConstraint = and(filterConstraint, where('status', 'in', statusFilter));
@@ -364,6 +371,42 @@ export const buildStudentCasesQuery = ({
   }
 
   return query(casesCollection, ...constraints);
+};
+
+export const listStudentDemoCases = async ({
+  appId,
+  uid,
+  pageSize = 20,
+  cursor,
+  includeOpensAtGate = false,
+  statusFilter,
+  sortBy = 'due',
+} = {}) => {
+  const q = buildStudentCasesQuery({
+    appId,
+    uid,
+    pageSize,
+    cursor,
+    includeOpensAtGate,
+    statusFilter,
+    sortBy,
+    hasPaidAccess: false,
+  });
+
+  const snap = await getDocs(q);
+  const items = snap.docs.map((docSnap) => toNormalizedCaseModel(docSnap.id, docSnap.data()));
+  const lastDoc = snap.docs[snap.docs.length - 1];
+  let nextCursor = null;
+
+  if (lastDoc) {
+    const data = lastDoc.data() || {};
+    nextCursor = {
+      dueAt: data.dueAt ?? null,
+      title: toTrimmedString(data.title || data.caseName || ''),
+    };
+  }
+
+  return { items, nextCursor };
 };
 
 /**
