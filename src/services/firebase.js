@@ -51,18 +51,27 @@ const appCheckSiteKey =
   process.env.REACT_APP_APPCHECK_SITE_KEY ||
   firebaseConfig.appCheckSiteKey ||
   '';
-const appCheckDebugToken = process.env.REACT_APP_APPCHECK_DEBUG_TOKEN || '';
+const appCheckDebugToken =
+  process.env.REACT_APP_APPCHECK_DEBUG_TOKEN ||
+  process.env.REACT_APP_FIREBASE_APPCHECK_DEBUG_TOKEN ||
+  '';
 
 try {
   if (appCheckDebugToken && typeof window !== 'undefined') {
+    // eslint-disable-next-line no-restricted-globals
     window.FIREBASE_APPCHECK_DEBUG_TOKEN =
       appCheckDebugToken === 'true' ? true : appCheckDebugToken;
   }
-  if (appCheckSiteKey) {
+  const shouldInitAppCheck = Boolean(appCheckSiteKey);
+  if (shouldInitAppCheck) {
     initializeAppCheck(firebaseApp, {
       provider: new ReCaptchaV3Provider(appCheckSiteKey),
       isTokenAutoRefreshEnabled: true,
     });
+  } else if (appCheckDebugToken) {
+    console.warn(
+      '[app-check] Debug token set but REACT_APP_APPCHECK_SITE_KEY is missing; App Check not initialized.'
+    );
   } else if (process.env.NODE_ENV === 'production') {
     console.warn('[app-check] Missing REACT_APP_APPCHECK_SITE_KEY; App Check not initialized.');
   }
