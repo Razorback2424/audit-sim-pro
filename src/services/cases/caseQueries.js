@@ -6,9 +6,10 @@ import {
   orderBy,
   limit,
   startAfter,
-  getCountFromServer,
   and,
   or,
+  endBefore,
+  limitToLast,
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { db, FirestorePaths, functions } from '../../AppCore';
@@ -195,8 +196,9 @@ export const fetchCasesPage = async ({
   auditArea = '',
   caseLevel = '',
   sort = DEFAULT_CASE_SORT,
-  page = 1,
-  limit: limitInput = 12,
+  pageSize: pageSizeInput = 12,
+  cursor = null,
+  direction = 'next',
   orgId = null,
 } = {}) => {
   const casesCollection = collection(db, FirestorePaths.CASES_COLLECTION());
@@ -207,9 +209,7 @@ export const fetchCasesPage = async ({
   const caseLevelFilter = normalizeCaseLevelFilter(caseLevel);
   const sortKey = CASE_SORT_CONFIG[sort] ? sort : DEFAULT_CASE_SORT;
 
-  const parsedPage = Number.parseInt(page, 10);
-  const desiredPage = Number.isFinite(parsedPage) && parsedPage > 0 ? parsedPage : 1;
-  const parsedLimit = Number.parseInt(limitInput, 10);
+  const parsedLimit = Number.parseInt(pageSizeInput, 10);
   const pageSize = Number.isFinite(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 100) : 12;
 
   const { filters, order, deletedFilter } = buildAdminCasesQueryParts({
@@ -229,35 +229,41 @@ export const fetchCasesPage = async ({
     console.log('[caseService] Query parts:', { filters, order });
   }
 
-  const countSnapshot = await getCountFromServer(query(casesCollection, ...filters));
-  const total = countSnapshot.data().count ?? 0;
-  const maxPage = total === 0 ? 1 : Math.max(1, Math.ceil(total / pageSize));
-  const effectivePage = Math.min(desiredPage, maxPage);
-  const offsetValue = total === 0 ? 0 : (effectivePage - 1) * pageSize;
-
   const baseConstraints = [...filters, ...order];
+  const pageCursor = cursor && typeof cursor === 'object' ? cursor : null;
+  const forward = direction !== 'prev';
+  const constraints = [...baseConstraints];
 
-  let items = [];
-  if (total > 0) {
-    const paginationConstraints = [...baseConstraints];
-
-    if (offsetValue > 0) {
-      const cursorSnapshot = await getDocs(
-        query(casesCollection, ...baseConstraints, limit(offsetValue))
-      );
-      const cursorDocs = cursorSnapshot.docs;
-      if (cursorDocs.length > 0) {
-        paginationConstraints.push(startAfter(cursorDocs[cursorDocs.length - 1]));
-      }
+  if (forward) {
+    if (pageCursor?.lastDoc) {
+      constraints.push(startAfter(pageCursor.lastDoc));
     }
-
-    paginationConstraints.push(limit(pageSize));
-
-    const snapshot = await getDocs(query(casesCollection, ...paginationConstraints));
-    items = snapshot.docs.map((docSnap) => toNormalizedCaseModel(docSnap.id, docSnap.data()));
+    constraints.push(limit(pageSize + 1));
+  } else {
+    if (pageCursor?.firstDoc) {
+      constraints.push(endBefore(pageCursor.firstDoc));
+    }
+    constraints.push(limitToLast(pageSize + 1));
   }
 
-  if (total === 0 && deletedFilter) {
+  const snapshot = await getDocs(query(casesCollection, ...constraints));
+  let docs = snapshot.docs;
+  const hasExtra = docs.length > pageSize;
+  if (hasExtra) {
+    docs = forward ? docs.slice(0, pageSize) : docs.slice(docs.length - pageSize);
+  }
+
+  const items = docs.map((docSnap) => toNormalizedCaseModel(docSnap.id, docSnap.data()));
+  const firstDoc = docs[0] || null;
+  const lastDoc = docs[docs.length - 1] || null;
+  const pageInfo = {
+    firstDoc,
+    lastDoc,
+    hasNext: forward ? hasExtra : Boolean(pageCursor?.firstDoc),
+    hasPrev: forward ? Boolean(pageCursor?.lastDoc) : hasExtra,
+  };
+
+  if (items.length === 0 && deletedFilter) {
     try {
       const filtersWithoutDeleted = filters.filter((constraint) => constraint !== deletedFilter);
       const fallbackSnapshot = await getDocs(
@@ -286,24 +292,10 @@ export const fetchCasesPage = async ({
   }
 
   if (DEBUG_LOGS) {
-    console.log('[caseService] Returning:', { total, items });
+    console.log('[caseService] Returning:', { items: items.length, pageInfo });
   }
 
-  return {
-    items,
-    total,
-    page: effectivePage,
-    requestedPage: desiredPage,
-    pageSize,
-    hasNextPage: effectivePage < maxPage,
-    hasPreviousPage: effectivePage > 1,
-    sort: sortKey,
-    search: searchTerm,
-    statusFilters,
-    visibilityFilters,
-    auditAreaFilter,
-    caseLevelFilter,
-  };
+  return { items, pageInfo };
 };
 
 const DEFAULT_STUDENT_STATUSES = ['assigned', 'in_progress', 'submitted', 'draft'];

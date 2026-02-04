@@ -49,6 +49,8 @@ import {
 } from '../services/caseGenerationService';
 import { listCaseRecipes } from '../generation/recipeRegistry';
 
+const DEBUG_LOGS = process.env.REACT_APP_DEBUG_LOGS === 'true';
+
 const DRAFT_STORAGE_KEY = 'audit_sim_case_draft_v1';
 const DEFAULT_LAYOUT_TYPE = 'two_pane';
 const MAX_ARTIFACT_BYTES = 5 * 1024 * 1024;
@@ -334,21 +336,33 @@ function useCaseForm({ params }) {
       });
       const resolvedOrgId = orgIdFromToken ?? userProfile?.orgId ?? null;
       if (!resolvedOrgId) return;
-      const result = await withTimeout(
-        fetchCasesPage({ page: 1, limit: 200, orgId: resolvedOrgId }),
-        5000
-      );
-      if (!isActive) return;
       const titles = [];
       const codes = [];
-      (result?.items || []).forEach((item) => {
-        if (!item) return;
-        if (item.title) titles.push(item.title);
-        if (item.caseName) titles.push(item.caseName);
-        if (item.instruction?.title) titles.push(item.instruction.title);
-        if (item.moduleCode) codes.push(item.moduleCode);
-        if (item.instruction?.moduleCode) codes.push(item.instruction.moduleCode);
-      });
+      let cursor = null;
+      let hasNext = true;
+      let pageCount = 0;
+      const maxPages = 5;
+
+      while (hasNext && pageCount < maxPages) {
+        // Keep within timeout window per page fetch.
+        // eslint-disable-next-line no-await-in-loop
+        const result = await withTimeout(
+          fetchCasesPage({ pageSize: 200, orgId: resolvedOrgId, cursor, direction: 'next' }),
+          5000
+        );
+        if (!isActive) return;
+        (result?.items || []).forEach((item) => {
+          if (!item) return;
+          if (item.title) titles.push(item.title);
+          if (item.caseName) titles.push(item.caseName);
+          if (item.instruction?.title) titles.push(item.instruction.title);
+          if (item.moduleCode) codes.push(item.moduleCode);
+          if (item.instruction?.moduleCode) codes.push(item.instruction.moduleCode);
+        });
+        hasNext = Boolean(result?.pageInfo?.hasNext);
+        cursor = hasNext ? { lastDoc: result?.pageInfo?.lastDoc } : null;
+        pageCount += 1;
+      }
       setExistingInstructionTitles(titles);
       setExistingModuleCodes(codes);
     };
@@ -1012,9 +1026,11 @@ function useCaseForm({ params }) {
   const ulog = (event, payload) => {
     const data = payload || {};
     try {
-      console.info('[case-upload]', event, data);
-      if (event === 'error:resumable' && data?.error?.serverResponse) {
-        console.info('[case-upload] serverResponse', data.error.serverResponse);
+      if (DEBUG_LOGS) {
+        console.info('[case-upload]', event, data);
+        if (event === 'error:resumable' && data?.error?.serverResponse) {
+          console.info('[case-upload] serverResponse', data.error.serverResponse);
+        }
       }
     } catch (e) {
       // no-op
@@ -1904,12 +1920,16 @@ function useCaseForm({ params }) {
     async (recipeId, overrides = {}) => {
       try {
         const startedAt = Date.now();
-        console.info('[case-form] generateCaseDraft:start', { recipeId, overrides });
+        if (DEBUG_LOGS) {
+          console.info('[case-form] generateCaseDraft:start', { recipeId, overrides });
+        }
         const draft = await generateCaseDraftFromServer({ recipeId, overrides });
-        console.info('[case-form] generateCaseDraft:buildComplete', {
-          recipeId,
-          ms: Date.now() - startedAt,
-        });
+        if (DEBUG_LOGS) {
+          console.info('[case-form] generateCaseDraft:buildComplete', {
+            recipeId,
+            ms: Date.now() - startedAt,
+          });
+        }
         setCaseName(draft.caseName);
         setAuditArea(draft.auditArea);
         setLayoutType(draft.layoutType);
@@ -1940,10 +1960,12 @@ function useCaseForm({ params }) {
           setCaseLevel(draft.generationPlan.caseLevel);
         }
         setHasGeneratedDraft(true);
-        console.info('[case-form] generateCaseDraft:stateApplied', {
-          recipeId,
-          ms: Date.now() - startedAt,
-        });
+        if (DEBUG_LOGS) {
+          console.info('[case-form] generateCaseDraft:stateApplied', {
+            recipeId,
+            ms: Date.now() - startedAt,
+          });
+        }
         return true;
       } catch (error) {
         console.error('[case-form] Failed to generate case draft', error);

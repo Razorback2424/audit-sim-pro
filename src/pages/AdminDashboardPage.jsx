@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ListFilter,
   List,
@@ -161,12 +161,15 @@ export default function AdminDashboardPage() {
     loading: true,
     error: null,
     items: [],
-    total: 0,
-    page: 1,
-    pageSize: 12,
-    hasNextPage: false,
-    hasPreviousPage: false,
+    pageInfo: {
+      firstDoc: null,
+      lastDoc: null,
+      hasNext: false,
+      hasPrev: false,
+    },
   });
+  const [pageIndex, setPageIndex] = useState(0);
+  const [pageCursors, setPageCursors] = useState([]);
   const [demoConfig, setDemoConfig] = useState(null);
   const [demoCaseId, setDemoCaseId] = useState('');
   const [demoError, setDemoError] = useState('');
@@ -194,6 +197,7 @@ export default function AdminDashboardPage() {
       return 12;
     }
   });
+  const prevPageIndexRef = useRef(0);
   const isAdmin = role === 'admin' || role === 'owner';
 
   useEffect(() => {
@@ -393,10 +397,24 @@ export default function AdminDashboardPage() {
   }, [query?.sort]);
 
 
-  const currentPage = useMemo(() => {
-    const parsed = Number.parseInt(query?.page ?? '', 10);
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
-  }, [query?.page]);
+  const filterSignature = useMemo(
+    () =>
+      JSON.stringify({
+        search: debouncedSearch,
+        statusFilters,
+        visibilityFilters,
+        auditAreaFilter,
+        sortOption,
+        pageSize,
+      }),
+    [debouncedSearch, statusFilters, visibilityFilters, auditAreaFilter, sortOption, pageSize]
+  );
+
+  useEffect(() => {
+    setPageIndex(0);
+    setPageCursors([]);
+    prevPageIndexRef.current = 0;
+  }, [filterSignature]);
 
   useEffect(() => {
     let isActive = true;
@@ -408,29 +426,40 @@ export default function AdminDashboardPage() {
 
     const loadCases = async () => {
       try {
+        const direction =
+          pageIndex > prevPageIndexRef.current ? 'next' : pageIndex < prevPageIndexRef.current ? 'prev' : 'next';
+        const cursor =
+          direction === 'next'
+            ? pageIndex > 0
+              ? pageCursors[pageIndex - 1]
+              : null
+            : pageCursors[pageIndex + 1] || pageCursors[pageIndex] || null;
         const result = await fetchCasesPage({
           search: debouncedSearch,
           status: statusFilters,
           visibility: visibilityFilters,
           auditArea: auditAreaFilter || undefined,
           sort: sortOption,
-          page: currentPage,
-          limit: pageSize,
+          pageSize,
+          cursor,
+          direction,
         });
         if (!isActive) return;
         setCasesState({
           loading: false,
           error: null,
           items: result.items,
-          total: result.total,
-          page: result.page,
-          pageSize: result.pageSize,
-          hasNextPage: result.hasNextPage,
-          hasPreviousPage: result.hasPreviousPage,
+          pageInfo: result.pageInfo,
         });
-        if (result.page !== currentPage) {
-          setQuery({ page: String(result.page) }, { replace: true });
-        }
+        setPageCursors((prev) => {
+          const next = [...prev];
+          next[pageIndex] = {
+            firstDoc: result.pageInfo?.firstDoc || null,
+            lastDoc: result.pageInfo?.lastDoc || null,
+          };
+          return next;
+        });
+        prevPageIndexRef.current = pageIndex;
       } catch (error) {
         console.error('Error loading cases:', error);
         if (!isActive) return;
@@ -448,15 +477,9 @@ export default function AdminDashboardPage() {
       isActive = false;
     };
   }, [
-    debouncedSearch,
-    statusFilters,
-    visibilityFilters,
-    auditAreaFilter,
-    sortOption,
-    currentPage,
-    pageSize,
-    setQuery,
+    pageIndex,
     refreshToken,
+    filterSignature,
   ]);
 
   useEffect(() => {
@@ -591,7 +614,6 @@ export default function AdminDashboardPage() {
     }
 
     setLoadingActivity(true);
-    console.info('[AdminDashboard] Loading recent activity');
     let caseActivity = [];
     let submissionActivity = [];
 
@@ -603,11 +625,6 @@ export default function AdminDashboardPage() {
           return bTime - aTime;
         })
         .slice(0, 10);
-      console.debug('[AdminDashboard] Combined activity updated', {
-        caseActivityCount: caseActivity.length,
-        submissionActivityCount: submissionActivity.length,
-        combinedCount: combined.length,
-      });
       setRecentActivity(combined);
       setLoadingActivity(false);
     };
@@ -630,9 +647,6 @@ export default function AdminDashboardPage() {
               ? item.timestamp
               : item.timestamp?.toMillis?.() ?? item.timestamp ?? null,
         }));
-        console.debug('[AdminDashboard] Received case activity snapshot', {
-          count: caseActivity.length,
-        });
         updateActivity();
       },
       handleError,
@@ -650,9 +664,6 @@ export default function AdminDashboardPage() {
             item.submittedAt?.toMillis?.() ??
             (item.submittedAt instanceof Date ? item.submittedAt.getTime() : null),
         }));
-        console.debug('[AdminDashboard] Received submission activity snapshot', {
-          count: submissionActivity.length,
-        });
         updateActivity();
       },
       handleError,
@@ -660,7 +671,6 @@ export default function AdminDashboardPage() {
     );
 
     return () => {
-      console.info('[AdminDashboard] Cleaning up recent activity subscriptions');
       if (typeof unsubscribeCases === 'function') {
         unsubscribeCases();
       }
@@ -765,14 +775,12 @@ export default function AdminDashboardPage() {
     }
   };
 
-  const totalCases = casesState.total;
-  const effectivePage = casesState.page;
-  const effectivePageSize = casesState.pageSize || pageSize;
-  const showingFrom = totalCases === 0 ? 0 : (effectivePage - 1) * effectivePageSize + 1;
-  const showingTo = totalCases === 0 ? 0 : Math.min(effectivePage * effectivePageSize, totalCases);
-  const maxPage = totalCases === 0 ? 1 : Math.max(1, Math.ceil(totalCases / effectivePageSize));
-  const hasNextPage = casesState.hasNextPage;
-  const hasPreviousPage = casesState.hasPreviousPage;
+  const effectivePage = pageIndex + 1;
+  const effectivePageSize = pageSize;
+  const showingFrom = casesState.items.length === 0 ? 0 : pageIndex * effectivePageSize + 1;
+  const showingTo = casesState.items.length === 0 ? 0 : pageIndex * effectivePageSize + casesState.items.length;
+  const hasNextPage = casesState.pageInfo?.hasNext;
+  const hasPreviousPage = casesState.pageInfo?.hasPrev;
   const isLoadingCases = casesState.loading;
   const filtersActive = statusFilters.length + visibilityFilters.length + (auditAreaFilter ? 1 : 0);
 
@@ -784,6 +792,8 @@ export default function AdminDashboardPage() {
       current.add(value);
     }
     const next = Array.from(current);
+    setPageIndex(0);
+    setPageCursors([]);
     setQuery(
       {
         status: next.length ? next.join(',') : undefined,
@@ -794,6 +804,8 @@ export default function AdminDashboardPage() {
   };
 
   const clearFilters = () => {
+    setPageIndex(0);
+    setPageCursors([]);
     setQuery(
       {
         status: undefined,
@@ -807,6 +819,8 @@ export default function AdminDashboardPage() {
 
   const handleSortChange = (event) => {
     const { value } = event.target;
+    setPageIndex(0);
+    setPageCursors([]);
     setQuery(
       {
         sort: value === DEFAULT_CASE_SORT ? undefined : value,
@@ -822,13 +836,16 @@ export default function AdminDashboardPage() {
       return;
     }
     setPageSize(next);
+    setPageIndex(0);
+    setPageCursors([]);
     setQuery({ page: '1' }, { replace: true });
   };
 
   const goToPage = (pageNumber) => {
-    const clamped = Math.min(Math.max(pageNumber, 1), Math.max(1, maxPage));
+    const clamped = Math.max(pageNumber, 1);
     if (clamped === effectivePage) return;
-    setQuery({ page: String(clamped) });
+    setPageIndex(clamped - 1);
+    setQuery({ page: String(clamped) }, { replace: true });
   };
 
   const handlePrevPage = () => {
@@ -1288,9 +1305,9 @@ export default function AdminDashboardPage() {
                 <div className="text-sm text-gray-600">
                   {isLoadingCases
                     ? 'Loading cases…'
-                    : totalCases === 0
+                    : casesState.items.length === 0
                     ? 'No cases to display'
-                    : `Showing ${showingFrom}–${showingTo} of ${totalCases} cases`}
+                    : `Showing ${showingFrom}–${showingTo} cases`}
                   {!isLoadingCases && filtersActive > 0 && (
                     <span className="ml-2 text-gray-500">
                       • {filtersActive} filter{filtersActive === 1 ? '' : 's'} active
@@ -1320,9 +1337,7 @@ export default function AdminDashboardPage() {
                     >
                       <ChevronLeft size={18} className="mr-1" /> Prev
                     </Button>
-                    <span className="text-sm text-gray-600">
-                      Page {Math.max(1, effectivePage)} of {Math.max(1, maxPage)}
-                    </span>
+                    <span className="text-sm text-gray-600">Page {Math.max(1, effectivePage)}</span>
                     <Button
                       onClick={handleNextPage}
                       variant="secondary"

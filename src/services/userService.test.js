@@ -75,16 +75,12 @@ describe('userService', () => {
     expect(result2).toBeNull();
   });
 
-  test('setUserRole writes when role differs', async () => {
-    getDoc.mockResolvedValueOnce({ exists: () => true, data: () => ({ role: 'trainee' }) });
+  test('setUserRole calls adminSetUserRole callable', async () => {
+    const callableMock = jest.fn().mockResolvedValue({ data: { role: 'admin' } });
+    httpsCallable.mockReturnValueOnce(callableMock);
     await setUserRole('u1', 'admin');
-    expect(setDoc).toHaveBeenCalledWith(expect.anything(), { role: 'admin' }, { merge: true });
-  });
-
-  test('setUserRole skips when role unchanged', async () => {
-    getDoc.mockResolvedValueOnce({ exists: () => true, data: () => ({ role: 'admin' }) });
-    await setUserRole('u2', 'admin');
-    expect(setDoc).not.toHaveBeenCalled();
+    expect(httpsCallable).toHaveBeenCalledWith({}, 'adminSetUserRole');
+    expect(callableMock).toHaveBeenCalledWith({ targetUid: 'u1', role: 'admin' });
   });
 
   test('upsertUserProfile calls setDoc', async () => {

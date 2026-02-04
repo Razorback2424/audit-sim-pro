@@ -18,6 +18,8 @@ import { db, FirestorePaths, appId as defaultAppId, functions } from '../AppCore
 import { validateAttemptSummary } from '../utils/attemptSummaryValidator';
 import { httpsCallable } from 'firebase/functions';
 
+const DEBUG_LOGS = process.env.REACT_APP_DEBUG_LOGS === 'true';
+
 const ALLOWED_ATTEMPT_TYPES = new Set(['baseline', 'practice', 'final']);
 const REQUIRED_ATTEMPT_SUMMARY_FIELDS = [
   'totalConsidered',
@@ -323,10 +325,6 @@ export const subscribeToRecentSubmissionActivity = (
   onError,
   { appId = defaultAppId, limit: limitCount = 5 } = {}
 ) => {
-  console.info('[SubmissionService] Subscribing to recent submission activity', {
-    appId,
-    limitCount,
-  });
   const groupRef = collectionGroup(db, 'caseSubmissions');
   const fallbackErrorCodes = new Set(['failed-precondition', 'invalid-argument']);
 
@@ -335,12 +333,6 @@ export const subscribeToRecentSubmissionActivity = (
       docSnap.ref.path.includes(`/artifacts/${appId}/users/`)
     );
 
-    if (filteredDocs.length !== docs.length) {
-      console.info('[SubmissionService] Filtered submissions by app scope', {
-        totalDocs: docs.length,
-        filteredDocs: filteredDocs.length,
-      });
-    }
 
     const mapped = filteredDocs.map((docSnap) => {
       const data = docSnap.data() || {};
@@ -350,12 +342,6 @@ export const subscribeToRecentSubmissionActivity = (
         ? coercedSubmittedAt
         : data.submittedAt ?? coercedSubmittedAt ?? null;
       const userId = parent?.id || data.userId || null;
-      const sanitizedUserId = typeof userId === 'string' ? `${userId.slice(0, 6)}…` : null;
-      console.debug('[SubmissionService] Preparing submission activity entry', {
-        docPath: docSnap.ref.path,
-        hasSubmittedAt: Boolean(submittedAt),
-        sanitizedUserId,
-      });
       return {
         caseId: docSnap.id,
         caseName: data.caseName || '',
@@ -380,10 +366,12 @@ export const subscribeToRecentSubmissionActivity = (
   };
 
   const handleSnapshot = (snapshot, options) => {
-    console.info('[SubmissionService] Snapshot received for recent submission activity', {
-      totalDocs: snapshot.size,
-      limitCount,
-    });
+    if (DEBUG_LOGS) {
+      console.info('[SubmissionService] Snapshot received for recent submission activity', {
+        totalDocs: snapshot.size,
+        limitCount,
+      });
+    }
 
     const entries = buildEntries(snapshot.docs, options)
       .slice(0, limitCount)

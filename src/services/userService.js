@@ -113,12 +113,9 @@ export const fetchUserProfile = async (userId) => {
 };
 
 export const setUserRole = async (userId, role) => {
-  const ref = doc(db, FirestorePaths.ROLE_DOCUMENT(userId));
-  const currentRoleSnap = await getDoc(ref);
-  const existingRole = currentRoleSnap.exists() ? currentRoleSnap.data()?.role ?? null : null;
-  if (existingRole === role) return existingRole;
-  await setDoc(ref, { role }, { merge: true });
-  return role;
+  const callable = httpsCallable(functions, 'adminSetUserRole');
+  const result = await callable({ targetUid: userId, role });
+  return result?.data?.role ?? role;
 };
 
 export const upsertUserProfile = async (userId, data = {}) => {
@@ -194,18 +191,6 @@ export const ensureOrgIdForUser = async (userId, { role } = {}) => {
 };
 
 export const adminUpdateUserRole = async (userId, role) => {
-  const roleRef = doc(db, FirestorePaths.ROLE_DOCUMENT(userId));
-  const currentRoleSnap = await getDoc(roleRef);
-  const existingRole = currentRoleSnap.exists() ? currentRoleSnap.data()?.role ?? null : null;
-
-  if (existingRole !== role) {
-    await setDoc(roleRef, { role }, { merge: true });
-  }
-
-  const profileRef = doc(db, FirestorePaths.USER_PROFILE(userId));
-  await setDoc(
-    profileRef,
-    { role, lastUpdatedAt: serverTimestamp() },
-    { merge: true }
-  );
+  const callable = httpsCallable(functions, 'adminSetUserRole');
+  await callable({ targetUid: userId, role });
 };

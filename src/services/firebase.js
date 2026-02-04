@@ -7,6 +7,8 @@ import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check';
 
 /* global __firebase_config, __app_id */
 
+const DEBUG_LOGS = process.env.REACT_APP_DEBUG_LOGS === 'true';
+
 if (!window.__firebase_config) {
   window.__firebase_config = process.env.REACT_APP_FIREBASE_CONFIG ?? '{}';
 }
@@ -92,7 +94,9 @@ const resolveStorageBucketUrl = (rawBucket) => {
   if (!trimmed) return null;
   if (/^gs:\/\//i.test(trimmed) || /^https?:\/\//i.test(trimmed)) return trimmed;
   if (/\.firebasestorage\.app$/i.test(trimmed)) {
-    console.info('[storage] Using firebasestorage.app bucket', { rawBucket });
+    if (DEBUG_LOGS) {
+      console.info('[storage] Using firebasestorage.app bucket', { rawBucket });
+    }
     return `gs://${trimmed}`;
   }
   return `gs://${trimmed}`;
@@ -114,11 +118,13 @@ export const storage = storageBucketUrl
 
 try {
   const configuredBucket = firebaseApp?.options?.storageBucket;
-  if (configuredBucket) {
+  if (configuredBucket && DEBUG_LOGS) {
     console.info('[storage] Firebase config bucket:', configuredBucket);
   }
   const boundBucket = storageBucketUrl || storage.bucket;
-  console.info('[storage] Bound to bucket:', boundBucket || '(default)');
+  if (DEBUG_LOGS) {
+    console.info('[storage] Bound to bucket:', boundBucket || '(default)');
+  }
 } catch (e) {
   console.warn('[storage] Unable to determine bound bucket', e);
 }

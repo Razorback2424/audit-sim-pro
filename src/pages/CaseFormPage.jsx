@@ -7,6 +7,8 @@ import useCaseForm from '../hooks/useCaseForm';
 import { AUDIT_AREAS, AUDIT_AREA_LABELS } from '../models/caseConstants';
 export { mergeDisbursementDocuments } from '../utils/caseFormTransforms';
 
+const DEBUG_LOGS = process.env.REACT_APP_DEBUG_LOGS === 'true';
+
 export default function CaseFormPage({ params }) {
   const caseId = params?.caseId || '';
   const {
@@ -56,7 +58,9 @@ export default function CaseFormPage({ params }) {
 
     setQueueBusy(true);
     const startedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
-    console.info('[CaseFormPage] Queue doc generation started');
+    if (DEBUG_LOGS) {
+      console.info('[CaseFormPage] Queue doc generation started');
+    }
 
     try {
       // Wrap in Promise.resolve().then(...) so any synchronous throws inside the function
@@ -68,9 +72,11 @@ export default function CaseFormPage({ params }) {
       );
 
       const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
-      console.info('[CaseFormPage] Queue doc generation finished', {
-        ms: Math.round(endedAt - startedAt),
-      });
+      if (DEBUG_LOGS) {
+        console.info('[CaseFormPage] Queue doc generation finished', {
+          ms: Math.round(endedAt - startedAt),
+        });
+      }
     } catch (err) {
       const endedAt = typeof performance !== 'undefined' ? performance.now() : Date.now();
       console.error('[CaseFormPage] Manual queue generation failed', {
@@ -107,7 +113,9 @@ export default function CaseFormPage({ params }) {
 
   const handleGenerateDraft = useCallback(async () => {
     if (generationBusy) return;
-    console.info('[CaseFormPage] Generate draft clicked');
+    if (DEBUG_LOGS) {
+      console.info('[CaseFormPage] Generate draft clicked');
+    }
     if (!selectedRecipeId) {
       showModal('Select a recipe before generating a draft.', 'Generation');
       return;
@@ -126,13 +134,15 @@ export default function CaseFormPage({ params }) {
     }
     setGenerationBusy(true);
     setPendingAutoQueue(true);
-    console.info('[CaseFormPage] Starting draft generation', {
-      recipeId: selectedRecipeId,
-      auditArea: basics.auditArea,
-      yearEnd: basics.yearEndValue,
-      caseLevel: basics.caseLevel,
-      overridesEnabled: basics.overrideDefaults,
-    });
+    if (DEBUG_LOGS) {
+      console.info('[CaseFormPage] Starting draft generation', {
+        recipeId: selectedRecipeId,
+        auditArea: basics.auditArea,
+        yearEnd: basics.yearEndValue,
+        caseLevel: basics.caseLevel,
+        overridesEnabled: basics.overrideDefaults,
+      });
+    }
     const overrides = {
       yearEnd: basics.yearEndValue,
       caseLevel: basics.caseLevel,
@@ -151,7 +161,9 @@ export default function CaseFormPage({ params }) {
         generation?.generateCaseDraft(selectedRecipeId, overrides),
         60000
       );
-      console.info('[CaseFormPage] Draft generation result', { generated });
+      if (DEBUG_LOGS) {
+        console.info('[CaseFormPage] Draft generation result', { generated });
+      }
       if (generated) {
         setActiveStep(1);
       } else {

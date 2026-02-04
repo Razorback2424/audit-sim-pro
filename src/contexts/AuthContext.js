@@ -12,6 +12,8 @@ import { auth } from '../services/firebase';
 import { useModal } from './ModalContext';
 import { clearRoleCache } from '../services/roleService';
 
+const DEBUG_LOGS = process.env.REACT_APP_DEBUG_LOGS === 'true';
+
 const AuthContext = createContext(null);
 const LOGIN_TIMEOUT_MS = 15000;
 
@@ -99,10 +101,12 @@ export const AuthProvider = ({ children }) => {
         isAnonymous: user?.isAnonymous ?? null,
         providerIds: Array.isArray(user?.providerData) ? user.providerData.map((p) => p?.providerId).filter(Boolean) : [],
       });
-      console.info('[AuthProvider] onAuthStateChanged', {
-        uid: user?.uid ?? null,
-        isAnonymous: user?.isAnonymous ?? null,
-      });
+      if (DEBUG_LOGS) {
+        console.info('[AuthProvider] onAuthStateChanged', {
+          uid: user?.uid ?? null,
+          isAnonymous: user?.isAnonymous ?? null,
+        });
+      }
       if (user && user.isAnonymous) {
         try {
           signOut(auth);
@@ -115,10 +119,12 @@ export const AuthProvider = ({ children }) => {
       }
       setCurrentUser(user);
       setLoadingAuth(false);
-      console.info('[AuthProvider] auth state resolved', {
-        loadingAuth: false,
-        uid: user?.uid ?? null,
-      });
+      if (DEBUG_LOGS) {
+        console.info('[AuthProvider] auth state resolved', {
+          loadingAuth: false,
+          uid: user?.uid ?? null,
+        });
+      }
       clearRoleCache(user?.uid);
     });
 
@@ -141,7 +147,9 @@ export const AuthProvider = ({ children }) => {
       authDebug('login() called', { email: (email || '').trim() });
       await setPersistence(auth, browserLocalPersistence);
       authDebug('setPersistence resolved', {});
-      console.info('[AuthProvider] Starting email/password sign-in', { email: (email || '').trim() });
+      if (DEBUG_LOGS) {
+        console.info('[AuthProvider] Starting email/password sign-in', { email: (email || '').trim() });
+      }
       const cred = await withTimeout(
         signInWithEmailAndPassword(auth, email, password),
         LOGIN_TIMEOUT_MS,
@@ -150,7 +158,9 @@ export const AuthProvider = ({ children }) => {
         })
       );
       authDebug('signInWithEmailAndPassword resolved', { uid: cred?.user?.uid ?? null });
-      console.info('[AuthProvider] Email/password sign-in resolved', { uid: cred?.user?.uid ?? null });
+      if (DEBUG_LOGS) {
+        console.info('[AuthProvider] Email/password sign-in resolved', { uid: cred?.user?.uid ?? null });
+      }
       return cred.user;
     } catch (err) {
       authDebug('login() failed', { code: err?.code ?? null, message: err?.message ?? String(err) });

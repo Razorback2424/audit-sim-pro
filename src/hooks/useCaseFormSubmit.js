@@ -9,6 +9,8 @@ import { CASH_ARTIFACT_TYPES } from '../constants/caseFormOptions';
 import { ANSWER_KEY_FIELDS, ANSWER_KEY_TOLERANCE, ANSWER_KEY_PLACEHOLDER } from '../utils/caseFormHelpers';
 import { queueCaseGenerationJob, saveCaseGenerationPlan } from '../services/caseGenerationService';
 
+const DEBUG_LOGS = process.env.REACT_APP_DEBUG_LOGS === 'true';
+
 const canUseLocalStorage = () => {
   try {
     return typeof window !== 'undefined' && !!window.localStorage;
@@ -660,25 +662,27 @@ export function createCaseFormSubmitHandler({
         return;
       }
 
-      console.info('[CaseForm] Submitting case', {
-        isNew: isNewCaseCreation,
-        editingCaseId,
-        auditArea,
-        disbursementCount: disbursements.length,
-        referenceDocCount: referenceDocuments.length,
-        cashArtifactCount: cashArtifacts.length,
-        hasUploads:
-          flattenedMappings.some((m) => m.clientSideFile) ||
-          activeReferenceDocs.some((d) => d.clientSideFile) ||
-          disbursements.some((d) => d.highlightedDocument?.clientSideFile),
-        publicVisible: resolvedPublicVisible,
-        visibleToUserIdsCount: visibleToUserIdsArray.length,
-        caseGroupId: resolvedCaseGroupId || null,
-        userId,
-        appId,
-        orgId: resolvedOrgId,
-        role: resolvedRole,
-      });
+      if (DEBUG_LOGS) {
+        console.info('[CaseForm] Submitting case', {
+          isNew: isNewCaseCreation,
+          editingCaseId,
+          auditArea,
+          disbursementCount: disbursements.length,
+          referenceDocCount: referenceDocuments.length,
+          cashArtifactCount: cashArtifacts.length,
+          hasUploads:
+            flattenedMappings.some((m) => m.clientSideFile) ||
+            activeReferenceDocs.some((d) => d.clientSideFile) ||
+            disbursements.some((d) => d.highlightedDocument?.clientSideFile),
+          publicVisible: resolvedPublicVisible,
+          visibleToUserIdsCount: visibleToUserIdsArray.length,
+          caseGroupId: resolvedCaseGroupId || null,
+          userId,
+          appId,
+          orgId: resolvedOrgId,
+          role: resolvedRole,
+        });
+      }
       if (isNewCaseCreation) {
         const tempCaseData = {
           caseName,

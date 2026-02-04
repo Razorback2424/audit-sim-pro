@@ -1,9 +1,4 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import {
-  doc,
-  getDoc,
-  onSnapshot,
-} from 'firebase/firestore';
 import { useAuth } from './AuthContext';
 import { cacheRole, getCachedRole } from '../services/roleService';
 import { fetchUserProfile, ensureOrgIdForUser } from '../services/userService';
@@ -36,7 +31,6 @@ export const UserProvider = ({ children }) => {
 
   useEffect(() => {
     let active = true;
-    let unsubscribeRole = null;
     let unsubscribeBilling = null;
 
     const load = async () => {
@@ -64,8 +58,6 @@ export const UserProvider = ({ children }) => {
       }
 
       let claimRole = cachedRole;
-      let roleFromDoc = null;
-
       try {
         const idTokenResult = await currentUser.getIdTokenResult(true);
         claimRole = normalizeRoleValue(idTokenResult.claims.role ?? null);
@@ -74,6 +66,8 @@ export const UserProvider = ({ children }) => {
         }
         if (claimRole) {
           cacheRole(currentUser.uid, claimRole);
+          setRoleState(claimRole);
+          setLoadingRole(false);
         }
       } catch (e) {
         if (DEBUG_LOGS) {
@@ -81,73 +75,14 @@ export const UserProvider = ({ children }) => {
         }
       }
 
-      try {
-        const roleRef = doc(db, FirestorePaths.ROLE_DOCUMENT(currentUser.uid));
+      if (active && claimRole) {
+        setRoleState(claimRole);
+        setLoadingRole(false);
+      }
 
-        try {
-          const roleSnap = await getDoc(roleRef);
-          roleFromDoc = roleSnap.exists() ? normalizeRoleValue(roleSnap.data()?.role ?? null) : null;
-          if (roleFromDoc) {
-            setRoleState(roleFromDoc);
-            cacheRole(currentUser.uid, roleFromDoc);
-          }
-        } catch (err) {
-          if (DEBUG_LOGS) {
-            console.warn('[UserProvider] Failed to fetch role document:', err);
-          }
-        }
-
-        unsubscribeRole = onSnapshot(
-          roleRef,
-          (snapshot) => {
-            if (!active) return;
-            const docRole = snapshot.exists() ? normalizeRoleValue(snapshot.data()?.role ?? null) : null;
-            roleFromDoc = docRole ?? roleFromDoc;
-            const nextRole = docRole ?? claimRole ?? null;
-            const normalizedRole = normalizeRoleValue(nextRole);
-            if (DEBUG_LOGS) {
-              console.info('[UserProvider] Role snapshot update', {
-                docRole,
-                claimRole,
-                normalizedRole,
-              });
-            }
-            setRoleState(normalizedRole);
-            if (normalizedRole) cacheRole(currentUser.uid, normalizedRole);
-            setLoadingRole(false);
-          },
-          (error) => {
-            if (!active) return;
-            if (DEBUG_LOGS) {
-              console.error('[UserProvider] Role snapshot error:', error);
-            }
-            const fallbackRole = roleFromDoc ?? claimRole ?? cachedRole ?? null;
-            const normalizedRole = normalizeRoleValue(fallbackRole);
-            setRoleState(normalizedRole);
-            if (normalizedRole) cacheRole(currentUser.uid, normalizedRole);
-            setLoadingRole(false);
-            if (DEBUG_LOGS) {
-              console.info('[UserProvider] Role snapshot error fallback', {
-                claimRole,
-                normalizedRole,
-              });
-            }
-          }
-        );
-      } catch (err) {
-        if (active) {
-          if (DEBUG_LOGS) {
-            console.error('[UserProvider] Failed to subscribe to role document:', err);
-          }
-          const fallbackRole = roleFromDoc ?? claimRole ?? cachedRole ?? null;
-          const normalizedRole = normalizeRoleValue(fallbackRole);
-          setRoleState(normalizedRole);
-          if (normalizedRole) cacheRole(currentUser.uid, normalizedRole);
-          setLoadingRole(false);
-          if (DEBUG_LOGS) {
-            console.info('[UserProvider] Subscribe failure fallback', { claimRole, normalizedRole });
-          }
-        }
+      if (!claimRole && active) {
+        setRoleState(null);
+        setLoadingRole(false);
       }
 
       try {
@@ -219,9 +154,6 @@ export const UserProvider = ({ children }) => {
 
     return () => {
       active = false;
-      if (unsubscribeRole) {
-        unsubscribeRole();
-      }
       if (unsubscribeBilling) {
         unsubscribeBilling();
       }

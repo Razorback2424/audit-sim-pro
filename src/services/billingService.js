@@ -13,6 +13,12 @@ export const createCheckoutSession = async ({ plan, baseUrl }) => {
   return result?.data || {};
 };
 
+export const confirmCheckoutSession = async ({ sessionId }) => {
+  const callable = httpsCallable(functions, 'confirmCheckoutSession');
+  const result = await callable({ sessionId });
+  return result?.data || {};
+};
+
 export const fetchBillingSummary = async ({ orgId, appId: appIdOverride } = {}) => {
   if (!orgId) return null;
   const ref = doc(db, `artifacts/${appIdOverride || appId}/billing/orgs/${orgId}`);

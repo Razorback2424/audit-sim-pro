@@ -196,8 +196,8 @@ const LoginPage = () => {
 
       <div className="mt-6 text-xs text-gray-400">
         <p>
-          Need access? Ask an admin to create an account in Firebase Auth and grant you admin role at
-          <code className="mx-1">roles/&lt;your-uid&gt;</code>. Owner roles are also supported.
+          Need access? Ask an admin to create an account in Firebase Auth and grant your role via Admin User Management
+          (custom claims). Owner roles are also supported.
         </p>
       </div>
 

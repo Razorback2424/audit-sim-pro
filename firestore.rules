@@ -2,25 +2,16 @@ rules_version = '2';
 
 // Firestore security rules for AuditSim Pro
 // Admins can manage all data. Trainees may only
-// access cases they are authorized for and their own submissions. Roles are enforced via roles/{uid} documents.
+// access cases they are authorized for and their own submissions. Roles are enforced via custom claims.
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Role helpers (supports both custom claims and Firestore mirror)
+    // Role helpers (custom claims only; roles doc is a mirror)
     function roleEquals(roleValue, expected) {
       return roleValue is string && roleValue.matches('(?i)^' + expected + '$');
     }
 
-    function getRoleFromDoc() {
-      return request.auth != null
-        ? get(/databases/$(database)/documents/roles/$(request.auth.uid)).data.role
-        : null;
-    }
-
     function hasRole(expected) {
-      return request.auth != null && (
-        roleEquals(request.auth.token.role, expected) ||
-        roleEquals(getRoleFromDoc(), expected)
-      );
+      return request.auth != null && roleEquals(request.auth.token.role, expected);
     }
 
     function isOwner() {
@@ -56,31 +47,17 @@ service cloud.firestore {
         (caseData.accessLevel == 'demo');
     }
 
-    function traineeCaseVisibleToUser() {
-      return (
-        resource.data.publicVisible == true ||
-        (
-          resource.data.visibleToUserIds is list &&
-          request.auth.uid in resource.data.visibleToUserIds
-        )
-      );
-    }
-
     // Checks if the trainee can view the case currently being read
     function traineeCaseAccessible(appId) {
-      return (
+      return resource.data._deleted == false &&
         (
-          hasPaidAccess(appId) &&
-          resource.data._deleted == false &&
-          traineeCaseVisibleToUser()
-        ) ||
-        (
-          !hasPaidAccess(appId) &&
-          resource.data._deleted == false &&
-          isDemoCase(resource.data) &&
-          resource.data.publicVisible == true
-        )
-      );
+          hasPaidAccess(appId) ||
+          (
+            !hasPaidAccess(appId) &&
+            isDemoCase(resource.data) &&
+            resource.data.publicVisible == true
+          )
+        );
     }
 
     function belongsToOrg(resourceData) {

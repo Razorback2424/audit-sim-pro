@@ -524,7 +524,7 @@ const buildCaseFromRecipe = async ({ firestore, appId, moduleId, createdBy, orgI
     invoiceMappings: draft.invoiceMappings || [],
     referenceDocuments: draft.referenceDocuments,
     workpaper: draft.workpaper || null,
-    publicVisible: true,
+    publicVisible: accessLevel === 'demo',
     visibleToUserIds: [],
     status: 'assigned',
     opensAt: null,
@@ -1537,10 +1537,6 @@ exports.onCaseDeletedCleanupStorage = functions.firestore
     const storagePaths = collectCaseStoragePaths(caseData, bucketName);
 
     if (storagePaths.length === 0) {
-      console.log('[caseCleanup] No storage paths found', {
-        caseId: context.params.caseId,
-        appId: context.params.appId,
-      });
       return null;
     }
 
@@ -1557,31 +1553,13 @@ exports.onCaseDeletedCleanupStorage = functions.firestore
       })
     );
 
-    console.log('[caseCleanup] Deleted case storage', {
-      caseId: context.params.caseId,
-      appId: context.params.appId,
-      count: storagePaths.length,
-    });
-
     return null;
   });
 
 const resolveRequesterIdentity = async ({ context, appId, firestore, logLabel }) => {
   const requesterRole = context.auth.token?.role;
   let requesterOrgId = context.auth.token?.orgId ?? null;
-  let resolvedRole = requesterRole;
-
-  if (resolvedRole !== 'admin' && resolvedRole !== 'owner' && resolvedRole !== 'instructor') {
-    try {
-      const roleSnap = await firestore.doc(`roles/${context.auth.uid}`).get();
-      const docRole = roleSnap.exists ? roleSnap.data()?.role : null;
-      if (typeof docRole === 'string') {
-        resolvedRole = docRole.toLowerCase();
-      }
-    } catch (err) {
-      console.warn(`[${logLabel}] Failed to resolve role doc`, err);
-    }
-  }
+  const resolvedRole = typeof requesterRole === 'string' ? requesterRole.toLowerCase() : requesterRole;
 
   if (!requesterOrgId && appId) {
     try {
@@ -2733,6 +2711,7 @@ exports.setDemoCase = callable.https.onCall(async (data, context) => {
             ref: docSnap.ref,
             data: {
               accessLevel: 'paid',
+              publicVisible: false,
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             },
           });
