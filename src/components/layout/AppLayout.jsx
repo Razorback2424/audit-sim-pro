@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { LayoutGrid, LogOut, UserCircle2 } from 'lucide-react';
-import { Button, useAuth, useRoute, useUser, appId, ROLES } from '../../AppCore';
+import { Button, useAuth, useRoute, useUser, useModal, appId, ROLES } from '../../AppCore';
+import ReportProblemModal from '../ReportProblemModal';
 
 export default function AppLayout() {
   const { currentUser, logout } = useAuth();
   const { role, loadingRole } = useUser();
+  const { showModal } = useModal();
   const { navigate } = useRoute();
   const location = useLocation();
   const [moduleTitle, setModuleTitle] = useState('');
@@ -90,6 +92,13 @@ export default function AppLayout() {
       <footer className="border-t border-slate-200 bg-white text-slate-600 text-center p-4 text-xs sm:text-sm">
         <p>&copy; {new Date().getFullYear()} AuditSim Pro. For training purposes.</p>
         {appId && <p className="text-xs text-slate-400 mt-1">App ID: {appId}</p>}
+        <button
+          type="button"
+          className="mt-2 text-xs text-blue-600 hover:text-blue-700"
+          onClick={() => showModal(<ReportProblemModal />, 'Report a problem')}
+        >
+          Report a problem
+        </button>
       </footer>
     </div>
   );

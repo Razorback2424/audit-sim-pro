@@ -1047,6 +1047,9 @@ export default function AdminDashboardPage() {
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <h1 className="text-3xl font-bold text-gray-800">Admin Dashboard</h1>
           <div className="flex flex-wrap items-center gap-3">
+            <Button variant="secondary" onClick={() => navigate('/admin/beta')}>
+              Beta dashboard
+            </Button>
             <AdvancedToolsMenu
               canAccess={isAdmin}
               loadingAccess={loadingRole}

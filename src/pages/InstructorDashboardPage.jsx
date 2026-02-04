@@ -4,7 +4,7 @@ import { Button, useModal, useUser } from '../AppCore';
 import { ROLES } from '../constants/roles';
 import { buildRosterData } from '../utils/rosterAggregator';
 import { buildValueMetrics } from '../utils/managerDashboardData';
-import { fetchBillingSummary, openBillingPortal } from '../services/billingService';
+import { fetchBillingSummary } from '../services/billingService';
 import InviteSeatsModal from '../components/instructor/InviteSeatsModal';
 
 const TABS = [
@@ -217,14 +217,6 @@ export default function InstructorDashboardPage() {
 
   const handleAddSeats = () => {
     showModal(<InviteSeatsModal />, 'Add seats', () => null);
-  };
-
-  const handleManageBilling = async () => {
-    try {
-      await openBillingPortal({ orgId: userProfile?.orgId });
-    } catch (error) {
-      showModal(error?.message || 'Billing portal unavailable.', 'Billing');
-    }
   };
 
   if (role !== ROLES.INSTRUCTOR && role !== ROLES.OWNER) {
@@ -468,9 +460,6 @@ export default function InstructorDashboardPage() {
               <p className="text-sm text-gray-600">Plan, seats, and renewal status.</p>
             </div>
             <div className="flex items-center gap-2">
-              <Button variant="secondary" onClick={handleManageBilling}>
-                Manage billing
-              </Button>
               <Button onClick={handleAddSeats}>Add seats</Button>
             </div>
           </div>

@@ -347,11 +347,11 @@ service cloud.firestore {
 
     // Private answer keys stored under artifacts/{appId}/private/data/case_keys/{caseId}
     match /artifacts/{appId}/private/data/case_keys/{caseId} {
-      allow read: if request.auth != null && canAccessCaseKeys(appId, caseId);
+      allow read: if request.auth != null && request.auth.token.role == "admin";
       allow create, update: if request.auth != null &&
-                               canAccessCaseKeys(appId, caseId) &&
+                               request.auth.token.role == "admin" &&
                                isValidCaseKeyDocument(request.resource.data);
-      allow delete: if request.auth != null && isAdmin();
+      allow delete: if request.auth != null && request.auth.token.role == "admin";
     }
 
     // Private case generation plans stored under artifacts/{appId}/private/data/case_generation_plans/{caseId}

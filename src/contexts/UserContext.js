@@ -20,6 +20,8 @@ const ROLE_PRIORITY = {
   owner: 4,
 };
 
+const DEBUG_LOGS = process.env.REACT_APP_DEBUG_LOGS === 'true';
+
 const normalizeRoleValue = (value) => {
   if (typeof value !== 'string') return value;
   const trimmed = value.trim();
@@ -68,7 +70,9 @@ export const UserProvider = ({ children }) => {
           setLoadingRole(false);
           setBilling(null);
           setLoadingBilling(false);
-          console.info('[UserProvider] No authenticated user; role reset.');
+          if (DEBUG_LOGS) {
+            console.info('[UserProvider] No authenticated user; role reset.');
+          }
         }
         return;
       }
@@ -77,7 +81,9 @@ export const UserProvider = ({ children }) => {
       const cachedRole = normalizeRoleValue(getCachedRole(currentUser.uid));
       if (cachedRole) {
         setRoleState(cachedRole);
-        console.info('[UserProvider] Using cached role for initial render', { cachedRole });
+        if (DEBUG_LOGS) {
+          console.info('[UserProvider] Using cached role for initial render', { cachedRole });
+        }
       }
 
       let claimRole = cachedRole;
@@ -86,12 +92,16 @@ export const UserProvider = ({ children }) => {
       try {
         const idTokenResult = await currentUser.getIdTokenResult(true);
         claimRole = normalizeRoleValue(idTokenResult.claims.role ?? null);
-        console.info('[UserProvider] Retrieved token role', { claimRole });
+        if (DEBUG_LOGS) {
+          console.info('[UserProvider] Retrieved token role', { claimRole });
+        }
         if (claimRole) {
           cacheRole(currentUser.uid, claimRole);
         }
       } catch (e) {
-        console.warn('[UserProvider] Failed to refresh ID token role claim:', e);
+        if (DEBUG_LOGS) {
+          console.warn('[UserProvider] Failed to refresh ID token role claim:', e);
+        }
       }
 
       try {
@@ -105,7 +115,9 @@ export const UserProvider = ({ children }) => {
             cacheRole(currentUser.uid, roleFromDoc);
           }
         } catch (err) {
-          console.warn('[UserProvider] Failed to fetch role document:', err);
+          if (DEBUG_LOGS) {
+            console.warn('[UserProvider] Failed to fetch role document:', err);
+          }
         }
 
         unsubscribeRole = onSnapshot(
@@ -116,38 +128,48 @@ export const UserProvider = ({ children }) => {
             roleFromDoc = docRole ?? roleFromDoc;
             const nextRole = docRole ?? claimRole ?? null;
             const normalizedRole = normalizeRoleValue(nextRole);
-            console.info('[UserProvider] Role snapshot update', {
-              docRole,
-              claimRole,
-              normalizedRole,
-            });
+            if (DEBUG_LOGS) {
+              console.info('[UserProvider] Role snapshot update', {
+                docRole,
+                claimRole,
+                normalizedRole,
+              });
+            }
             setRoleState(normalizedRole);
             if (normalizedRole) cacheRole(currentUser.uid, normalizedRole);
             setLoadingRole(false);
           },
           (error) => {
             if (!active) return;
-            console.error('[UserProvider] Role snapshot error:', error);
+            if (DEBUG_LOGS) {
+              console.error('[UserProvider] Role snapshot error:', error);
+            }
             const fallbackRole = roleFromDoc ?? claimRole ?? cachedRole ?? null;
             const normalizedRole = normalizeRoleValue(fallbackRole);
             setRoleState(normalizedRole);
             if (normalizedRole) cacheRole(currentUser.uid, normalizedRole);
             setLoadingRole(false);
-            console.info('[UserProvider] Role snapshot error fallback', {
-              claimRole,
-              normalizedRole,
-            });
+            if (DEBUG_LOGS) {
+              console.info('[UserProvider] Role snapshot error fallback', {
+                claimRole,
+                normalizedRole,
+              });
+            }
           }
         );
       } catch (err) {
         if (active) {
-          console.error('[UserProvider] Failed to subscribe to role document:', err);
+          if (DEBUG_LOGS) {
+            console.error('[UserProvider] Failed to subscribe to role document:', err);
+          }
           const fallbackRole = roleFromDoc ?? claimRole ?? cachedRole ?? null;
           const normalizedRole = normalizeRoleValue(fallbackRole);
           setRoleState(normalizedRole);
           if (normalizedRole) cacheRole(currentUser.uid, normalizedRole);
           setLoadingRole(false);
-          console.info('[UserProvider] Subscribe failure fallback', { claimRole, normalizedRole });
+          if (DEBUG_LOGS) {
+            console.info('[UserProvider] Subscribe failure fallback', { claimRole, normalizedRole });
+          }
         }
       }
 
@@ -162,15 +184,19 @@ export const UserProvider = ({ children }) => {
               });
               nextProfile = { ...nextProfile, orgId: resolvedOrgId };
             } catch (orgErr) {
-              console.warn('[UserProvider] Failed to ensure orgId for user', orgErr);
+              if (DEBUG_LOGS) {
+                console.warn('[UserProvider] Failed to ensure orgId for user', orgErr);
+              }
             }
           }
           setUserProfile(nextProfile);
-          console.info('[UserProvider] Loaded profile', {
-            hasProfile: !!nextProfile,
-            profileRole: nextProfile?.role ?? null,
-            orgId: nextProfile?.orgId ?? null,
-          });
+          if (DEBUG_LOGS) {
+            console.info('[UserProvider] Loaded profile', {
+              hasProfile: !!nextProfile,
+              profileRole: nextProfile?.role ?? null,
+              orgId: nextProfile?.orgId ?? null,
+            });
+          }
           // Fall back to profile role if we still don't have a resolved role from claims/doc.
           setRoleState((prev) => {
             if (prev) return prev;
@@ -183,7 +209,9 @@ export const UserProvider = ({ children }) => {
           });
         }
       } catch (err) {
-        console.error('[UserProvider] Profile fetch error:', err);
+        if (DEBUG_LOGS) {
+          console.error('[UserProvider] Profile fetch error:', err);
+        }
         if (active) setUserProfile(null);
       }
 
@@ -202,14 +230,18 @@ export const UserProvider = ({ children }) => {
           },
           (error) => {
             if (!active) return;
-            console.error('[UserProvider] Billing subscription error:', error);
+            if (DEBUG_LOGS) {
+              console.error('[UserProvider] Billing subscription error:', error);
+            }
             setBilling(initialBilling || null);
             setLoadingBilling(false);
           }
         );
       } catch (err) {
         if (active) {
-          console.error('[UserProvider] Billing fetch error:', err);
+          if (DEBUG_LOGS) {
+            console.error('[UserProvider] Billing fetch error:', err);
+          }
           setBilling(null);
           setLoadingBilling(false);
         }
@@ -248,7 +280,9 @@ export const UserProvider = ({ children }) => {
         }
       } catch (e) {
         if (!cancelled) {
-          console.warn('Mirror role to roles/{uid} skipped:', e);
+          if (DEBUG_LOGS) {
+            console.warn('Mirror role to roles/{uid} skipped:', e);
+          }
         }
       }
     };
@@ -277,7 +311,9 @@ export const UserProvider = ({ children }) => {
         }
       } catch (e) {
         if (!cancelled) {
-          console.warn('Mirror role (from state) effect error:', e);
+          if (DEBUG_LOGS) {
+            console.warn('Mirror role (from state) effect error:', e);
+          }
         }
       }
     };
@@ -304,13 +340,17 @@ export const UserProvider = ({ children }) => {
 
       if (shouldUpdateRoleDoc(existingRole, normalizedRole)) {
         await setDoc(roleRef, { role: normalizedRole }, { merge: true });
-        console.info('[UserProvider] Role document updated', { uid: user.uid, normalizedRole });
+        if (DEBUG_LOGS) {
+          console.info('[UserProvider] Role document updated', { uid: user.uid, normalizedRole });
+        }
       } else {
-        console.info('[UserProvider] Role document already up-to-date', {
-          uid: user.uid,
-          existingRole,
-          normalizedRole,
-        });
+        if (DEBUG_LOGS) {
+          console.info('[UserProvider] Role document already up-to-date', {
+            uid: user.uid,
+            existingRole,
+            normalizedRole,
+          });
+        }
       }
 
       const existingProfile = await fetchUserProfile(user.uid);
@@ -333,9 +373,13 @@ export const UserProvider = ({ children }) => {
       setRoleState(normalizedRole);
       cacheRole(user.uid, normalizedRole);
       await user.getIdToken(true);
-      console.log('ID token refreshed after role set.');
+      if (DEBUG_LOGS) {
+        console.log('ID token refreshed after role set.');
+      }
     } catch (err) {
-      console.error('setRole error:', err);
+      if (DEBUG_LOGS) {
+        console.error('setRole error:', err);
+      }
       if (err.code === 'permission-denied') {
         if (showModal) {
           showModal(

@@ -34,12 +34,9 @@ describe('caseService', () => {
   });
 
   test('fetchCase returns data when found', async () => {
-    getDoc
-      .mockResolvedValueOnce({ exists: () => true, id: '1', data: () => ({ a: 1 }) })
-      .mockResolvedValueOnce({ exists: () => false });
+    getDoc.mockResolvedValueOnce({ exists: () => true, id: '1', data: () => ({ a: 1 }) });
     const result = await fetchCase('1');
     expect(doc).toHaveBeenNthCalledWith(1, {}, 'cases/1');
-    expect(doc).toHaveBeenNthCalledWith(2, {}, 'caseKeys/1');
     expect(result).toMatchObject({
       id: '1',
       a: 1,
@@ -65,12 +62,43 @@ describe('caseService', () => {
           status: 'draft',
           auditItems: [{ paymentId: 'p1', payee: 'Vendor', amount: '100', paymentDate: '2024-01-01', hasAnswerKey: true }],
         }),
-      })
-      .mockResolvedValueOnce({ exists: () => false });
+      });
 
     const result = await fetchCase('1');
     expect(Array.isArray(result.disbursements)).toBe(true);
     expect(result.disbursements[0].hasAnswerKey).toBe(true);
+  });
+
+  test('fetchCase loads private keys when requested', async () => {
+    getDoc
+      .mockResolvedValueOnce({
+        exists: () => true,
+        id: '1',
+        data: () => ({
+          caseName: 'Case',
+          publicVisible: true,
+          _deleted: false,
+          status: 'draft',
+          auditItems: [{ paymentId: 'p1', payee: 'Vendor', amount: '100', paymentDate: '2024-01-01' }],
+        }),
+      })
+      .mockResolvedValueOnce({
+        exists: () => true,
+        data: () => ({
+          items: {
+            p1: {
+              answerKey: { properlyIncluded: 1 },
+              correctClassification: 'included',
+            },
+          },
+        }),
+      });
+
+    const result = await fetchCase('1', { includePrivateKeys: true });
+    expect(doc).toHaveBeenNthCalledWith(1, {}, 'cases/1');
+    expect(doc).toHaveBeenNthCalledWith(2, {}, 'caseKeys/1');
+    expect(result.disbursements[0].hasAnswerKey).toBe(true);
+    expect(result.disbursements[0].correctClassification).toBe('included');
   });
 
   test('markCaseDeleted calls setDoc', async () => {

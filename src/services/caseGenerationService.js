@@ -1,6 +1,6 @@
 import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
-import { db, functions, FirestorePaths } from './firebase';
+import { appId, db, functions, FirestorePaths } from './firebase';
 
 export const saveCaseGenerationPlan = async ({ caseId, plan }) => {
   if (!caseId || !plan) return;
@@ -22,6 +22,23 @@ export const queueCaseGenerationJob = async ({ caseId, plan, appId, phaseId }) =
   const callable = httpsCallable(functions, 'queueCaseDocGeneration');
   const result = await callable({ caseId, plan, appId, phaseId: phaseId || null });
   return result?.data || null;
+};
+
+export const generateCaseDraft = async ({ recipeId, overrides = {}, appId: appIdOverride } = {}) => {
+  if (!recipeId) {
+    throw new Error('Missing recipeId for case draft generation.');
+  }
+  const callable = httpsCallable(functions, 'generateCaseDraft');
+  const result = await callable({
+    appId: appIdOverride || appId,
+    recipeId,
+    overrides: overrides || {},
+  });
+  const draft = result?.data?.draft || null;
+  if (!draft) {
+    throw new Error('Case draft generation returned no data.');
+  }
+  return draft;
 };
 
 export const fetchCaseGenerationPlan = async ({ caseId }) => {

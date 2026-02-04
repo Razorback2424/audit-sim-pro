@@ -1,11 +1,11 @@
 const { getUUID } = require('../getUUID');
-const { AUDIT_AREAS } = require('../caseConstants');
-const { buildSingleAnswerKey, DEFAULT_ANSWER_KEY_CLASSIFICATION } = require('../caseFormHelpers');
+const { AUDIT_AREAS } = require('../shared/caseConstants');
+const { buildSingleAnswerKey, DEFAULT_ANSWER_KEY_CLASSIFICATION } = require('../shared/caseFormHelpers');
 const {
   initialDisbursement,
   initialInstruction,
   initialReferenceDocument,
-} = require('../caseFormDefaults');
+} = require('../shared/caseFormDefaults');
 
 const toMoney = (value) => Number(value || 0);
 

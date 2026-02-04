@@ -7,7 +7,7 @@ import { listCaseRecipes } from '../generation/recipeRegistry';
 import { subscribeProgressForCases } from '../services/progressService';
 import { startCaseAttemptFromPool } from '../services/attemptService';
 import { isBillingPaid } from '../services/billingService';
-import { trackAnalyticsEvent } from '../services/analyticsService';
+import { ANALYTICS_EVENTS, trackAnalyticsEvent } from '../services/analyticsService';
 import {
   buildLearnerProgressView,
   DEFAULT_PATH_ID,
@@ -126,6 +126,23 @@ export default function TraineeDashboardPage() {
   const [deletingRetakeIds, setDeletingRetakeIds] = useState(() => new Set());
   const hasPaidAccess = isBillingPaid(billing);
   const showPaywall = !loadingBilling && !hasPaidAccess;
+  const hasTrackedPaywallRef = useRef(false);
+  const hasTrackedCaseListRef = useRef(false);
+  const billingStatusLabel = useMemo(() => {
+    if (loadingBilling) return 'Checking billing status…';
+    const status = typeof billing?.status === 'string' ? billing.status.trim() : '';
+    if (status) return `Billing status: ${status}`;
+    return 'Billing status: not found';
+  }, [billing, loadingBilling]);
+
+  useEffect(() => {
+    if (!showPaywall || hasTrackedPaywallRef.current) return;
+    hasTrackedPaywallRef.current = true;
+    trackAnalyticsEvent({
+      eventType: ANALYTICS_EVENTS.PAYWALL_SHOWN,
+      metadata: { source: 'dashboard', route: window.location.pathname },
+    });
+  }, [showPaywall]);
 
   const fetchCases = useCallback(async () => {
     if (!userId || loadingBilling || showPaywall) return;
@@ -190,6 +207,13 @@ export default function TraineeDashboardPage() {
 
       setCases(collected);
       setError('');
+      if (!hasTrackedCaseListRef.current) {
+        hasTrackedCaseListRef.current = true;
+        trackAnalyticsEvent({
+          eventType: ANALYTICS_EVENTS.CASE_LIST_VIEWED,
+          metadata: { source: 'dashboard', count: collected.length, route: window.location.pathname },
+        });
+      }
     } catch (err) {
       if (process.env.NODE_ENV !== 'test') {
         console.error('Error fetching cases for trainee:', err);
@@ -471,6 +495,10 @@ export default function TraineeDashboardPage() {
     try {
       setStartingModuleId(moduleId);
       const caseId = await startCaseAttemptFromPool({ moduleId });
+      trackAnalyticsEvent({
+        eventType: ANALYTICS_EVENTS.CASE_STARTED,
+        metadata: { source: 'dashboard', moduleId, caseId, route: window.location.pathname },
+      });
       navigate(`/cases/${caseId}`);
     } catch (err) {
       console.error('Failed to start module:', err);
@@ -565,6 +593,7 @@ export default function TraineeDashboardPage() {
             <p className="text-sm text-gray-600">
               Your account can run the demo SURL case. Upgrade to access all modules and save mastery.
             </p>
+            <div className="text-xs text-gray-500">{billingStatusLabel}</div>
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
               <Button
                 onClick={() => {
@@ -598,6 +627,7 @@ export default function TraineeDashboardPage() {
             {error}
           </div>
         ) : null}
+        <div className="text-xs text-gray-500">{billingStatusLabel}</div>
 
         {initialLoad && loading ? (
           <div className="text-center py-16 bg-white rounded-lg shadow-sm">

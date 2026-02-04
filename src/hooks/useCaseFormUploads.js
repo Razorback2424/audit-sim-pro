@@ -11,6 +11,8 @@ import {
 } from '../utils/caseFileHelpers';
 import { initialHighlightedDocument } from '../constants/caseFormDefaults';
 
+const DEBUG_LOGS = process.env.REACT_APP_DEBUG_LOGS === 'true';
+
 const getArtifactFileRejection = (file, { unsupportedLabel, tooLargeLabel, supportedLabels, maxBytes }) => {
   if (!isSupportedFile(file)) {
     return {
@@ -83,7 +85,9 @@ export function createCaseFormUploadHandlers({
     if (draftCaseId) return draftCaseId;
 
     const orgIdFromToken = await getCurrentUserOrgId().catch((e) => {
-      console.warn('[CaseForm] Failed to fetch orgId from token (draft create)', e);
+      if (DEBUG_LOGS) {
+        console.warn('[CaseForm] Failed to fetch orgId from token (draft create)', e);
+      }
       return null;
     });
     const resolvedOrgId = orgIdFromToken ?? userProfile?.orgId ?? null;
@@ -290,9 +294,11 @@ export function createCaseFormUploadHandlers({
           error?.customData?._rawError ??
           error?.message ??
           '';
-        try {
-          console.error('[case-upload] raw error', error);
-        } catch {}
+        if (DEBUG_LOGS) {
+          try {
+            console.error('[case-upload] raw error', error);
+          } catch {}
+        }
         let parsedResponse = null;
         if (typeof response === 'string') {
           try {
@@ -429,7 +435,9 @@ export function createCaseFormUploadHandlers({
         uploadError: null,
       }));
     } catch (err) {
-      console.error('[CaseForm] Immediate mapping upload failed', err);
+      if (DEBUG_LOGS) {
+        console.error('[CaseForm] Immediate mapping upload failed', err);
+      }
       showModal(`Could not upload the invoice right now: ${err.message}`, 'Upload Error');
       setDisbursements((prev) =>
         prev.map((disbursement) => {
@@ -543,7 +551,9 @@ export function createCaseFormUploadHandlers({
         showModal(`Highlighted upload failed: ${result.uploadError}`, 'Upload Error');
       }
     } catch (err) {
-      console.error('[CaseForm] Immediate highlight upload failed', err);
+      if (DEBUG_LOGS) {
+        console.error('[CaseForm] Immediate highlight upload failed', err);
+      }
       showModal(`Could not upload highlighted document right now: ${err.message}`, 'Upload Error');
     } finally {
       delete highlightInflightRef.current[disbursementTempId];
@@ -682,7 +692,9 @@ export function createCaseFormUploadHandlers({
     }
     if (!caseIdForUpload) {
       const errorMsg = 'Cannot upload reference document: Case ID not finalized.';
-      console.error(errorMsg, docItem);
+      if (DEBUG_LOGS) {
+        console.error(errorMsg, docItem);
+      }
       ulog(uploadId, 'reference:abort:no-case-id');
       applyDocUpdate((doc) =>
         doc._tempId === docItem._tempId ? { ...doc, uploadError: errorMsg, uploadProgress: undefined } : doc
@@ -795,9 +807,11 @@ export function createCaseFormUploadHandlers({
           error?.customData?._rawError ??
           error?.message ??
           '';
-        try {
-          console.error('[case-reference-upload] raw error', error);
-        } catch {}
+        if (DEBUG_LOGS) {
+          try {
+            console.error('[case-reference-upload] raw error', error);
+          } catch {}
+        }
         let parsedResponse = null;
         if (typeof response === 'string') {
           try {
@@ -858,7 +872,9 @@ export function createCaseFormUploadHandlers({
     const docItem = disbursement?.highlightedDocument;
     const fallbackName = (docItem?.fileName || '').trim() || (docItem?.clientSideFile?.name || '').trim();
 
-    console.log('uploadHighlightedDocument: start', { disbursement, caseIdForUpload });
+    if (DEBUG_LOGS) {
+      console.log('uploadHighlightedDocument: start', { disbursement, caseIdForUpload });
+    }
 
     const updateHighlightedDocumentForDisbursement = (dtid, updater) => {
       setDisbursements((prev) =>
@@ -915,7 +931,9 @@ export function createCaseFormUploadHandlers({
     }
     if (!caseIdForUpload) {
       const errorMsg = 'Cannot upload highlighted document: Case ID not finalized.';
-      console.error(errorMsg, disbursement);
+      if (DEBUG_LOGS) {
+        console.error(errorMsg, disbursement);
+      }
       ulog(uploadId, 'highlight:abort:no-case-id');
       updateHighlightedDocumentForDisbursement(disbursementTempId, (current) => ({
         ...(current || initialHighlightedDocument()),
@@ -1032,9 +1050,11 @@ export function createCaseFormUploadHandlers({
           error?.customData?.response?.statusCode ||
           error?.customData?.xhrStatus ||
           '';
-        try {
-          console.error('[case-highlight-upload] raw error', error);
-        } catch {}
+        if (DEBUG_LOGS) {
+          try {
+            console.error('[case-highlight-upload] raw error', error);
+          } catch {}
+        }
         let parsedResponse = null;
         if (typeof response === 'string') {
           try {
@@ -1056,13 +1076,15 @@ export function createCaseFormUploadHandlers({
               }
             : null,
         });
-        console.error('uploadHighlightedDocument: caught error', {
-          code,
-          msg,
-          response,
-          xhrStatus,
-          error,
-        });
+        if (DEBUG_LOGS) {
+          console.error('uploadHighlightedDocument: caught error', {
+            code,
+            msg,
+            response,
+            xhrStatus,
+            error,
+          });
+        }
         updateHighlightedDocumentForDisbursement(disbursementTempId, (current) => ({
           ...(current || initialHighlightedDocument()),
           uploadError: msg,

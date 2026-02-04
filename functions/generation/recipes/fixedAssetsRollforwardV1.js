@@ -1,6 +1,6 @@
 const { fixedAssetsCoreV1 } = require('./fixedAssetsCoreV1');
-const { AUDIT_AREAS } = require('../caseConstants');
-const { initialInstruction } = require('../caseFormDefaults');
+const { AUDIT_AREAS } = require('../shared/caseConstants');
+const { initialInstruction } = require('../shared/caseFormDefaults');
 
 const fixedAssetsRollforwardV1 = {
   id: 'case.fixed-assets.rollforward.basic.v1',

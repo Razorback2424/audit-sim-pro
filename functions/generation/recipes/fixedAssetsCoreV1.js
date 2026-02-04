@@ -1,13 +1,13 @@
 const { getUUID } = require('../getUUID');
-const { AUDIT_AREAS } = require('../caseConstants');
-const { buildSingleAnswerKey } = require('../caseFormHelpers');
+const { AUDIT_AREAS } = require('../shared/caseConstants');
+const { buildSingleAnswerKey } = require('../shared/caseFormHelpers');
 const {
   initialDisbursement,
   initialInstruction,
   initialReferenceDocument,
   initialFaClass,
   initialFaAddition,
-} = require('../caseFormDefaults');
+} = require('../shared/caseFormDefaults');
 
 const buildDisbursement = ({ paymentId, payee, amount, paymentDate, explanation }) => {
   const base = initialDisbursement();

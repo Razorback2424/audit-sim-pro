@@ -45,8 +45,8 @@ import {
   fetchCaseGenerationPlan,
   queueCaseGenerationJob,
   saveCaseGenerationPlan,
+  generateCaseDraft as generateCaseDraftFromServer,
 } from '../services/caseGenerationService';
-import { buildCaseDraftFromRecipe } from '../generation/buildCaseDraft';
 import { listCaseRecipes } from '../generation/recipeRegistry';
 
 const DRAFT_STORAGE_KEY = 'audit_sim_case_draft_v1';
@@ -1092,7 +1092,7 @@ function useCaseForm({ params }) {
         // eslint-disable-next-line no-await-in-loop
         await new Promise((resolve) => setTimeout(resolve, 2000));
         // eslint-disable-next-line no-await-in-loop
-        const updated = await fetchCase(caseIdForJob).catch(() => null);
+        const updated = await fetchCase(caseIdForJob, { includePrivateKeys: true }).catch(() => null);
         if (updated?.referenceDocuments) {
           const normalized = normalizeReferenceDocumentsForForm(updated.referenceDocuments);
           setReferenceDocuments(normalized);
@@ -1274,7 +1274,7 @@ function useCaseForm({ params }) {
   useEffect(() => {
     if (isEditing && editingCaseId) {
       setLoading(true);
-      fetchCase(editingCaseId)
+      fetchCase(editingCaseId, { includePrivateKeys: true })
         .then((data) => {
           if (data) {
             setOriginalCaseData(data);
@@ -1901,11 +1901,11 @@ function useCaseForm({ params }) {
   const goBack = () => navigate('/admin');
 
   const generateCaseDraft = useCallback(
-    (recipeId, overrides = {}) => {
+    async (recipeId, overrides = {}) => {
       try {
         const startedAt = Date.now();
         console.info('[case-form] generateCaseDraft:start', { recipeId, overrides });
-        const draft = buildCaseDraftFromRecipe({ recipeId, overrides });
+        const draft = await generateCaseDraftFromServer({ recipeId, overrides });
         console.info('[case-form] generateCaseDraft:buildComplete', {
           recipeId,
           ms: Date.now() - startedAt,
@@ -1951,7 +1951,7 @@ function useCaseForm({ params }) {
         return false;
       }
     },
-    [showModal]
+    [generateCaseDraftFromServer, showModal]
   );
 
   const resetGeneratedDraft = useCallback(() => {

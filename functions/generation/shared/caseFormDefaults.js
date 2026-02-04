@@ -1,4 +1,4 @@
-const { getUUID } = require('./getUUID');
+const { getUUID } = require('../getUUID');
 const { DEFAULT_ANSWER_KEY_CLASSIFICATION, buildSingleAnswerKey } = require('./caseFormHelpers');
 
 const initialHighlightedDocument = () => ({

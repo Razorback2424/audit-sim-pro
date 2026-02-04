@@ -1,6 +1,6 @@
 const { getUUID } = require('../getUUID');
-const { AUDIT_AREAS } = require('../caseConstants');
-const { buildSingleAnswerKey } = require('../caseFormHelpers');
+const { AUDIT_AREAS } = require('../shared/caseConstants');
+const { buildSingleAnswerKey } = require('../shared/caseFormHelpers');
 const {
   initialCashRegisterItem,
   initialCutoffItem,
@@ -8,7 +8,7 @@ const {
   initialInstruction,
   initialOutstandingItem,
   initialReferenceDocument,
-} = require('../caseFormDefaults');
+} = require('../shared/caseFormDefaults');
 
 const buildCashArtifact = ({ type, fileName }) => ({
   _tempId: getUUID(),

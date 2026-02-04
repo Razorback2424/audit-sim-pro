@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Timestamp } from 'firebase/firestore';
 import { Button, useRoute, useAuth, useUser, useModal, appId } from '../AppCore';
-import { fetchCase, listStudentCases, subscribeToCase } from '../services/caseService';
+import { listStudentCases, subscribeToCase } from '../services/caseService';
 import { saveSubmission } from '../services/submissionService';
 import { fetchProgressForCases, saveProgress, subscribeProgressForCases } from '../services/progressService';
 import { fetchRecipeProgress, saveRecipeProgress } from '../services/recipeProgressService';
 import { startCaseAttemptFromPool } from '../services/attemptService';
 import { isBillingPaid } from '../services/billingService';
-import { trackAnalyticsEvent } from '../services/analyticsService';
+import { ANALYTICS_EVENTS, trackAnalyticsEvent } from '../services/analyticsService';
 import { getSignedDocumentUrl } from '../services/documentService';
 import { Send, Loader2, ExternalLink, Download } from 'lucide-react';
 import ResultsAnalysis from '../components/trainee/ResultsAnalysis';
@@ -402,7 +402,6 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
   }, []);
 
   const [caseData, setCaseData] = useState(null);
-  const [caseWithKeys, setCaseWithKeys] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeStep, setActiveStep] = useState(FLOW_STEPS.INSTRUCTION);
   const [recipeProgress, setRecipeProgress] = useState(null);
@@ -548,6 +547,9 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
   const retakeResettingRef = useRef(false);
   const decisionHintTimeoutRef = useRef(null);
   const lockNoticeRef = useRef(false);
+  const hasTrackedCaseOpenRef = useRef(false);
+  const hasTrackedResultsRef = useRef(false);
+  const hasTrackedPaywallRef = useRef(false);
 
   useEffect(() => {
     if (!tieOutGateConfig) {
@@ -865,6 +867,15 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
   }, [activeStep]);
 
   useEffect(() => {
+    if (activeStep !== FLOW_STEPS.RESULTS || hasTrackedResultsRef.current) return;
+    hasTrackedResultsRef.current = true;
+    trackAnalyticsEvent({
+      eventType: ANALYTICS_EVENTS.CASE_RESULTS_VIEWED,
+      metadata: { caseId, demo: Boolean(isDemo || isDemoCase), route: window.location.pathname },
+    });
+  }, [activeStep, caseId, isDemo, isDemoCase]);
+
+  useEffect(() => {
     selectionRef.current = selectedDisbursements;
   }, [selectedDisbursements]);
 
@@ -900,6 +911,13 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     }
     if (!isDemo && !isDemoCase && userId && !loadingBilling && !isBillingPaid(billing)) {
       setLoading(false);
+      if (!hasTrackedPaywallRef.current) {
+        hasTrackedPaywallRef.current = true;
+        trackAnalyticsEvent({
+          eventType: ANALYTICS_EVENTS.PAYWALL_SHOWN,
+          metadata: { source: 'case_view', caseId, route: window.location.pathname },
+        });
+      }
       showModal('This case is locked until you upgrade your account.', 'Upgrade required');
       navigate('/checkout?plan=individual');
       return;
@@ -962,24 +980,6 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
   }, [caseId, navigate, userId, showModal, isDemo, isDemoCase, billing, loadingBilling]);
 
   useEffect(() => {
-    let active = true;
-    if (!caseId || activeStep !== FLOW_STEPS.RESULTS) return undefined;
-    fetchCase(caseId)
-      .then((caseDoc) => {
-        if (!active) return;
-        setCaseWithKeys(caseDoc);
-      })
-      .catch((error) => {
-        if (!active) return;
-        console.warn('[TraineeCaseViewPage] Failed to load case keys for results', error);
-        setCaseWithKeys(null);
-      });
-    return () => {
-      active = false;
-    };
-  }, [caseId, activeStep]);
-
-  useEffect(() => {
     if (!caseData || !canPersist || !recipeGateId) return;
     let isActive = true;
 
@@ -999,6 +999,15 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       isActive = false;
     };
   }, [caseData, canPersist, recipeGateId]);
+
+  useEffect(() => {
+    if (!caseData || hasTrackedCaseOpenRef.current) return;
+    hasTrackedCaseOpenRef.current = true;
+    trackAnalyticsEvent({
+      eventType: ANALYTICS_EVENTS.CASE_OPENED,
+      metadata: { caseId: caseData?.id || caseId, demo: Boolean(isDemo || isDemoCase), route: window.location.pathname },
+    });
+  }, [caseData, caseId, isDemo, isDemoCase]);
 
   useEffect(() => {
     if (!query?.retake) {
@@ -2397,8 +2406,12 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
 
     if (isDemo || isDemoCase) {
       trackAnalyticsEvent({
-        eventType: 'demo_submitted',
+        eventType: ANALYTICS_EVENTS.DEMO_SUBMITTED,
         metadata: { caseId, passed: hasSuccessfulAttempt },
+      });
+      trackAnalyticsEvent({
+        eventType: ANALYTICS_EVENTS.CASE_SUBMITTED,
+        metadata: { caseId, demo: true, passed: hasSuccessfulAttempt },
       });
     }
 
@@ -2453,6 +2466,11 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
           hasSuccessfulAttempt,
         },
         clearActiveAttempt: true,
+      });
+
+      trackAnalyticsEvent({
+        eventType: ANALYTICS_EVENTS.CASE_SUBMITTED,
+        metadata: { caseId, demo: false, passed: hasSuccessfulAttempt },
       });
 
       setIsLocked(true);
@@ -3665,7 +3683,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
   };
 
   const renderResultsStep = () => {
-    const resultsDisbursements = caseWithKeys?.disbursements || disbursementList;
+    const resultsDisbursements = disbursementList;
     const completionSummary = computeDisbursementAttemptSummary({
       disbursements: resultsDisbursements,
       studentAnswers: classificationAmounts,

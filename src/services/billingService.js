@@ -20,19 +20,6 @@ export const fetchBillingSummary = async ({ orgId, appId: appIdOverride } = {}) 
   return snap.exists() ? snap.data() : null;
 };
 
-export const openBillingPortal = async ({ orgId, appId: appIdOverride } = {}) => {
-  if (!orgId) {
-    throw new Error('Missing organization ID.');
-  }
-  const callable = httpsCallable(functions, 'openBillingPortal');
-  const result = await callable({ orgId, appId: appIdOverride || appId });
-  const url = result?.data?.url;
-  if (!url) {
-    throw new Error('Billing portal unavailable.');
-  }
-  window.location.assign(url);
-};
-
 export const fetchUserBilling = async ({ uid, appId: appIdOverride } = {}) => {
   if (!uid) return null;
   const ref = doc(db, FirestorePaths.BILLING_DOCUMENT(appIdOverride || appId, uid));

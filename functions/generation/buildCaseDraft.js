@@ -1,6 +1,6 @@
 const { getCaseRecipe } = require('./recipeRegistry');
-const { initialDisbursement, initialInstruction, initialReferenceDocument } = require('./caseFormDefaults');
-const { DEFAULT_AUDIT_AREA, getCaseLevelLabel, normalizeCaseLevel } = require('./caseConstants');
+const { initialDisbursement, initialInstruction, initialReferenceDocument } = require('./shared/caseFormDefaults');
+const { DEFAULT_AUDIT_AREA, getCaseLevelLabel, normalizeCaseLevel } = require('./shared/caseConstants');
 
 const ensureArray = (value, fallback) => (Array.isArray(value) && value.length > 0 ? value : fallback);
 

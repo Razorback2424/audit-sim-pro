@@ -1,10 +1,9 @@
 import { appId, functions } from '../AppCore';
 import { httpsCallable } from 'firebase/functions';
-import { buildCaseDraftFromRecipe } from '../generation/buildCaseDraft';
 import { getCaseRecipe } from '../generation/recipeRegistry';
 import { createCase } from './caseService';
+import { generateCaseDraft, queueCaseGenerationJob, saveCaseGenerationPlan } from './caseGenerationService';
 import { fetchRecipe } from './recipeService';
-import { queueCaseGenerationJob, saveCaseGenerationPlan } from './caseGenerationService';
 
 const toTrimmedString = (value) =>
   typeof value === 'string' ? value.trim() : value === null || value === undefined ? '' : String(value);
@@ -50,7 +49,7 @@ export const generateAttemptFromRecipe = async ({ moduleId, uid, retakeAttempt =
   const recipeMeta = getCaseRecipe(moduleId);
   const recipeDetails = await fetchRecipe(moduleId).catch(() => null);
 
-  const draft = buildCaseDraftFromRecipe({ recipeId: moduleId, overrides: {} });
+  const draft = await generateCaseDraft({ recipeId: moduleId, overrides: {} });
   const recipeVersion =
     Number.isFinite(Number(recipeDetails?.recipeVersion))
       ? Number(recipeDetails.recipeVersion)

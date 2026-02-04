@@ -21,6 +21,7 @@
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
+    "sync:generation": "node scripts/sync-generation-shared.js",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
