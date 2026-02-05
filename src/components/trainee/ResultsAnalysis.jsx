@@ -223,6 +223,7 @@ export default function ResultsAnalysis({
   onRequestRetake,
   onGenerateNewCase,
   onReturnToDashboard,
+  nextRecommendation,
 }) {
   const [activeIssueIndex, setActiveIssueIndex] = useState(0);
   const [showDecoys, setShowDecoys] = useState(false);
@@ -370,6 +371,40 @@ export default function ResultsAnalysis({
   const showRetake = typeof onRequestRetake === 'function' && hasTraps;
   const showGenerate = typeof onGenerateNewCase === 'function' && hasTraps;
   const showReturn = typeof onReturnToDashboard === 'function';
+  const selectedCount =
+    studentAnswers && typeof studentAnswers === 'object' ? Object.keys(studentAnswers).length : 0;
+  const virtualSeniorSummary = (() => {
+    if (!hasTraps) {
+      return {
+        message: 'Virtual Senior feedback is limited because this case has no critical traps configured.',
+        bullets: [
+          'Ask for a trap-enabled case to get full coaching.',
+          'Use the guided review to validate your routine work.',
+        ],
+      };
+    }
+    if (criticalMissCount === 0 && routineIssueCount === 0 && falsePositiveCount === 0) {
+      return {
+        message: 'Virtual Senior: Strong execution. You matched the expected call on every critical item.',
+        bullets: [
+          'Keep: your exception judgement is on target.',
+          'Next: increase speed without sacrificing evidence checks.',
+        ],
+      };
+    }
+    return {
+      message: 'Virtual Senior: Focus on evidence quality and exception judgment.',
+      bullets: [
+        criticalMissCount > 0
+          ? `Priority: rework ${criticalMissCount} critical ${criticalMissCount === 1 ? 'miss' : 'misses'}.`
+          : 'Priority: clean up routine classification errors.',
+        falsePositiveCount > 0
+          ? `Watchouts: ${falsePositiveCount} false ${falsePositiveCount === 1 ? 'positive' : 'positives'}.`
+          : 'Watchouts: avoid over-flagging routine items.',
+      ],
+    };
+  })();
+  const recommendation = nextRecommendation || null;
 
   const invoiceDoc = useMemo(() => {
     const item = currentIssue?.item;
@@ -530,6 +565,15 @@ export default function ResultsAnalysis({
           </div>
         </div>
       ) : null}
+      <div className="rounded-xl border border-slate-200 bg-white shadow-sm px-6 py-5 space-y-3">
+        <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Virtual Senior Feedback</div>
+        <p className="text-sm text-gray-700">{virtualSeniorSummary.message}</p>
+        <ul className="text-sm text-gray-600 list-disc list-inside">
+          {virtualSeniorSummary.bullets.map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      </div>
       <div
         className={`rounded-xl border shadow-sm px-6 py-5 ${
           !hasTraps || criticalMissCount === 0
@@ -540,6 +584,28 @@ export default function ResultsAnalysis({
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
             <div className="text-xs font-semibold uppercase tracking-wide text-gray-600">At a glance</div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-5 text-sm text-gray-700">
+              <div className="rounded-lg border border-gray-200 bg-white px-3 py-2">
+                <div className="text-xs uppercase tracking-wide text-gray-500">Selections</div>
+                <div className="text-lg font-semibold text-gray-900">{selectedCount}</div>
+              </div>
+              <div className="rounded-lg border border-gray-200 bg-white px-3 py-2">
+                <div className="text-xs uppercase tracking-wide text-gray-500">Critical misses</div>
+                <div className="text-lg font-semibold text-gray-900">{criticalMissCount}</div>
+              </div>
+              <div className="rounded-lg border border-gray-200 bg-white px-3 py-2">
+                <div className="text-xs uppercase tracking-wide text-gray-500">Traps caught</div>
+                <div className="text-lg font-semibold text-gray-900">{caughtTraps.length}</div>
+              </div>
+              <div className="rounded-lg border border-gray-200 bg-white px-3 py-2">
+                <div className="text-xs uppercase tracking-wide text-gray-500">Routine correct</div>
+                <div className="text-lg font-semibold text-gray-900">{routineCorrect.length}</div>
+              </div>
+              <div className="rounded-lg border border-gray-200 bg-white px-3 py-2">
+                <div className="text-xs uppercase tracking-wide text-gray-500">False positives</div>
+                <div className="text-lg font-semibold text-gray-900">{falsePositiveCount}</div>
+              </div>
+            </div>
             <h2 className="mt-1 text-2xl font-bold text-gray-900">
               {!hasTraps
                 ? 'No critical items were configured for this case.'
@@ -624,6 +690,34 @@ export default function ResultsAnalysis({
           ) : null}
         </div>
       </div>
+
+      {recommendation ? (
+        <div className="rounded-xl border border-slate-200 bg-white shadow-sm px-6 py-5 space-y-3">
+          <div className="text-xs font-semibold uppercase tracking-wide text-gray-500">Next recommended case</div>
+          <div className="text-lg font-semibold text-gray-900">{recommendation.title}</div>
+          <p className="text-sm text-gray-700">{recommendation.reason}</p>
+          {recommendation.cta ? (
+            <div className="flex flex-col sm:flex-row gap-2">
+              <button
+                type="button"
+                onClick={recommendation.cta.onClick}
+                className="inline-flex items-center justify-center rounded-md bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:ring-offset-2"
+              >
+                {recommendation.cta.label}
+              </button>
+              {recommendation.secondaryCta ? (
+                <button
+                  type="button"
+                  onClick={recommendation.secondaryCta.onClick}
+                  className="inline-flex items-center justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-gray-300 focus:ring-offset-2"
+                >
+                  {recommendation.secondaryCta.label}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {!hasTraps || issues.length === 0 ? null : (
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">

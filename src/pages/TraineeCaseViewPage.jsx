@@ -2573,6 +2573,52 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
   }
   if (!caseData) return <div className="p-4 text-center">Case not found or you may not have access. Redirecting...</div>;
   if (hasPendingGeneration || hasMissingCashArtifacts) {
+    const nextTitle =
+      caseData?.moduleTitle || caseData?.title || caseData?.caseName || 'Next case';
+    const nextReason =
+      modulePassed === false
+        ? 'Re-run a fresh case to clear critical misses and complete the module.'
+        : 'Keep momentum with a fresh scenario in the same module.';
+    const nextRecommendation = (() => {
+      if (isDemo || isDemoCase) {
+        return {
+          title: nextTitle,
+          reason: `${nextReason} Create an account to keep going.`,
+          cta: {
+            label: 'Create account to continue',
+            onClick: () =>
+              navigate(`/checkout?plan=individual&intent=unlock-case&caseId=${encodeURIComponent(caseId)}`),
+          },
+          secondaryCta: {
+            label: 'Replay demo',
+            onClick: () => navigate('/demo/surl'),
+          },
+        };
+      }
+      if (caseData?.moduleId && typeof generateNewCase === 'function') {
+        return {
+          title: nextTitle,
+          reason: nextReason,
+          cta: {
+            label: 'Start next case',
+            onClick: generateNewCase,
+          },
+          secondaryCta: {
+            label: 'Back to dashboard',
+            onClick: () => navigate('/trainee'),
+          },
+        };
+      }
+      return {
+        title: nextTitle,
+        reason: 'Return to your dashboard to pick the next module.',
+        cta: {
+          label: 'Back to dashboard',
+          onClick: () => navigate('/trainee'),
+        },
+      };
+    })();
+
     return (
       <div className="min-h-screen bg-gray-50 px-4 py-12">
         <div className="mx-auto max-w-xl rounded-xl border border-amber-200 bg-amber-50 p-6 text-center shadow-sm">
@@ -3824,7 +3870,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
             <p className="text-slate-600">Review your performance against the Virtual Senior&apos;s expectations.</p>
           </div>
           
-          <ResultsAnalysis 
+          <ResultsAnalysis
             caseId={caseId}
             disbursements={resultsDisbursements} 
             studentAnswers={classificationAmounts} 
@@ -3837,6 +3883,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
             onRequestRetake={!isDemo && !isDemoCase ? requestRetake : undefined}
             onGenerateNewCase={caseData?.moduleId && !isDemo && !isDemoCase ? generateNewCase : undefined}
             onReturnToDashboard={() => navigate(isDemo || isDemoCase ? '/' : '/trainee')}
+            nextRecommendation={nextRecommendation}
           />
         </div>
 
