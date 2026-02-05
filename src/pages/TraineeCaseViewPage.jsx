@@ -2572,52 +2572,79 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     return <div className="p-4 text-center">This case is locked. {levelGate.message}</div>;
   }
   if (!caseData) return <div className="p-4 text-center">Case not found or you may not have access. Redirecting...</div>;
-  if (hasPendingGeneration || hasMissingCashArtifacts) {
-    const nextTitle =
-      caseData?.moduleTitle || caseData?.title || caseData?.caseName || 'Next case';
+  const nextRecommendation = useMemo(() => {
+    if (!caseData) return null;
+    const nextTitle = caseData?.moduleTitle || caseData?.title || caseData?.caseName || '';
+    if (!nextTitle) return null;
     const nextReason =
       modulePassed === false
         ? 'Re-run a fresh case to clear critical misses and complete the module.'
         : 'Keep momentum with a fresh scenario in the same module.';
-    const nextRecommendation = (() => {
-      if (isDemo || isDemoCase) {
-        return {
-          title: nextTitle,
-          reason: `${nextReason} Create an account to keep going.`,
-          cta: {
-            label: 'Create account to continue',
-            onClick: () =>
-              navigate(`/checkout?plan=individual&intent=unlock-case&caseId=${encodeURIComponent(caseId)}`),
-          },
-          secondaryCta: {
-            label: 'Replay demo',
-            onClick: () => navigate('/demo/surl'),
-          },
-        };
-      }
-      if (caseData?.moduleId && typeof generateNewCase === 'function') {
-        return {
-          title: nextTitle,
-          reason: nextReason,
-          cta: {
-            label: 'Start next case',
-            onClick: generateNewCase,
-          },
-          secondaryCta: {
-            label: 'Back to dashboard',
-            onClick: () => navigate('/trainee'),
-          },
-        };
-      }
+    if (isDemo || isDemoCase) {
       return {
         title: nextTitle,
-        reason: 'Return to your dashboard to pick the next module.',
+        reason: `${nextReason} Continue to checkout to unlock full access.`,
         cta: {
+          label: 'Continue to checkout',
+          onClick: () =>
+            navigate(`/checkout?plan=individual&intent=unlock-case&caseId=${encodeURIComponent(caseId)}`),
+        },
+        secondaryCta: {
+          label: 'Replay demo',
+          onClick: () => navigate('/demo/surl'),
+        },
+      };
+    }
+    if (caseData?.moduleId && typeof generateNewCase === 'function') {
+      return {
+        title: nextTitle,
+        reason: nextReason,
+        cta: {
+          label: 'Start next case',
+          onClick: generateNewCase,
+        },
+        secondaryCta: {
           label: 'Back to dashboard',
           onClick: () => navigate('/trainee'),
         },
       };
+    }
+    return {
+      title: nextTitle,
+      reason: 'Return to your dashboard to pick the next module.',
+      cta: {
+        label: 'Back to dashboard',
+        onClick: () => navigate('/trainee'),
+      },
+    };
+  }, [
+    caseData,
+    modulePassed,
+    isDemo,
+    isDemoCase,
+    generateNewCase,
+    navigate,
+    caseId,
+  ]);
+
+  if (hasPendingGeneration || hasMissingCashArtifacts) {
+
+    const demoReplayCount = (() => {
+      if (typeof window === 'undefined') return 0;
+      const raw = window.sessionStorage?.getItem('auditsim:demoReplayCount') || '0';
+      const parsed = Number(raw);
+      return Number.isFinite(parsed) ? parsed : 0;
     })();
+
+    const handleReplayDemo = () => {
+      try {
+        const nextCount = demoReplayCount + 1;
+        window.sessionStorage?.setItem('auditsim:demoReplayCount', String(nextCount));
+      } catch (err) {
+        // Non-blocking; continue to demo.
+      }
+      navigate('/demo/surl');
+    };
 
     return (
       <div className="min-h-screen bg-gray-50 px-4 py-12">
@@ -3807,33 +3834,35 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
                 </div>
                 <div className="flex flex-col sm:flex-row gap-2">
                   <Button
-                    variant="secondary"
-                    onClick={() => navigate('/demo/surl')}
-                  >
-                    Replay demo
-                  </Button>
-                <div className="flex flex-col gap-2 sm:flex-row">
-                  <Button
                     onClick={() => {
                       trackAnalyticsEvent({ eventType: 'upgrade_clicked', metadata: { source: 'demo_results' } });
-                      navigate(`/checkout?plan=individual&intent=unlock-case&caseId=${encodeURIComponent(caseId)}`);
+                      navigate(`/checkout?plan=individual&intent=save-report&caseId=${encodeURIComponent(caseId)}`);
                     }}
                   >
-                    Unlock full access
+                    Save my report
                   </Button>
                   <Button
                     variant="secondary"
                     onClick={() => {
                       trackAnalyticsEvent({
                         eventType: 'upgrade_clicked',
-                        metadata: { source: 'demo_results_save_report' },
+                        metadata: { source: 'demo_results_checkout' },
                       });
-                      navigate(`/checkout?plan=individual&intent=save-report&caseId=${encodeURIComponent(caseId)}`);
+                      navigate(`/checkout?plan=individual&intent=unlock-case&caseId=${encodeURIComponent(caseId)}`);
                     }}
                   >
-                    Save my report
+                    Continue to checkout
                   </Button>
                 </div>
+                <button
+                  type="button"
+                  onClick={handleReplayDemo}
+                  className={`text-sm underline ${
+                    demoReplayCount > 0 ? 'text-slate-400 hover:text-slate-500' : 'text-blue-700 hover:text-blue-800'
+                  }`}
+                >
+                  Replay demo
+                </button>
                 </div>
               </div>
             </div>
