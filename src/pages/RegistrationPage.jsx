@@ -16,6 +16,7 @@ const RegistrationPage = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const plan = typeof query?.plan === 'string' ? query.plan.trim().toLowerCase() : '';
+  const isIndividualPlan = plan === 'individual' || plan === 'individual_annual';
 
   const emailRef = useRef(null);
 
@@ -54,8 +55,8 @@ const RegistrationPage = () => {
 
       if (next) {
         navigate(next);
-      } else if (plan === 'individual') {
-        navigate('/checkout?plan=individual');
+      } else if (isIndividualPlan) {
+        navigate(`/checkout?plan=${plan}`);
       } else {
         navigate('/home');
       }
@@ -85,7 +86,7 @@ const RegistrationPage = () => {
     <div className="max-w-md mx-auto mt-10 p-6 bg-white border border-gray-200 rounded-md shadow-sm">
       <h1 className="text-2xl font-semibold text-gray-800 mb-1">Create your account</h1>
       <p className="text-sm text-gray-500 mb-6">
-        {plan === 'individual'
+        {isIndividualPlan
           ? 'Register to unlock individual access.'
           : 'Register with email and password to start your trainee account.'}
       </p>

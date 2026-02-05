@@ -9,7 +9,6 @@ export {
 } from './cases/caseQueries';
 
 export {
-  subscribeToCases,
   subscribeToActiveCases,
   subscribeToCase,
   subscribeToAdminCaseSummary,

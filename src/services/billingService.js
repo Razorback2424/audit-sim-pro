@@ -2,14 +2,22 @@ import { doc, getDoc, onSnapshot } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { appId, functions, db, FirestorePaths } from '../AppCore';
 
-export const createCheckoutSession = async ({ plan, baseUrl }) => {
+export const createCheckoutSession = async ({ plan, baseUrl, intent, caseId }) => {
   const callable = httpsCallable(functions, 'createStripeCheckoutSession');
   const payload = {
     plan,
     appId,
     baseUrl,
+    intent: intent || null,
+    caseId: caseId || null,
   };
   const result = await callable(payload);
+  return result?.data || {};
+};
+
+export const fetchPaymentsCapability = async () => {
+  const callable = httpsCallable(functions, 'getPaymentsCapability');
+  const result = await callable({});
   return result?.data || {};
 };
 
@@ -51,5 +59,5 @@ export const subscribeUserBilling = ({ uid, appId: appIdOverride } = {}, onData,
 
 export const isBillingPaid = (billing) => {
   const status = typeof billing?.status === 'string' ? billing.status.trim().toLowerCase() : '';
-  return status === 'paid' || status === 'active';
+  return status === 'active';
 };

@@ -1583,7 +1583,7 @@ const hasPaidAccessServer = async ({ firestore, appId, uid }) => {
   const billingSnap = await firestore.doc(buildBillingPath(appId, uid)).get();
   if (!billingSnap.exists) return false;
   const status = typeof billingSnap.data()?.status === 'string' ? billingSnap.data().status.toLowerCase() : '';
-  return status === 'paid' || status === 'active';
+  return status === 'active';
 };
 
 const DEFAULT_STUDENT_STATUSES = ['assigned', 'in_progress', 'submitted', 'draft'];
@@ -1689,14 +1689,17 @@ exports.listStudentCases = callable.https.onCall(async (data, context) => {
     filters.push(admin.firestore.Filter.where('opensAt', '<=', admin.firestore.Timestamp.now()));
   }
 
-  if (!isPaid) {
-    const demoVisibilityFilter = admin.firestore.Filter.or(
-      admin.firestore.Filter.where('publicVisible', '==', true),
-      admin.firestore.Filter.where('visibleToUserIds', 'array-contains', uid)
-    );
-    filters.push(demoVisibilityFilter);
-    filters.push(admin.firestore.Filter.where('accessLevel', '==', 'demo'));
-    filters.push(admin.firestore.Filter.where('publicVisible', '==', true));
+  if (resolvedRole === 'trainee') {
+    if (!isPaid) {
+      filters.push(admin.firestore.Filter.where('publicVisible', '==', true));
+    } else {
+      filters.push(
+        admin.firestore.Filter.or(
+          admin.firestore.Filter.where('publicVisible', '==', true),
+          admin.firestore.Filter.where('visibleToUserIds', 'array-contains', uid)
+        )
+      );
+    }
   }
 
   let query = casesCollection.where(admin.firestore.Filter.and(...filters));
@@ -1722,12 +1725,19 @@ exports.listStudentCases = callable.https.onCall(async (data, context) => {
   }
 
   const snap = await query.get();
-  const items = snap.docs.map((docSnap) => ({ id: docSnap.id, data: docSnap.data() || {} }));
-  const lastDoc = snap.docs[snap.docs.length - 1];
+  const rawItems = snap.docs.map((docSnap) => ({ id: docSnap.id, data: docSnap.data() || {} }));
+  const items = isPaid
+    ? rawItems
+    : rawItems.filter((entry) => {
+        const accessLevel =
+          typeof entry?.data?.accessLevel === 'string' ? entry.data.accessLevel.trim().toLowerCase() : 'paid';
+        return entry?.data?.publicVisible === true && accessLevel === 'demo';
+      });
+  const lastItem = items[items.length - 1];
 
   let nextCursor = null;
-  if (lastDoc) {
-    const data = lastDoc.data() || {};
+  if (lastItem) {
+    const data = lastItem.data || {};
     nextCursor = {
       dueAt: toCursorTimestamp(data.dueAt ?? null),
       title: toTrimmedString(data.title || data.caseName || ''),

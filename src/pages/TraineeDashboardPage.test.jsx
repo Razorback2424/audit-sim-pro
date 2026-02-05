@@ -30,7 +30,7 @@ jest.mock('../AppCore', () => ({
     role: 'trainee',
     loadingRole: false,
     userProfile: { uid: 'u1' },
-    billing: { status: 'paid' },
+    billing: { status: 'active' },
     loadingBilling: false,
   }),
   appId: 'test-app'

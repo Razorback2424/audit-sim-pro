@@ -212,7 +212,7 @@ jest.mock('../AppCore', () => {
       role: 'trainee',
       loadingRole: false,
       userProfile: { uid: 'u1' },
-      billing: { status: 'paid' },
+      billing: { status: 'active' },
       loadingBilling: false,
     }),
     storage: { app: {} },
@@ -322,6 +322,23 @@ describe('TraineeCaseViewPage', () => {
     const [improperlyExcluded] = await screen.findAllByLabelText(/Improperly Excluded/i);
     expect(properlyIncluded).toBeEnabled();
     expect(improperlyExcluded).toBeEnabled();
+  });
+
+  test('blocks paid trainee from non-public, unassigned case', async () => {
+    renderCase({
+      caseName: 'Private Case',
+      publicVisible: false,
+      visibleToUserIds: ['someone-else'],
+      disbursements: [
+        { paymentId: 'p1', payee: 'Vendor', amount: '100', paymentDate: '2024-01-01' },
+      ],
+    });
+
+    await waitFor(() => {
+      expect(mockModal.showModal).toHaveBeenCalled();
+    });
+    const [message] = mockModal.showModal.mock.calls[0] || [];
+    expect(message).toMatch(/do not have permission to view this case/i);
   });
 
   test('skips gate when recipe progress is already passed', async () => {

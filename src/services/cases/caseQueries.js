@@ -324,7 +324,6 @@ export const buildStudentCasesQuery = ({
   if (!hasPaidAccess) {
     filterConstraint = and(
       filterConstraint,
-      or(where('publicVisible', '==', true), where('visibleToUserIds', 'array-contains', uid)),
       where('accessLevel', '==', 'demo'),
       where('publicVisible', '==', true)
     );

@@ -38,7 +38,7 @@ service cloud.firestore {
       return request.auth != null &&
         exists(/databases/$(database)/documents/artifacts/$(appId)/users/$(request.auth.uid)/billing/status) &&
         (
-          get(/databases/$(database)/documents/artifacts/$(appId)/users/$(request.auth.uid)/billing/status).data.status in ['paid', 'active']
+          get(/databases/$(database)/documents/artifacts/$(appId)/users/$(request.auth.uid)/billing/status).data.status == 'active'
         );
     }
 
@@ -51,7 +51,16 @@ service cloud.firestore {
     function traineeCaseAccessible(appId) {
       return resource.data._deleted == false &&
         (
-          hasPaidAccess(appId) ||
+          (
+            hasPaidAccess(appId) &&
+            (
+              resource.data.publicVisible == true ||
+              (
+                resource.data.visibleToUserIds is list &&
+                resource.data.visibleToUserIds.hasAny([request.auth.uid])
+              )
+            )
+          ) ||
           (
             !hasPaidAccess(appId) &&
             isDemoCase(resource.data) &&
@@ -275,8 +284,8 @@ service cloud.firestore {
         )) ||
         (request.auth == null && isDemoCase(resource.data) && resource.data.publicVisible == true)
       );
-      // For queries, restrict to privileged users only (trainees must use callable function).
-      allow list: if request.auth != null && (isAdmin() || isInstructor());
+      // For queries, allow admins/instructors and paid trainees.
+      allow list: if request.auth != null && (isAdmin() || isInstructor() || (isTrainee() && hasPaidAccess(appId)));
       allow create: if request.auth != null &&
         (
           isAdmin() ||

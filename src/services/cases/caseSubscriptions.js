@@ -7,14 +7,6 @@ import {
   toMillis,
 } from './caseTransforms';
 
-export const subscribeToCases = (onData, onError) => {
-  const q = query(collection(db, FirestorePaths.CASES_COLLECTION()));
-  return onSnapshot(q, (snap) => {
-    const data = snap.docs.map((d) => toNormalizedCaseModel(d.id, d.data()));
-    onData(data);
-  }, onError);
-};
-
 export const subscribeToActiveCases = (onData, onError) => {
   const q = query(collection(db, FirestorePaths.CASES_COLLECTION()), where('_deleted', '==', false));
   return onSnapshot(q, (snap) => {
@@ -34,14 +26,7 @@ export const subscribeToCase = (caseId, onData, onError) => {
   }, onError);
 };
 
-const subscribeToActiveCaseModels = (onData, onError) =>
-  subscribeToCases(
-    (cases) => {
-      const activeCases = cases.filter((item) => !item._deleted);
-      onData(activeCases);
-    },
-    onError
-  );
+const subscribeToActiveCaseModels = (onData, onError) => subscribeToActiveCases(onData, onError);
 
 export const subscribeToAdminCaseSummary = (onData, onError) =>
   subscribeToActiveCaseModels((cases) => {

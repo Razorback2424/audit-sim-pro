@@ -317,12 +317,13 @@ const Pricing = () => {
             <div className="absolute top-0 right-0 bg-blue-600/20 text-blue-400 px-3 py-1 rounded-bl-xl text-xs font-bold uppercase">
               Most Popular
             </div>
-            <h3 className="text-2xl font-bold text-white mb-2">Student Access</h3>
-            <div className="flex items-baseline gap-1 mb-6">
-              <span className="text-4xl font-bold text-white">$29</span>
-              <span className="text-slate-500">/ lifetime</span>
+            <h3 className="text-2xl font-bold text-white mb-2">Individual Auditor Access</h3>
+            <div className="flex items-baseline gap-2 mb-2">
+              <span className="text-4xl font-bold text-white">$39</span>
+              <span className="text-slate-500">/ month</span>
             </div>
-            <p className="text-slate-400 mb-8">Perfect for students and new hires wanting to crush their first busy season.</p>
+            <p className="text-sm text-slate-400 mb-6">Or $299/year billed annually.</p>
+            <p className="text-slate-400 mb-8">Perfect for early-career auditors who want a real simulator, not just videos.</p>
             <ul className="space-y-4 mb-8">
               {['SURL Module (Liabilities)', 'Cash Reconciliation Module', 'Fixed Asset Module', 'Immediate "Virtual Senior" Feedback'].map((item) => (
                 <li key={item} className="flex items-center gap-3 text-slate-300">
@@ -331,21 +332,29 @@ const Pricing = () => {
                 </li>
               ))}
             </ul>
-            <button
-              onClick={() => navigate('/checkout?plan=individual')}
-              className="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold py-3 rounded-xl transition-colors border border-slate-700"
-            >
-              Get Instant Access
-            </button>
+            <div className="grid gap-3">
+              <button
+                onClick={() => navigate('/checkout?plan=individual')}
+                className="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold py-3 rounded-xl transition-colors border border-slate-700"
+              >
+                Start monthly
+              </button>
+              <button
+                onClick={() => navigate('/checkout?plan=individual_annual')}
+                className="w-full bg-slate-900 hover:bg-slate-800 text-white font-bold py-3 rounded-xl transition-colors border border-slate-700"
+              >
+                Bill annually ($299/year)
+              </button>
+            </div>
           </div>
 
           <div className="bg-slate-800 border border-slate-700 rounded-2xl p-8">
-            <h3 className="text-2xl font-bold text-white mb-2">Firm License</h3>
+            <h3 className="text-2xl font-bold text-white mb-2">Firm License (Pilot)</h3>
             <div className="flex items-baseline gap-1 mb-6">
               <span className="text-4xl font-bold text-white">$2,500</span>
               <span className="text-slate-500">/ year</span>
             </div>
-            <p className="text-slate-400 mb-8">For regional firms who want to standardize onboarding and reduce review notes.</p>
+            <p className="text-slate-400 mb-8">For regional firms: pilot license up to 10 seats.</p>
             <ul className="space-y-4 mb-8">
               {['Up to 50 Trainee Accounts', 'Admin Dashboard & Reporting', 'Custom Case Logic', 'White-glove Onboarding'].map((item) => (
                 <li key={item} className="flex items-center gap-3 text-slate-300">

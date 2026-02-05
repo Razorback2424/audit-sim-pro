@@ -920,7 +920,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
         });
       }
       showModal('This case is locked until you upgrade your account.', 'Upgrade required');
-      navigate('/checkout?plan=individual');
+      navigate(`/checkout?plan=individual&intent=unlock-case&caseId=${encodeURIComponent(caseId)}`);
       return;
     }
     if (!userId && !isDemo) {
@@ -938,7 +938,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
           const isRostered =
             Boolean(userId) && Array.isArray(caseDoc.visibleToUserIds) && caseDoc.visibleToUserIds.includes(userId);
           const fallbackPath = isDemo ? '/' : '/trainee';
-          if (!isPublic && !isRostered && !isBillingPaid(billing)) {
+          if (!isPublic && !isRostered) {
             showModal('You do not have permission to view this case.', 'Access Denied');
             navigate(fallbackPath);
             return;
@@ -2413,13 +2413,40 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       });
     }
 
+    const submissionPayload = {
+      caseId,
+      caseName: caseTitle,
+      selectedPaymentIds: selectedIds,
+      retrievedDocuments: documents,
+      disbursementClassifications: allocationPayload,
+      expectedClassifications: expectedPayload,
+      surlGateResults: {
+        tieOut: tieOutGateResult,
+        completeness: completenessGateResult,
+        selection: selectionGateResult,
+      },
+      attemptSummary: {
+        requiredDocsOpened,
+        timeToCompleteSeconds,
+      },
+    };
+
     if (!canPersist) {
+      try {
+        const pendingPayload = {
+          caseId,
+          submission: submissionPayload,
+          savedAt: Date.now(),
+        };
+        window.localStorage.setItem(`pending_report_${caseId}`, JSON.stringify(pendingPayload));
+      } catch (err) {
+        console.warn('[demo] Failed to cache report payload', err);
+      }
       if (progressSaveTimeoutRef.current) {
         clearTimeout(progressSaveTimeoutRef.current);
       }
       setIsLocked(true);
       setActiveStep(FLOW_STEPS.RESULTS);
-      showModal('Demo complete. Create an account to save your results and unlock more cases.', 'Demo Complete');
       return;
     }
 
@@ -2431,23 +2458,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       const scoringResult = await scoreCaseAttempt({
         appId,
         caseId,
-        submission: {
-          caseId,
-          caseName: caseTitle,
-          selectedPaymentIds: selectedIds,
-          retrievedDocuments: documents,
-          disbursementClassifications: allocationPayload,
-          expectedClassifications: expectedPayload,
-          surlGateResults: {
-            tieOut: tieOutGateResult,
-            completeness: completenessGateResult,
-            selection: selectionGateResult,
-          },
-          attemptSummary: {
-            requiredDocsOpened,
-            timeToCompleteSeconds,
-          },
-        },
+        submission: submissionPayload,
       });
       if (scoringResult?.attemptSummary) {
         setServerAttemptSummary(scoringResult.attemptSummary);
@@ -3742,19 +3753,42 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
             <div className="mb-6 rounded-xl border border-blue-200 bg-blue-50 px-4 py-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <div className="text-sm font-semibold text-blue-900">Demo complete</div>
+                  <div className="text-sm font-semibold text-blue-900">Keep training with full cases</div>
                   <div className="text-sm text-blue-800">
-                    Unlock full access to run the complete simulator and track mastery.
+                    You&apos;ve seen the demo flow. Unlock the full simulator to get fresh data sets, deeper
+                    scenarios, and progress tracking.
                   </div>
                 </div>
-                <Button
-                  onClick={() => {
-                    trackAnalyticsEvent({ eventType: 'upgrade_clicked', metadata: { source: 'demo_results' } });
-                    navigate('/checkout?plan=individual');
-                  }}
-                >
-                  Unlock full access
-                </Button>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <Button
+                    variant="secondary"
+                    onClick={() => navigate('/demo/surl')}
+                  >
+                    Replay demo
+                  </Button>
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <Button
+                    onClick={() => {
+                      trackAnalyticsEvent({ eventType: 'upgrade_clicked', metadata: { source: 'demo_results' } });
+                      navigate(`/checkout?plan=individual&intent=unlock-case&caseId=${encodeURIComponent(caseId)}`);
+                    }}
+                  >
+                    Unlock full access
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      trackAnalyticsEvent({
+                        eventType: 'upgrade_clicked',
+                        metadata: { source: 'demo_results_save_report' },
+                      });
+                      navigate(`/checkout?plan=individual&intent=save-report&caseId=${encodeURIComponent(caseId)}`);
+                    }}
+                  >
+                    Save my report
+                  </Button>
+                </div>
+                </div>
               </div>
             </div>
           ) : null}

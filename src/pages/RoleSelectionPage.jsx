@@ -1,11 +1,13 @@
 import React, { useEffect } from 'react';
 import { Users, Loader2 } from 'lucide-react';
 import { Button, useAuth, useRoute, useUser } from '../AppCore';
+import { useLocation } from 'react-router-dom';
 
 export default function RoleSelectionPage() {
-  const { currentUser, loadingAuth } = useAuth();
+  const { currentUser, loadingAuth, logout } = useAuth();
   const { role } = useUser();
   const { navigate } = useRoute();
+  const location = useLocation();
   const isSettingRole = false;
 
   useEffect(() => {
@@ -14,8 +16,12 @@ export default function RoleSelectionPage() {
       navigate('/register?next=/select-role');
       return;
     }
-    if (role) navigate('/');
-  }, [currentUser, role, navigate, loadingAuth]);
+    if (role) {
+      const fallback = '/home';
+      const nextPath = location?.state?.from?.pathname || fallback;
+      navigate(nextPath);
+    }
+  }, [currentUser, role, navigate, loadingAuth, location]);
 
   if (loadingAuth) {
     return (
@@ -34,8 +40,18 @@ export default function RoleSelectionPage() {
         <p className="text-gray-600 mb-6">
           Roles are now assigned by an administrator. If you need a role change, contact support.
         </p>
-        <Button onClick={() => navigate('/home')} className="w-full py-3 text-lg" disabled={isSettingRole}>
-          Back to app
+        <Button
+          onClick={async () => {
+            try {
+              await logout();
+            } finally {
+              navigate('/login');
+            }
+          }}
+          className="w-full py-3 text-lg"
+          disabled={isSettingRole}
+        >
+          Back to login
         </Button>
         <p className="mt-6 text-sm text-gray-500">Your User ID: {currentUser?.uid || 'Not signed in'}</p>
       </div>

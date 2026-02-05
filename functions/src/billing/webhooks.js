@@ -1,5 +1,6 @@
 const { functions, admin } = require('../shared/firebaseAdmin');
 const { stripe, STRIPE_SECRET_KEY } = require('./stripeClient');
+const { toOptionalString } = require('../shared/utils');
 const {
   buildBillingPath,
   buildStripeCustomerGlobalPath,
@@ -15,6 +16,18 @@ const DEFAULT_APP_ID = process.env.APP_ID || 'auditsim-pro-default-dev';
 const isSuccessfulCheckoutSession = (session) => {
   const status = typeof session?.payment_status === 'string' ? session.payment_status.trim().toLowerCase() : '';
   return status === 'paid' || status === 'no_payment_required';
+};
+
+const normalizeStripeStatus = (value) =>
+  typeof value === 'string' ? value.trim().toLowerCase() : '';
+
+const mapSubscriptionStatus = (status) => {
+  const normalized = normalizeStripeStatus(status);
+  if (normalized === 'active' || normalized === 'trialing') return 'active';
+  if (normalized === 'past_due') return 'past_due';
+  if (normalized === 'unpaid' || normalized === 'incomplete') return 'unpaid';
+  if (normalized === 'canceled' || normalized === 'incomplete_expired') return 'canceled';
+  return normalized || 'unpaid';
 };
 
 const recordStripeEvent = async ({ firestore, event }) => {
@@ -156,17 +169,31 @@ const stripeWebhook = functions.https.onRequest(async (req, res) => {
         const uid = metadata.uid || session.client_reference_id;
         const plan = metadata.plan || 'individual';
         const appIdValue = metadata.appId || inferredAppId;
+        const subscriptionId = session.subscription || null;
+        let subscriptionStatus = null;
+
+        if (subscriptionId) {
+          try {
+            const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+            subscriptionStatus = subscription?.status || null;
+          } catch (err) {
+            console.warn('[stripeWebhook] Failed to retrieve subscription', err);
+          }
+        }
 
         if (uid) {
+          const billingStatus = subscriptionId ? mapSubscriptionStatus(subscriptionStatus) : 'active';
           const billingRef = db.doc(buildBillingPath(appIdValue, uid));
           await billingRef.set(
             {
-              status: 'paid',
+              status: billingStatus,
               plan,
               stripeCustomerId: session.customer || null,
               stripeCheckoutSessionId: session.id || null,
               stripePaymentStatus: session.payment_status || null,
               stripePaymentIntentId: session.payment_intent || null,
+              stripeSubscriptionId: subscriptionId,
+              stripeSubscriptionStatus: normalizeStripeStatus(subscriptionStatus) || null,
               lastPaidAt: admin.firestore.FieldValue.serverTimestamp(),
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             },
@@ -213,6 +240,79 @@ const stripeWebhook = functions.https.onRequest(async (req, res) => {
       }
     }
 
+    if (event.type === 'customer.subscription.created' || event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.deleted') {
+      const subscription = eventObject || {};
+      const customerId = subscription.customer || null;
+      const subscriptionId = subscription.id || null;
+      const subscriptionStatus = mapSubscriptionStatus(subscription.status);
+      const metadata = subscription.metadata || {};
+      const appIdValue = toOptionalString(metadata.appId) || inferredAppId;
+      const plan = metadata.plan || 'individual';
+
+      const { uid, appIdValue: resolvedAppId } = await resolveBillingIdentityFromStripe({
+        firestore: db,
+        appIdValue,
+        customerId,
+        paymentIntentId: null,
+      });
+
+      if (uid && resolvedAppId) {
+        await db.doc(buildBillingPath(resolvedAppId, uid)).set(
+          {
+            status: subscriptionStatus,
+            plan,
+            stripeCustomerId: customerId,
+            stripeSubscriptionId: subscriptionId,
+            stripeSubscriptionStatus: normalizeStripeStatus(subscription.status) || null,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      } else {
+        console.warn('[stripeWebhook] Unable to resolve billing identity for subscription event', {
+          eventId: event.id,
+          customerId,
+          subscriptionId,
+        });
+      }
+    }
+
+    if (event.type === 'invoice.payment_succeeded' || event.type === 'invoice.payment_failed') {
+      const invoice = eventObject || {};
+      const customerId = invoice.customer || null;
+      const subscriptionId = invoice.subscription || null;
+      const metadata = invoice.metadata || {};
+      const appIdValue = toOptionalString(metadata.appId) || inferredAppId;
+      const plan = metadata.plan || 'individual';
+      const status = event.type === 'invoice.payment_succeeded' ? 'active' : 'past_due';
+
+      const { uid, appIdValue: resolvedAppId } = await resolveBillingIdentityFromStripe({
+        firestore: db,
+        appIdValue,
+        customerId,
+        paymentIntentId: null,
+      });
+
+      if (uid && resolvedAppId) {
+        await db.doc(buildBillingPath(resolvedAppId, uid)).set(
+          {
+            status,
+            plan,
+            stripeCustomerId: customerId,
+            stripeSubscriptionId: subscriptionId,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      } else {
+        console.warn('[stripeWebhook] Unable to resolve billing identity for invoice event', {
+          eventId: event.id,
+          customerId,
+          subscriptionId,
+        });
+      }
+    }
+
     if (event.type === 'charge.refunded' || event.type === 'charge.dispute.created') {
       const charge = eventObject || {};
       const customerId = charge.customer || null;
@@ -227,7 +327,7 @@ const stripeWebhook = functions.https.onRequest(async (req, res) => {
       if (uid && appIdValue) {
         await db.doc(buildBillingPath(appIdValue, uid)).set(
           {
-            status: 'revoked',
+            status: 'canceled',
             stripePaymentStatus: charge.status || null,
             revokedReason: event.type,
             revokedAt: admin.firestore.FieldValue.serverTimestamp(),

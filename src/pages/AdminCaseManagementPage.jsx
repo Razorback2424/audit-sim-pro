@@ -1,7 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, useModal, useRoute } from '../AppCore';
-import { subscribeToActiveCases, markCaseDeleted } from '../services/caseService';
+import { fetchCasesPage, CASE_SORT_OPTIONS, markCaseDeleted } from '../services/caseService';
 import { getAuditAreaLabel, getCaseGroupLabel, getCaseLevelLabel } from '../models/caseConstants';
+
+const PAGE_SIZE = 25;
 
 const formatTimestamp = (value) => {
   if (!value) return '—';
@@ -23,48 +25,84 @@ export default function AdminCaseManagementPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selectedCaseIds, setSelectedCaseIds] = useState(() => new Set());
+  const [pageIndex, setPageIndex] = useState(0);
+  const [pageCursors, setPageCursors] = useState({});
+  const [pageInfo, setPageInfo] = useState({ hasNext: false, hasPrev: false, firstDoc: null, lastDoc: null });
+
+  const loadCases = useCallback(async ({ direction = 'next', cursor = null, nextIndex } = {}) => {
+    setLoading(true);
+    try {
+      const result = await fetchCasesPage({
+        search,
+        sort: CASE_SORT_OPTIONS.UPDATED_DESC,
+        pageSize: PAGE_SIZE,
+        cursor,
+        direction,
+      });
+      setCases(result.items || []);
+      setPageInfo(result.pageInfo || { hasNext: false, hasPrev: false, firstDoc: null, lastDoc: null });
+      setPageCursors((prev) => ({
+        ...prev,
+        [nextIndex ?? pageIndex]: {
+          firstDoc: result.pageInfo?.firstDoc ?? null,
+          lastDoc: result.pageInfo?.lastDoc ?? null,
+        },
+      }));
+    } catch (error) {
+      console.error('Error loading cases:', error);
+      showModal('Unable to load cases: ' + error.message, 'Error');
+    } finally {
+      setLoading(false);
+    }
+  }, [pageIndex, search, showModal]);
 
   useEffect(() => {
-    const unsubscribe = subscribeToActiveCases(
-      (list) => {
-        setCases(list);
-        setLoading(false);
-      },
-      (error) => {
-        console.error('Error loading cases:', error);
-        showModal('Unable to load cases: ' + error.message, 'Error');
-        setLoading(false);
-      }
-    );
-    return () => unsubscribe?.();
-  }, [showModal]);
+    setPageIndex(0);
+    setPageCursors({});
+    loadCases({ direction: 'next', cursor: null, nextIndex: 0 });
+  }, [loadCases, search]);
 
   const filteredCases = useMemo(() => {
     const term = search.trim().toLowerCase();
     if (!term) return cases;
     return cases.filter((caseData) => {
       const title = (caseData.title || caseData.caseName || '').toLowerCase();
-      const id = (caseData.id || '').toLowerCase();
-      const module = (caseData.moduleTitle || '').toLowerCase();
-      return title.includes(term) || id.includes(term) || module.includes(term);
+      return title.includes(term);
     });
   }, [cases, search]);
 
-  const sortedCases = useMemo(() => {
-    return [...filteredCases].sort((a, b) => {
-      const aMillis = typeof a.updatedAt?.toMillis === 'function' ? a.updatedAt.toMillis() : 0;
-      const bMillis = typeof b.updatedAt?.toMillis === 'function' ? b.updatedAt.toMillis() : 0;
-      if (aMillis === bMillis) {
-        return (a.title || a.caseName || '').localeCompare(b.title || b.caseName || '');
-      }
-      return bMillis - aMillis;
-    });
-  }, [filteredCases]);
+  const sortedCases = useMemo(() => filteredCases, [filteredCases]);
 
   const displayedCaseIds = useMemo(() => sortedCases.map((entry) => entry.id), [sortedCases]);
   const allDisplayedSelected =
     displayedCaseIds.length > 0 && displayedCaseIds.every((id) => selectedCaseIds.has(id));
   const selectedCount = selectedCaseIds.size;
+
+  useEffect(() => {
+    setSelectedCaseIds(new Set());
+  }, [pageIndex, search, cases]);
+
+  const handleNextPage = () => {
+    if (!pageInfo.hasNext || loading) return;
+    const nextIndex = pageIndex + 1;
+    loadCases({
+      direction: 'next',
+      cursor: { lastDoc: pageInfo.lastDoc },
+      nextIndex,
+    });
+    setPageIndex(nextIndex);
+  };
+
+  const handlePrevPage = () => {
+    if (!pageInfo.hasPrev || loading) return;
+    const nextIndex = Math.max(0, pageIndex - 1);
+    loadCases({
+      direction: 'prev',
+      cursor: { firstDoc: pageInfo.firstDoc },
+      nextIndex,
+    });
+    setPageIndex(nextIndex);
+  };
 
   const toggleSelectAll = () => {
     setSelectedCaseIds((prev) => {
@@ -150,7 +188,7 @@ export default function AdminCaseManagementPage() {
         <div className="bg-white rounded-lg shadow p-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div className="text-sm text-gray-600">
-              Active cases: <span className="font-semibold text-gray-800">{filteredCases.length}</span>
+              Cases shown: <span className="font-semibold text-gray-800">{filteredCases.length}</span>
             </div>
             <div className="flex flex-wrap items-center gap-3">
               <Button
@@ -165,7 +203,7 @@ export default function AdminCaseManagementPage() {
                 type="text"
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search by case name, module, or ID"
+                placeholder="Search by case name"
                 className="w-full md:w-80 border border-gray-200 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
             </div>
@@ -180,6 +218,19 @@ export default function AdminCaseManagementPage() {
           </div>
         ) : (
           <div className="bg-white rounded-lg shadow overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 text-sm text-gray-600">
+              <div>
+                Page <span className="font-semibold text-gray-800">{pageIndex + 1}</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button onClick={handlePrevPage} variant="secondary" className="text-sm" disabled={!pageInfo.hasPrev || loading}>
+                  Prev
+                </Button>
+                <Button onClick={handleNextPage} variant="secondary" className="text-sm" disabled={!pageInfo.hasNext || loading}>
+                  Next
+                </Button>
+              </div>
+            </div>
             <table className="min-w-full divide-y divide-gray-200 text-sm">
               <thead className="bg-gray-100 text-xs uppercase tracking-wider text-gray-500">
                 <tr>
