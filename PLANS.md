@@ -69,6 +69,64 @@ Notes:
 
 ## Active plans
 
+### Plan: Robust Analytics Pipeline
+Owner: Sean
+Created: 2026-02-05
+Status: Active
+
+Goal (1 sentence):
+- Implement a minimal analytics pipeline that answers core conversion, value, and reliability questions via Firestore queries.
+
+Why (business value):
+- Enables pricing and funnel decisions without guesswork.
+- Surfaces reliability failures that break trust and block revenue.
+- Keeps analytics scoped to actionable, queryable signals.
+
+Scope (in):
+- Dedicated analytics collection at `artifacts/{appId}/analytics/events`.
+- Callable-only logging with server-stamped envelope and allowlist.
+- Event emission for attempt lifecycle, results view, checkout CTAs, checkout failures, entitlement activation, evidence access failures, webhook failures.
+- Documentation of taxonomy and envelope in `docs/analytics/analytics-events.md`.
+- Add analytics smoke verification to `TESTING.md`.
+
+Non-scope (out):
+- No RBAC or rules changes.
+- No billing flow changes.
+- No UI redesigns or new analytics dashboards.
+- No data migrations or backfills.
+
+Success criteria (acceptance):
+- Events are written only via callable or server helper.
+- The 10 “must answer” analytics questions can be answered with Firestore queries.
+- Event envelopes contain server timestamps and do not accept client-supplied UID/appId/ts/source.
+
+Risks / gotchas:
+- Event volume on hot paths; keep emissions minimal.
+- Double-counting if events are emitted in multiple places.
+
+Dependencies / approvals needed:
+- Approved: dedicated analytics collection.
+- Approved: event taxonomy in `docs/analytics/analytics-events.md`.
+- Approved: callable-only logging.
+
+Implementation steps (each step produces a reviewable diff):
+1) Add analytics taxonomy doc
+   - Output: `docs/analytics/analytics-events.md`
+   - Verification: peer review
+2) Update PLANS + TESTING documentation
+   - Output: `PLANS.md`, `TESTING.md`
+   - Verification: peer review
+3) Implement callable + shared helper + emissions
+   - Output: `functions/src/analytics/events.js`, `functions/src/cases/index.js`, `functions/src/billing/*`,
+             client event emission updates in `src/`
+   - Verification: `npm test`, `npm run build`, manual scenarios 3.1 + 4.2 + analytics smoke
+
+Rollback plan:
+- Revert to previous analytics callable and disable new event emissions.
+
+Notes:
+- Event payloads must remain small; enforce props size caps server-side.
+
 ### Plan: AuditSim Pro MVP simulator core
 Owner: Sean
 Created: 2026-02-02

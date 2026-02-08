@@ -3,7 +3,7 @@ import { useAuth, useModal, useRoute } from '../AppCore';
 import ReportProblemModal from '../components/ReportProblemModal';
 import { createCheckoutSession, fetchPaymentsCapability } from '../services/billingService';
 import { scoreCaseAttempt } from '../services/submissionService';
-import { trackAnalyticsEvent } from '../services/analyticsService';
+import { ANALYTICS_EVENTS, trackAnalyticsEvent } from '../services/analyticsService';
 
 const PLAN_LABELS = {
   individual: 'Individual Auditor Access (Monthly)',
@@ -45,6 +45,7 @@ export default function CheckoutPage() {
   const intent = typeof query?.intent === 'string' ? query.intent.trim().toLowerCase() : '';
   const caseId = typeof query?.caseId === 'string' ? query.caseId.trim() : '';
   const planDetails = PLAN_DETAILS[plan] || PLAN_DETAILS.individual;
+  const isDemoIntent = intent === 'save-report' || intent === 'unlock-case';
 
   const markPaymentsUnavailable = (reason) => {
     setPaymentsEnabled(false);
@@ -128,7 +129,15 @@ export default function CheckoutPage() {
     }
     setLoading(true);
     try {
-      await trackAnalyticsEvent({ eventType: 'checkout_started', metadata: { plan } });
+      await trackAnalyticsEvent({
+        eventName: ANALYTICS_EVENTS.CTA_CHECKOUT_CLICKED,
+        caseId: caseId || null,
+        props: {
+          isDemo: isDemoIntent,
+          intent: intent || null,
+          plan,
+        },
+      });
       const baseUrl = typeof window !== 'undefined' ? window.location.origin : '';
       const { url } = await createCheckoutSession({ plan, baseUrl, intent, caseId });
       if (url) {

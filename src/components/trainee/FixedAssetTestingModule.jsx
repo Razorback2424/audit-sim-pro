@@ -242,7 +242,7 @@ export default function FixedAssetTestingModule({ caseId, caseData, userId, navi
   const requestSignedUrl = useCallback(
     async ({ storagePath, downloadURL }) => {
       if (!caseId) throw new Error('Case ID is required to open documents.');
-      return getSignedDocumentUrl({ caseId, storagePath, downloadURL });
+      return getSignedDocumentUrl({ caseId, storagePath, downloadURL, requireStoragePath: true });
     },
     [caseId]
   );
@@ -563,7 +563,7 @@ export default function FixedAssetTestingModule({ caseId, caseData, userId, navi
 
   const handleViewDocument = async (docInfo) => {
     if (!docInfo || (!docInfo.storagePath && !docInfo.downloadURL)) {
-      showModal?.('Document path or URL is missing. Cannot view.', 'Error');
+      showModal?.('Document unavailable—re-upload required by an admin.', 'Error');
       return;
     }
 
@@ -571,6 +571,7 @@ export default function FixedAssetTestingModule({ caseId, caseData, userId, navi
       const url = await requestSignedUrl({
         storagePath: docInfo.storagePath,
         downloadURL: docInfo.downloadURL,
+        docLabel: docInfo.fileName || docInfo.id || '',
       });
       window.open(url, '_blank');
     } catch (error) {

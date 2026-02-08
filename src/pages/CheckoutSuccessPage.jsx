@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAuth, useRoute, useUser } from '../AppCore';
-import { trackAnalyticsEvent } from '../services/analyticsService';
-import { confirmCheckoutSession, fetchUserBilling, isBillingPaid } from '../services/billingService';
+import { confirmCheckoutSession, fetchUserBilling, isBillingPaid, reconcileBillingAccess } from '../services/billingService';
 import { scoreCaseAttempt } from '../services/submissionService';
 
 export default function CheckoutSuccessPage() {
@@ -23,13 +22,6 @@ export default function CheckoutSuccessPage() {
     [query]
   );
   const caseId = useMemo(() => (typeof query?.caseId === 'string' ? query.caseId.trim() : ''), [query]);
-
-  useEffect(() => {
-    trackAnalyticsEvent({
-      eventType: 'checkout_completed',
-      metadata: { sessionId: query?.session_id || null },
-    });
-  }, [query]);
 
   useEffect(() => {
     if (!sessionId || !userId) return;
@@ -145,6 +137,7 @@ export default function CheckoutSuccessPage() {
     setConfirming(true);
     try {
       await confirmCheckoutSession({ sessionId });
+      await reconcileBillingAccess({});
       const latest = await fetchUserBilling({ uid: userId });
       if (isBillingPaid(latest)) {
         navigate('/trainee?autostart=1');

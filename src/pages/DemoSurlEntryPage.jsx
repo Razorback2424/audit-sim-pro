@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import TraineeCaseViewPage from './TraineeCaseViewPage';
 import { useRoute } from '../AppCore';
-import { trackAnalyticsEvent } from '../services/analyticsService';
 import { fetchDemoConfig } from '../services/demoService';
 
 const getDemoCaseId = (value) => (typeof value === 'string' ? value.trim() : '');
@@ -49,11 +48,6 @@ export default function DemoSurlEntryPage() {
       active = false;
     };
   }, [queryCaseId, envCaseId]);
-
-  useEffect(() => {
-    if (!resolvedCaseId) return;
-    trackAnalyticsEvent({ eventType: 'demo_started', metadata: { caseId: resolvedCaseId || null } });
-  }, [resolvedCaseId]);
 
   if (!resolvedCaseId) {
     return (

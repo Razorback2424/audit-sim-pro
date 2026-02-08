@@ -44,14 +44,16 @@ export default function useReferenceDownloads(referenceDocuments = [], showModal
           caseId,
           storagePath: doc.storagePath,
           downloadURL: doc.downloadURL,
+          requireStoragePath: true,
+          docLabel: doc.fileName || doc.id || '',
         });
       } else {
-        throw new Error('Reference document is missing a storage path.');
+        throw new Error('Document unavailable—re-upload required by an admin.');
       }
 
       await triggerFileDownload(url, displayName);
     },
-    [triggerFileDownload]
+    [caseId, triggerFileDownload]
   );
 
   const handleDownloadAllReferences = useCallback(async () => {

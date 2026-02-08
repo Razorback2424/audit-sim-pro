@@ -16,7 +16,7 @@ const formatTimestamp = (value) => {
 const toSortedCounts = (counts) =>
   Object.entries(counts || {})
     .sort((a, b) => b[1] - a[1])
-    .map(([eventType, count]) => ({ eventType, count }));
+    .map(([eventName, count]) => ({ eventName, count }));
 
 export default function AdminBetaDashboardPage() {
   const { navigate } = useRoute();
@@ -77,8 +77,8 @@ export default function AdminBetaDashboardPage() {
                 ) : (
                   <div className="space-y-2 text-sm text-gray-700">
                     {counts.map((entry) => (
-                      <div key={entry.eventType} className="flex items-center justify-between">
-                        <span className="font-mono text-xs">{entry.eventType}</span>
+                      <div key={entry.eventName} className="flex items-center justify-between">
+                        <span className="font-mono text-xs">{entry.eventName}</span>
                         <span className="font-semibold">{entry.count}</span>
                       </div>
                     ))}
@@ -93,12 +93,12 @@ export default function AdminBetaDashboardPage() {
                   <div className="space-y-3 text-sm">
                     {recentEvents.map((event) => (
                       <div key={event.id} className="border-b border-gray-100 pb-2 last:border-b-0 last:pb-0">
-                        <div className="text-xs uppercase tracking-wide text-gray-500">{event.eventType}</div>
+                        <div className="text-xs uppercase tracking-wide text-gray-500">{event.eventName}</div>
                         <div className="text-gray-700">
                           {event.caseId ? `Case: ${event.caseId} · ` : ''}
                           {event.uid ? `User: ${event.uid}` : 'User: unknown'}
                         </div>
-                        <div className="text-xs text-gray-500">{formatTimestamp(event.createdAt)}</div>
+                        <div className="text-xs text-gray-500">{formatTimestamp(event.ts)}</div>
                       </div>
                     ))}
                   </div>

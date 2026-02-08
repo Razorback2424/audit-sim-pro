@@ -455,7 +455,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
   const requestSignedUrl = useCallback(
     async ({ storagePath, downloadURL }) => {
       if (!caseId) throw new Error('Case ID is required to open documents.');
-      return getSignedDocumentUrl({ caseId, storagePath, downloadURL });
+      return getSignedDocumentUrl({ caseId, storagePath, downloadURL, requireStoragePath: true });
     },
     [caseId]
   );
@@ -549,7 +549,6 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
   const lockNoticeRef = useRef(false);
   const hasTrackedCaseOpenRef = useRef(false);
   const hasTrackedResultsRef = useRef(false);
-  const hasTrackedPaywallRef = useRef(false);
 
   useEffect(() => {
     if (!tieOutGateConfig) {
@@ -719,6 +718,14 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
           forceOverwrite: true,
           clearActiveAttempt: true,
         });
+        trackAnalyticsEvent({
+          eventName: ANALYTICS_EVENTS.ATTEMPT_RESTARTED,
+          caseId,
+          props: {
+            source: 'case_view',
+            trigger: clearRetakeQuery ? 'query_retake' : 'manual_retake',
+          },
+        });
         didReset = true;
       } catch (err) {
         console.error('Failed to reset progress for retake:', err);
@@ -746,6 +753,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       caseId,
       canPersist,
       gateScope,
+      userId,
       setQuery,
       showModal,
       tieOutGateConfig,
@@ -870,11 +878,17 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
   useEffect(() => {
     if (activeStep !== FLOW_STEPS.RESULTS || hasTrackedResultsRef.current) return;
     hasTrackedResultsRef.current = true;
+    const resultState =
+      modulePassed === true ? 'pass' : modulePassed === false ? 'fail' : 'partial';
     trackAnalyticsEvent({
-      eventType: ANALYTICS_EVENTS.CASE_RESULTS_VIEWED,
-      metadata: { caseId, demo: Boolean(isDemo || isDemoCase), route: window.location.pathname },
+      eventName: ANALYTICS_EVENTS.ATTEMPT_RESULTS_VIEWED,
+      caseId,
+      props: {
+        isDemo: Boolean(isDemo || isDemoCase),
+        resultState,
+      },
     });
-  }, [activeStep, caseId, isDemo, isDemoCase]);
+  }, [activeStep, caseId, isDemo, isDemoCase, modulePassed]);
 
   useEffect(() => {
     selectionRef.current = selectedDisbursements;
@@ -912,13 +926,6 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     }
     if (!isDemo && !isDemoCase && userId && !loadingBilling && !isBillingPaid(billing)) {
       setLoading(false);
-      if (!hasTrackedPaywallRef.current) {
-        hasTrackedPaywallRef.current = true;
-        trackAnalyticsEvent({
-          eventType: ANALYTICS_EVENTS.PAYWALL_SHOWN,
-          metadata: { source: 'case_view', caseId, route: window.location.pathname },
-        });
-      }
       showModal('This case is locked until you upgrade your account.', 'Upgrade required');
       navigate(`/checkout?plan=individual&intent=unlock-case&caseId=${encodeURIComponent(caseId)}`);
       return;
@@ -1000,14 +1007,15 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     return () => {
       isActive = false;
     };
-  }, [caseData, canPersist, recipeGateId]);
+  }, [caseData, canPersist, recipeGateId, userId]);
 
   useEffect(() => {
     if (!caseData || hasTrackedCaseOpenRef.current) return;
     hasTrackedCaseOpenRef.current = true;
     trackAnalyticsEvent({
-      eventType: ANALYTICS_EVENTS.CASE_OPENED,
-      metadata: { caseId: caseData?.id || caseId, demo: Boolean(isDemo || isDemoCase), route: window.location.pathname },
+      eventName: ANALYTICS_EVENTS.ATTEMPT_STARTED,
+      caseId: caseData?.id || caseId,
+      props: { isDemo: Boolean(isDemo || isDemoCase) },
     });
   }, [caseData, caseId, isDemo, isDemoCase]);
 
@@ -1200,7 +1208,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     return () => {
       isActive = false;
     };
-  }, [caseData, canPersist, isProgressComplete]);
+  }, [caseData, canPersist, isProgressComplete, userId]);
 
   useEffect(() => {
     if (!levelGate.locked || lockNoticeRef.current) return;
@@ -1357,6 +1365,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     requestSignedUrl({
       storagePath: apAgingDoc.storagePath,
       downloadURL: apAgingDoc.downloadURL,
+      docLabel: apAgingDoc.fileName || 'AP Aging',
     })
       .then((url) => {
         if (cancelled) return;
@@ -1523,7 +1532,11 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
           return { id: doc.id, url: '', error: 'Document not linked.' };
         }
         try {
-          const url = await requestSignedUrl({ storagePath: doc.storagePath, downloadURL: doc.downloadURL });
+          const url = await requestSignedUrl({
+            storagePath: doc.storagePath,
+            downloadURL: doc.downloadURL,
+            docLabel: doc.fileName || doc.id || '',
+          });
           return { id: doc.id, url, error: '' };
         } catch (error) {
           const message = 'Unable to load document preview.';
@@ -1589,7 +1602,11 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
           return { id: doc.id, url: '', error: 'Document not linked.' };
         }
         try {
-          const url = await requestSignedUrl({ storagePath: doc.storagePath, downloadURL: doc.downloadURL });
+          const url = await requestSignedUrl({
+            storagePath: doc.storagePath,
+            downloadURL: doc.downloadURL,
+            docLabel: doc.fileName || doc.id || '',
+          });
           return { id: doc.id, url, error: '' };
         } catch (error) {
           const message = 'Unable to load document preview.';
@@ -1816,7 +1833,11 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       };
     }
 
-    requestSignedUrl({ storagePath: target.storagePath, downloadURL: target.downloadURL })
+    requestSignedUrl({
+      storagePath: target.storagePath,
+      downloadURL: target.downloadURL,
+      docLabel: target.evidenceFileName || target.paymentId || target.evidenceId || '',
+    })
       .then((url) => {
         if (cancelled) return;
         setActiveEvidenceUrl(url);
@@ -1849,7 +1870,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     return () => {
       cancelled = true;
     };
-  }, [viewerEnabled, evidenceSource, activeEvidenceId]);
+  }, [viewerEnabled, evidenceSource, activeEvidenceId, requestSignedUrl]);
 
   useEffect(() => {
     if (!decisionBlockedHint) return;
@@ -1924,7 +1945,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
           });
       }, 1000);
     },
-    [canPersist, caseId, isOutstandingCheckTesting]
+    [canPersist, caseId, isOutstandingCheckTesting, userId]
   );
 
   useEffect(() => {
@@ -2380,6 +2401,9 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
         storagePath: doc.storagePath,
       }))
     );
+    const missingDocsCount = selectedDisbursementDetails.filter(
+      (disbursement) => collectSupportingDocuments(disbursement).length === 0
+    ).length;
     const startedAtMs = attemptStartedAtRef.current;
     const timeToCompleteSeconds =
       startedAtMs ? Math.max(0, Math.round((Date.now() - startedAtMs) / 1000)) : null;
@@ -2401,17 +2425,16 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     );
     const hasSuccessfulAttempt = gatesFirstAttempt && gatesPassed && allClassificationsCorrect;
     setModulePassed(hasSuccessfulAttempt);
-
-    if (isDemo || isDemoCase) {
-      trackAnalyticsEvent({
-        eventType: ANALYTICS_EVENTS.DEMO_SUBMITTED,
-        metadata: { caseId, passed: hasSuccessfulAttempt },
-      });
-      trackAnalyticsEvent({
-        eventType: ANALYTICS_EVENTS.CASE_SUBMITTED,
-        metadata: { caseId, demo: true, passed: hasSuccessfulAttempt },
-      });
-    }
+    trackAnalyticsEvent({
+      eventName: ANALYTICS_EVENTS.ATTEMPT_SUBMITTED,
+      caseId,
+      props: {
+        isDemo: Boolean(isDemo || isDemoCase),
+        selectedCount: selectedIds.length,
+        missingDocsCount,
+        unmappedCount: missingDocsCount,
+      },
+    });
 
     const submissionPayload = {
       caseId,
@@ -2482,11 +2505,6 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
         clearActiveAttempt: true,
       });
 
-      trackAnalyticsEvent({
-        eventType: ANALYTICS_EVENTS.CASE_SUBMITTED,
-        metadata: { caseId, demo: false, passed: hasSuccessfulAttempt },
-      });
-
       setIsLocked(true);
       setActiveStep(FLOW_STEPS.RESULTS);
     } catch (error) {
@@ -2497,7 +2515,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
 
   const handleViewDocument = async (docInfo) => {
     if (!docInfo || (!docInfo.storagePath && !docInfo.downloadURL)) {
-      showModal('Document path or URL is missing. Cannot view.', 'Error');
+      showModal('Document unavailable—re-upload required by an admin.', 'Error');
       return;
     }
     if (docInfo.storagePath && docInfo.storagePath.includes('PENDING_CASE_ID')) {
@@ -2514,9 +2532,20 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       const url = await requestSignedUrl({
         storagePath: docInfo.storagePath,
         downloadURL: docInfo.downloadURL,
+        docLabel: docInfo.fileName || docInfo.id || '',
       });
       hideModal();
       window.open(url, '_blank');
+      trackAnalyticsEvent({
+        eventName: ANALYTICS_EVENTS.ATTEMPT_DOCUMENT_OPENED,
+        caseId,
+        props: {
+          source: 'evidence_viewer',
+          fileName: docInfo.fileName || null,
+          hasStoragePath: Boolean(docInfo.storagePath),
+          hasDownloadUrl: Boolean(docInfo.downloadURL),
+        },
+      });
     } catch (error) {
       console.error('Error getting signed URL:', error);
       hideModal();
@@ -2567,11 +2596,6 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     };
   }, [caseSubtitle, caseTitle]);
 
-  if (loading) return <div className="p-4 text-center">Loading case details...</div>;
-  if (levelGate.locked) {
-    return <div className="p-4 text-center">This case is locked. {levelGate.message}</div>;
-  }
-  if (!caseData) return <div className="p-4 text-center">Case not found or you may not have access. Redirecting...</div>;
   const nextRecommendation = useMemo(() => {
     if (!caseData) return null;
     const nextTitle = caseData?.moduleTitle || caseData?.title || caseData?.caseName || '';
@@ -2627,25 +2651,30 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     caseId,
   ]);
 
+  const demoReplayCount = useMemo(() => {
+    if (typeof window === 'undefined') return 0;
+    const raw = window.sessionStorage?.getItem('auditsim:demoReplayCount') || '0';
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }, []);
+
+  const handleReplayDemo = useCallback(() => {
+    try {
+      const nextCount = demoReplayCount + 1;
+      window.sessionStorage?.setItem('auditsim:demoReplayCount', String(nextCount));
+    } catch (err) {
+      // Non-blocking; continue to demo.
+    }
+    navigate('/demo/surl');
+  }, [demoReplayCount, navigate]);
+
+  if (loading) return <div className="p-4 text-center">Loading case details...</div>;
+  if (levelGate.locked) {
+    return <div className="p-4 text-center">This case is locked. {levelGate.message}</div>;
+  }
+  if (!caseData) return <div className="p-4 text-center">Case not found or you may not have access. Redirecting...</div>;
+
   if (hasPendingGeneration || hasMissingCashArtifacts) {
-
-    const demoReplayCount = (() => {
-      if (typeof window === 'undefined') return 0;
-      const raw = window.sessionStorage?.getItem('auditsim:demoReplayCount') || '0';
-      const parsed = Number(raw);
-      return Number.isFinite(parsed) ? parsed : 0;
-    })();
-
-    const handleReplayDemo = () => {
-      try {
-        const nextCount = demoReplayCount + 1;
-        window.sessionStorage?.setItem('auditsim:demoReplayCount', String(nextCount));
-      } catch (err) {
-        // Non-blocking; continue to demo.
-      }
-      navigate('/demo/surl');
-    };
-
     return (
       <div className="min-h-screen bg-gray-50 px-4 py-12">
         <div className="mx-auto max-w-xl rounded-xl border border-amber-200 bg-amber-50 p-6 text-center shadow-sm">
@@ -2834,6 +2863,10 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
 
   const handleDownloadReferenceDoc = async (doc) => {
     if (!doc) return;
+    if (!doc.storagePath) {
+      showModal('Document unavailable—re-upload required by an admin.', 'Reference Unavailable');
+      return;
+    }
     const displayName = (doc.fileName || 'reference-document').trim() || 'reference-document';
     const referenceKey = getReferenceKey(doc);
     const hasLink = Boolean(doc.storagePath || doc.downloadURL);
@@ -2847,13 +2880,27 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     }
     try {
       setDownloadingReferenceId(doc.id);
-      const url = await requestSignedUrl({ storagePath: doc.storagePath, downloadURL: doc.downloadURL });
+      const url = await requestSignedUrl({
+        storagePath: doc.storagePath,
+        downloadURL: doc.downloadURL,
+        docLabel: doc.fileName || doc.id || '',
+      });
       const isPdf = isInlinePreviewable(doc.contentType, doc.fileName || url);
       if (isPdf) {
         window.open(url, '_blank', 'noopener');
       } else {
         await triggerFileDownload(url, displayName);
       }
+      trackAnalyticsEvent({
+        eventName: ANALYTICS_EVENTS.ATTEMPT_DOCUMENT_OPENED,
+        caseId,
+        props: {
+          source: 'reference_material',
+          fileName: displayName,
+          documentId: doc.id || null,
+          method: isPdf ? 'open_tab' : 'download',
+        },
+      });
       if (referenceKey) {
         setOpenedReferenceDocs((prev) => {
           const next = new Set(prev);
@@ -3835,7 +3882,16 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
                 <div className="flex flex-col sm:flex-row gap-2">
                   <Button
                     onClick={() => {
-                      trackAnalyticsEvent({ eventType: 'upgrade_clicked', metadata: { source: 'demo_results' } });
+                      trackAnalyticsEvent({
+                        eventName: ANALYTICS_EVENTS.CTA_SAVE_REPORT_CLICKED,
+                        caseId,
+                        props: { isDemo: true },
+                      });
+                      trackAnalyticsEvent({
+                        eventName: ANALYTICS_EVENTS.CTA_CHECKOUT_CLICKED,
+                        caseId,
+                        props: { isDemo: true, intent: 'save-report', plan: 'individual', ctaLocation: 'demo_results' },
+                      });
                       navigate(`/checkout?plan=individual&intent=save-report&caseId=${encodeURIComponent(caseId)}`);
                     }}
                   >
@@ -3845,8 +3901,9 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
                     variant="secondary"
                     onClick={() => {
                       trackAnalyticsEvent({
-                        eventType: 'upgrade_clicked',
-                        metadata: { source: 'demo_results_checkout' },
+                        eventName: ANALYTICS_EVENTS.CTA_CHECKOUT_CLICKED,
+                        caseId,
+                        props: { isDemo: true, intent: 'unlock-case', plan: 'individual', ctaLocation: 'demo_results' },
                       });
                       navigate(`/checkout?plan=individual&intent=unlock-case&caseId=${encodeURIComponent(caseId)}`);
                     }}
@@ -3863,7 +3920,6 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
                 >
                   Replay demo
                 </button>
-                </div>
               </div>
             </div>
           ) : null}

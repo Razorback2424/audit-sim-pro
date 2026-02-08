@@ -34,6 +34,57 @@ D) Firestore/Storage rules or access control changes
 2) At least 1 allow + 1 deny test for each affected permission surface
 3) Manual doc-access negative test (unauthorized must fail)
 
+E) Analytics changes (event taxonomy / emission)
+1) `npm test`
+2) `npm run build`
+3) Manual analytics smoke: query last 50 events for a test `uid` and confirm the expected sequence exists
+   - Happy path: `attempt_started` → `attempt_submitted` → `attempt_results_viewed`
+   - Failure path: at least one of `evidence_open_failed`, `checkout_session_create_failed`, or `webhook_failed`
+
+### 3.5 Analytics smoke (query patterns)
+Run a single end-to-end session and validate Firestore queries directly (no dashboard).
+
+Setup:
+- Test user `uid`: <fill in>
+- App ID `appId`: <fill in>
+- Collection: `artifacts/{appId}/analytics/events`
+
+Base query (console):
+- Filter: `uid == <testUid>`
+- Order by: `ts desc`
+- Limit: `50`
+
+Expected event presence (same `sessionId` across the session):
+- `attempt_started` with `props.isDemo == true`
+- `attempt_submitted`
+- `attempt_results_viewed`
+- `guided_review_opened`
+- `cta_save_report_clicked`
+- `cta_checkout_clicked` with `props.intent` in {`save-report`, `unlock-case`, `unlock-dashboard`}
+- Failure path: `evidence_open_failed` with `props.reason` in {`permission_denied`, `missing_storage_path`, `signing_error`}
+
+Query patterns for the 10 must-answer questions (Firestore console filters):
+1) Demo start count:
+   - `eventName == "attempt_started"` AND `props.isDemo == true`
+2) Demo submit count:
+   - `eventName == "attempt_submitted"` AND `props.isDemo == true`
+3) Results viewed count:
+   - `eventName == "attempt_results_viewed"` AND `props.isDemo == true`
+4) Save report clicks:
+   - `eventName == "cta_save_report_clicked"`
+5) Checkout CTA by intent:
+   - `eventName == "cta_checkout_clicked"` AND `props.intent == "save-report"` (repeat for `unlock-case`, `unlock-dashboard`)
+6) Checkout session create failures:
+   - `eventName == "checkout_session_create_failed"`
+7) Checkout confirm failures:
+   - `eventName == "checkout_confirm_failed"`
+8) Entitlement activations by source:
+   - `eventName == "entitlement_activated"` AND `props.source == "webhook"` (repeat for `confirm`, `reconcile`)
+9) Evidence open failures by reason:
+   - `eventName == "evidence_open_failed"` AND `props.reason == "permission_denied"` (repeat for `missing_storage_path`, `signing_error`)
+10) Webhook failures by eventType:
+   - `eventName == "webhook_failed"` AND `props.eventType == "<stripe_event_type>"`
+
 ---
 
 ## 2) Standard commands (filled in for THIS repo)

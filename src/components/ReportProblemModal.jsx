@@ -1,6 +1,6 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Button, useAuth, useModal, useUser } from '../AppCore';
-import { ANALYTICS_EVENTS, submitProblemReport, trackAnalyticsEvent } from '../services/analyticsService';
+import { submitProblemReport } from '../services/analyticsService';
 
 const resolveCaseIdFromPath = (path) => {
   if (!path) return '';
@@ -20,13 +20,6 @@ export default function ReportProblemModal() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    trackAnalyticsEvent({
-      eventType: ANALYTICS_EVENTS.REPORT_PROBLEM_OPENED,
-      metadata: { route: routePath, caseId: inferredCaseId, role: role || null },
-    });
-  }, [routePath, inferredCaseId, role]);
-
   const handleSubmit = async () => {
     if (!message.trim()) {
       setError('Please describe the issue so we can reproduce it.');
@@ -36,10 +29,6 @@ export default function ReportProblemModal() {
     setSubmitting(true);
     try {
       await submitProblemReport({ message, caseId: caseId.trim(), route: routePath });
-      trackAnalyticsEvent({
-        eventType: ANALYTICS_EVENTS.REPORT_PROBLEM_SUBMITTED,
-        metadata: { route: routePath, caseId: caseId.trim() || null, role: role || null },
-      });
       hideModal();
       showModal('Thanks! Your report was sent to support.', 'Report sent');
     } catch (err) {

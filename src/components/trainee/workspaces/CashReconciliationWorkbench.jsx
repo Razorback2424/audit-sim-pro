@@ -84,6 +84,7 @@ function EvidenceDocumentViewer({ artifact, title, caseId }) {
       caseId,
       storagePath: artifact.storagePath,
       downloadURL: artifact.downloadURL,
+      requireStoragePath: true,
     })
       .then((url) => {
         if (cancelled) return;
@@ -131,7 +132,9 @@ function EvidenceDocumentViewer({ artifact, title, caseId }) {
         ) : url ? (
           <iframe title={title} src={url} className="h-[320px] w-full rounded-b-md" />
         ) : (
-          <div className="px-4 py-6 text-sm text-gray-600">No download URL provided.</div>
+          <div className="px-4 py-6 text-sm text-gray-600">
+            Document unavailable—re-upload required by an admin.
+          </div>
         )}
       </div>
     </div>

@@ -1,6 +1,8 @@
 const { functions, admin } = require('../shared/firebaseAdmin');
 const { stripe, STRIPE_SECRET_KEY } = require('./stripeClient');
 const { toOptionalString } = require('../shared/utils');
+const { computeEntitlementFromStripe } = require('./entitlements');
+const { writeAnalyticsEvent } = require('../analytics/events');
 const {
   buildBillingPath,
   buildStripeCustomerGlobalPath,
@@ -13,22 +15,41 @@ const {
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || '';
 const DEFAULT_APP_ID = process.env.APP_ID || 'auditsim-pro-default-dev';
 
+const logWebhookFailed = async ({ appIdValue, eventType, errorCode, stage }) => {
+  try {
+    await writeAnalyticsEvent({
+      appId: appIdValue || DEFAULT_APP_ID,
+      uid: null,
+      eventName: 'webhook_failed',
+      props: {
+        eventType: eventType || null,
+        errorCode: errorCode || 'unknown',
+        provider: 'stripe',
+        stage: stage || null,
+      },
+      source: 'server',
+    });
+  } catch (err) {
+    console.warn('[stripeWebhook] Failed to log webhook_failed', err);
+  }
+};
+
 const isSuccessfulCheckoutSession = (session) => {
   const status = typeof session?.payment_status === 'string' ? session.payment_status.trim().toLowerCase() : '';
   return status === 'paid' || status === 'no_payment_required';
 };
 
-const normalizeStripeStatus = (value) =>
-  typeof value === 'string' ? value.trim().toLowerCase() : '';
-
-const mapSubscriptionStatus = (status) => {
-  const normalized = normalizeStripeStatus(status);
-  if (normalized === 'active' || normalized === 'trialing') return 'active';
-  if (normalized === 'past_due') return 'past_due';
-  if (normalized === 'unpaid' || normalized === 'incomplete') return 'unpaid';
-  if (normalized === 'canceled' || normalized === 'incomplete_expired') return 'canceled';
-  return normalized || 'unpaid';
-};
+const buildEntitlementWrite = (entitlement, source) => ({
+  status: entitlement.status || 'inactive',
+  stripeCustomerId: entitlement.stripeCustomerId || null,
+  stripeSubscriptionId: entitlement.stripeSubscriptionId || null,
+  stripeSubscriptionStatus: entitlement.stripeSubscriptionStatus || null,
+  stripePriceId: entitlement.priceId || null,
+  stripeCurrentPeriodEnd: entitlement.currentPeriodEnd || null,
+  stripeCancelAtPeriodEnd: entitlement.cancelAtPeriodEnd === true,
+  lastEntitlementUpdateSource: source,
+  lastEntitlementUpdateAt: admin.firestore.FieldValue.serverTimestamp(),
+});
 
 const recordStripeEvent = async ({ firestore, event }) => {
   if (!event?.id) return { alreadyProcessed: false, eventRef: null };
@@ -124,6 +145,12 @@ const stripeWebhook = functions.https.onRequest(async (req, res) => {
   }
   const sig = req.headers['stripe-signature'];
   if (!sig) {
+    await logWebhookFailed({
+      appIdValue: DEFAULT_APP_ID,
+      eventType: null,
+      errorCode: 'missing_signature',
+      stage: 'signature',
+    });
     res.status(400).send('Missing stripe-signature');
     return;
   }
@@ -133,6 +160,12 @@ const stripeWebhook = functions.https.onRequest(async (req, res) => {
     event = stripe.webhooks.constructEvent(req.rawBody, sig, STRIPE_WEBHOOK_SECRET);
   } catch (err) {
     console.error('[stripeWebhook] signature verification failed', err);
+    await logWebhookFailed({
+      appIdValue: DEFAULT_APP_ID,
+      eventType: null,
+      errorCode: 'signature_verification_failed',
+      stage: 'signature',
+    });
     res.status(400).send(`Webhook Error: ${err.message}`);
     return;
   }
@@ -170,35 +203,50 @@ const stripeWebhook = functions.https.onRequest(async (req, res) => {
         const plan = metadata.plan || 'individual';
         const appIdValue = metadata.appId || inferredAppId;
         const subscriptionId = session.subscription || null;
-        let subscriptionStatus = null;
-
-        if (subscriptionId) {
-          try {
-            const subscription = await stripe.subscriptions.retrieve(subscriptionId);
-            subscriptionStatus = subscription?.status || null;
-          } catch (err) {
-            console.warn('[stripeWebhook] Failed to retrieve subscription', err);
-          }
-        }
 
         if (uid) {
-          const billingStatus = subscriptionId ? mapSubscriptionStatus(subscriptionStatus) : 'active';
+          const entitlement = await computeEntitlementFromStripe({
+            customerId: session.customer || null,
+            email: session.customer_email || null,
+          });
           const billingRef = db.doc(buildBillingPath(appIdValue, uid));
+          const billingSnap = await billingRef.get();
+          const previousBilling = billingSnap.exists ? billingSnap.data() : null;
+          const prevStatus = typeof previousBilling?.status === 'string' ? previousBilling.status.trim().toLowerCase() : '';
+          const wasActive = prevStatus === 'active';
           await billingRef.set(
             {
-              status: billingStatus,
               plan,
               stripeCustomerId: session.customer || null,
               stripeCheckoutSessionId: session.id || null,
               stripePaymentStatus: session.payment_status || null,
               stripePaymentIntentId: session.payment_intent || null,
-              stripeSubscriptionId: subscriptionId,
-              stripeSubscriptionStatus: normalizeStripeStatus(subscriptionStatus) || null,
+              stripeSubscriptionId: subscriptionId || entitlement.stripeSubscriptionId || null,
+              stripeSubscriptionStatus: entitlement.stripeSubscriptionStatus || null,
+              lastStripeEventId: event.id,
+              lastStripeEventType: event.type || null,
+              lastStripeEventAt: admin.firestore.FieldValue.serverTimestamp(),
+              ...buildEntitlementWrite(entitlement, 'webhook'),
               lastPaidAt: admin.firestore.FieldValue.serverTimestamp(),
               updatedAt: admin.firestore.FieldValue.serverTimestamp(),
             },
             { merge: true }
           );
+
+          const nextStatus = entitlement?.status || 'inactive';
+          if (!wasActive && nextStatus === 'active') {
+            try {
+              await writeAnalyticsEvent({
+                appId: appIdValue,
+                uid,
+                eventName: 'entitlement_activated',
+                props: { source: 'webhook', plan },
+                source: 'server',
+              });
+            } catch (logErr) {
+              console.warn('[stripeWebhook] Failed to log entitlement_activated', logErr);
+            }
+          }
 
           if (session.customer) {
             await db.doc(buildStripeCustomerScopedPath(appIdValue, session.customer)).set(
@@ -244,7 +292,6 @@ const stripeWebhook = functions.https.onRequest(async (req, res) => {
       const subscription = eventObject || {};
       const customerId = subscription.customer || null;
       const subscriptionId = subscription.id || null;
-      const subscriptionStatus = mapSubscriptionStatus(subscription.status);
       const metadata = subscription.metadata || {};
       const appIdValue = toOptionalString(metadata.appId) || inferredAppId;
       const plan = metadata.plan || 'individual';
@@ -257,13 +304,20 @@ const stripeWebhook = functions.https.onRequest(async (req, res) => {
       });
 
       if (uid && resolvedAppId) {
+        const entitlement = await computeEntitlementFromStripe({
+          customerId,
+          email: null,
+        });
         await db.doc(buildBillingPath(resolvedAppId, uid)).set(
           {
-            status: subscriptionStatus,
             plan,
             stripeCustomerId: customerId,
             stripeSubscriptionId: subscriptionId,
-            stripeSubscriptionStatus: normalizeStripeStatus(subscription.status) || null,
+            stripeSubscriptionStatus: entitlement.stripeSubscriptionStatus || null,
+            lastStripeEventId: event.id,
+            lastStripeEventType: event.type || null,
+            lastStripeEventAt: admin.firestore.FieldValue.serverTimestamp(),
+            ...buildEntitlementWrite(entitlement, 'webhook'),
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           },
           { merge: true }
@@ -284,7 +338,6 @@ const stripeWebhook = functions.https.onRequest(async (req, res) => {
       const metadata = invoice.metadata || {};
       const appIdValue = toOptionalString(metadata.appId) || inferredAppId;
       const plan = metadata.plan || 'individual';
-      const status = event.type === 'invoice.payment_succeeded' ? 'active' : 'past_due';
 
       const { uid, appIdValue: resolvedAppId } = await resolveBillingIdentityFromStripe({
         firestore: db,
@@ -294,12 +347,19 @@ const stripeWebhook = functions.https.onRequest(async (req, res) => {
       });
 
       if (uid && resolvedAppId) {
+        const entitlement = await computeEntitlementFromStripe({
+          customerId,
+          email: null,
+        });
         await db.doc(buildBillingPath(resolvedAppId, uid)).set(
           {
-            status,
             plan,
             stripeCustomerId: customerId,
             stripeSubscriptionId: subscriptionId,
+            lastStripeEventId: event.id,
+            lastStripeEventType: event.type || null,
+            lastStripeEventAt: admin.firestore.FieldValue.serverTimestamp(),
+            ...buildEntitlementWrite(entitlement, 'webhook'),
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           },
           { merge: true }
@@ -325,12 +385,19 @@ const stripeWebhook = functions.https.onRequest(async (req, res) => {
       });
 
       if (uid && appIdValue) {
+        const entitlement = await computeEntitlementFromStripe({
+          customerId,
+          email: null,
+        });
         await db.doc(buildBillingPath(appIdValue, uid)).set(
           {
-            status: 'canceled',
             stripePaymentStatus: charge.status || null,
             revokedReason: event.type,
             revokedAt: admin.firestore.FieldValue.serverTimestamp(),
+            lastStripeEventId: event.id,
+            lastStripeEventType: event.type || null,
+            lastStripeEventAt: admin.firestore.FieldValue.serverTimestamp(),
+            ...buildEntitlementWrite(entitlement, 'webhook'),
             updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           },
           { merge: true }
@@ -373,6 +440,12 @@ const stripeWebhook = functions.https.onRequest(async (req, res) => {
     } catch (updateErr) {
       console.error('[stripeWebhook] Failed to record webhook error', updateErr);
     }
+    await logWebhookFailed({
+      appIdValue: DEFAULT_APP_ID,
+      eventType: event?.type || null,
+      errorCode: err?.code || err?.message || 'unknown',
+      stage: 'handler',
+    });
     console.error('[stripeWebhook] handler failed', err);
     res.status(500).send('Webhook handler failed');
   }

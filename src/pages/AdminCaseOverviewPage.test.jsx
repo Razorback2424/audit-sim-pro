@@ -2,9 +2,13 @@ import { render, screen } from '@testing-library/react';
 import AdminCaseOverviewPage from './AdminCaseOverviewPage';
 import { fetchCase } from '../services/caseService';
 
-jest.mock('../services/caseService', () => ({
-  fetchCase: jest.fn()
-}));
+jest.mock('../services/caseService', () => {
+  const actual = jest.requireActual('../services/caseService');
+  return {
+    ...actual,
+    fetchCase: jest.fn(),
+  };
+});
 
 jest.mock('../AppCore', () => ({
   Button: ({ children }) => <button>{children}</button>,

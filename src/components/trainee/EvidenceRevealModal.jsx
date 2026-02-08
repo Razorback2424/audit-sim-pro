@@ -26,6 +26,8 @@ export default function EvidenceRevealModal({
         caseId,
         storagePath: doc.storagePath,
         downloadURL: doc.downloadURL,
+        requireStoragePath: true,
+        docLabel: doc.fileName || doc.label || '',
       });
     },
     [caseId]

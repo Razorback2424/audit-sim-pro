@@ -3,6 +3,7 @@ import { Button, useRoute, useAuth, useModal, appId } from '../AppCore';
 import { listUserSubmissions } from '../services/submissionService';
 import { fetchCase } from '../services/caseService';
 import { fetchProgressForCases, saveProgress } from '../services/progressService';
+import { ANALYTICS_EVENTS, trackAnalyticsEvent } from '../services/analyticsService';
 
 const formatTimestamp = (value) => {
   if (!value) return 'N/A';
@@ -261,6 +262,11 @@ export default function TraineeSubmissionHistoryPage() {
 
       if (!hasDraft) {
         await resetCaseProgress();
+        trackAnalyticsEvent({
+          eventName: ANALYTICS_EVENTS.ATTEMPT_RESTARTED,
+          caseId,
+          props: { source: 'submission_history', hadDraft: false },
+        });
         navigate(`/trainee/case/${caseId}`);
         return;
       }
@@ -278,7 +284,14 @@ export default function TraineeSubmissionHistoryPage() {
               onClick={() => {
                 close();
                 resetCaseProgress()
-                  .then(() => navigate(`/trainee/case/${caseId}`))
+                  .then(() => {
+                    trackAnalyticsEvent({
+                      eventName: ANALYTICS_EVENTS.ATTEMPT_RESTARTED,
+                      caseId,
+                      props: { source: 'submission_history', hadDraft: true },
+                    });
+                    navigate(`/trainee/case/${caseId}`);
+                  })
                   .catch((err) => {
                     console.error('Failed to restart case:', err);
                     showModal('Could not restart this case right now. Please try again.', 'Retake unavailable');

@@ -140,6 +140,8 @@ function ArtifactViewer({ artifacts = [], caseId }) {
             caseId,
             storagePath: doc.storagePath,
             downloadURL: doc.downloadURL,
+            requireStoragePath: true,
+            docLabel: doc.fileName || doc.checkNo || doc.id || '',
           });
         } catch (err) {
           console.warn('[ArtifactViewer] Failed to resolve storage path', err);
@@ -239,6 +241,8 @@ function CheckCopyViewer({ referenceDocuments = [], selectedCheckNos = [], activ
               caseId,
               storagePath: doc.storagePath,
               downloadURL: doc.downloadURL,
+              requireStoragePath: true,
+              docLabel: doc.fileName || doc.checkNo || doc.id || '',
             });
             return [checkNo, url];
           } catch (err) {

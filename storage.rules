@@ -34,7 +34,7 @@ service firebase.storage {
       return request.auth != null &&
         firestore.exists(/databases/(default)/documents/artifacts/$(appId)/users/$(request.auth.uid)/billing/status) &&
         (
-          firestore.get(/databases/(default)/documents/artifacts/$(appId)/users/$(request.auth.uid)/billing/status).data.status == 'active'
+          firestore.get(/databases/(default)/documents/artifacts/$(appId)/users/$(request.auth.uid)/billing/status).data.status in ['active', 'no_payment_required']
         );
     }
 

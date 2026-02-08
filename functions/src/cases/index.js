@@ -3,6 +3,7 @@ const { getTemplateRenderer } = require('../../pdfTemplates');
 const { assertNoFieldValueInArrays } = require('../../utils/firestoreGuards');
 const { buildCaseDraftFromRecipe } = require('../../generation/buildCaseDraft');
 const { getCaseRecipe } = require('../../generation/recipeRegistry');
+const { writeAnalyticsEvent } = require('../analytics/events');
 
 const ANSWER_TOLERANCE = 0.01;
 const CLASSIFICATION_KEYS = Object.freeze([
@@ -940,7 +941,7 @@ const normalizeStoragePath = (rawPath, bucketName) => {
   return trimmed.replace(/^\/+/, '');
 };
 
-const collectCaseStoragePaths = (caseData, bucketName) => {
+const collectCaseStoragePaths = (caseData, bucketName, { allowDownloadUrl = true } = {}) => {
   const paths = new Set();
   const addPath = (value) => {
     const normalized = normalizeStoragePath(value, bucketName);
@@ -949,7 +950,7 @@ const collectCaseStoragePaths = (caseData, bucketName) => {
   const addDocument = (doc) => {
     if (!doc || typeof doc !== 'object') return;
     addPath(doc.storagePath);
-    if (!doc.storagePath && doc.downloadURL) {
+    if (allowDownloadUrl && !doc.storagePath && doc.downloadURL) {
       addPath(doc.downloadURL);
     }
   };
@@ -960,7 +961,7 @@ const collectCaseStoragePaths = (caseData, bucketName) => {
   const addItemDocuments = (item) => {
     if (!item || typeof item !== 'object') return;
     addPath(item.storagePath);
-    if (!item.storagePath && item.downloadURL) {
+    if (allowDownloadUrl && !item.storagePath && item.downloadURL) {
       addPath(item.downloadURL);
     }
     addDocument(item.highlightedDocument);
@@ -978,6 +979,18 @@ const collectCaseStoragePaths = (caseData, bucketName) => {
   addItems(caseData?.disbursements);
 
   return Array.from(paths);
+};
+
+const buildCaseStoragePrefixes = (appId, caseId) => [
+  `artifacts/${appId}/case_documents/${caseId}/`,
+  `artifacts/${appId}/case_reference/${caseId}/`,
+  `artifacts/${appId}/case_highlight/${caseId}/`,
+  `artifacts/${appId}/case_highlights/${caseId}/`,
+];
+
+const isCaseScopedStoragePath = ({ appId, caseId, path }) => {
+  if (!appId || !caseId || !path) return false;
+  return buildCaseStoragePrefixes(appId, caseId).some((prefix) => path.startsWith(prefix));
 };
 
 const collectInvoiceStoragePaths = (caseData, bucketName) => {
@@ -1692,6 +1705,7 @@ exports.listStudentCases = callable.https.onCall(async (data, context) => {
   if (resolvedRole === 'trainee') {
     if (!isPaid) {
       filters.push(admin.firestore.Filter.where('publicVisible', '==', true));
+      filters.push(admin.firestore.Filter.where('accessLevel', '==', 'demo'));
     } else {
       filters.push(
         admin.firestore.Filter.or(
@@ -1725,14 +1739,7 @@ exports.listStudentCases = callable.https.onCall(async (data, context) => {
   }
 
   const snap = await query.get();
-  const rawItems = snap.docs.map((docSnap) => ({ id: docSnap.id, data: docSnap.data() || {} }));
-  const items = isPaid
-    ? rawItems
-    : rawItems.filter((entry) => {
-        const accessLevel =
-          typeof entry?.data?.accessLevel === 'string' ? entry.data.accessLevel.trim().toLowerCase() : 'paid';
-        return entry?.data?.publicVisible === true && accessLevel === 'demo';
-      });
+  const items = snap.docs.map((docSnap) => ({ id: docSnap.id, data: docSnap.data() || {} }));
   const lastItem = items[items.length - 1];
 
   let nextCursor = null;
@@ -1824,14 +1831,32 @@ exports.listRosterOptions = callable.https.onCall(async (data, context) => {
 });
 
 exports.getSignedDocumentUrl = callable.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
-  }
-
   const appId = data?.appId;
   const caseId = data?.caseId;
   const rawStoragePath = typeof data?.storagePath === 'string' ? data.storagePath.trim() : '';
   const rawDownloadUrl = typeof data?.downloadURL === 'string' ? data.downloadURL.trim() : '';
+  const requireStoragePath = data?.requireStoragePath === true;
+  const docLabel = typeof data?.docLabel === 'string' ? data.docLabel.trim() : '';
+  const docKind = typeof data?.docKind === 'string' ? data.docKind.trim() : '';
+
+  const logEvidenceFailure = async (reason) => {
+    try {
+      await writeAnalyticsEvent({
+        appId,
+        uid: context.auth?.uid || null,
+        eventName: 'evidence_open_failed',
+        caseId,
+        props: {
+          docKind: docKind || null,
+          docLabel: docLabel || null,
+          reason,
+        },
+        source: 'server',
+      });
+    } catch (err) {
+      console.warn('[getSignedDocumentUrl] Failed to log evidence_open_failed', err);
+    }
+  };
 
   if (!appId || typeof appId !== 'string') {
     throw new functions.https.HttpsError('invalid-argument', 'appId is required.');
@@ -1839,45 +1864,96 @@ exports.getSignedDocumentUrl = callable.https.onCall(async (data, context) => {
   if (!caseId || typeof caseId !== 'string') {
     throw new functions.https.HttpsError('invalid-argument', 'caseId is required.');
   }
+  if (requireStoragePath && !rawStoragePath) {
+    console.warn('[getSignedDocumentUrl] Missing storagePath for required request.', {
+      uid: context.auth?.uid || null,
+      caseId,
+      appId,
+      docLabel: docLabel || null,
+    });
+    await logEvidenceFailure('missing_storage_path');
+    throw new functions.https.HttpsError('failed-precondition', 'Document unavailable—re-upload required.');
+  }
   if (!rawStoragePath && !rawDownloadUrl) {
     throw new functions.https.HttpsError('invalid-argument', 'storagePath or downloadURL is required.');
   }
 
   const firestore = admin.firestore();
-  const { resolvedRole, requesterOrgId } = await resolveRequesterIdentity({
-    context,
-    appId,
-    firestore,
-    logLabel: 'getSignedDocumentUrl',
-  });
+  const isAuthenticated = Boolean(context.auth);
+  let resolvedRole = null;
+  let requesterOrgId = null;
 
-  if (resolvedRole !== 'admin' && resolvedRole !== 'owner' && resolvedRole !== 'instructor' && resolvedRole !== 'trainee') {
-    throw new functions.https.HttpsError('permission-denied', 'Insufficient permissions.');
-  }
+  if (isAuthenticated) {
+    const identity = await resolveRequesterIdentity({
+      context,
+      appId,
+      firestore,
+      logLabel: 'getSignedDocumentUrl',
+    });
+    resolvedRole = identity.resolvedRole;
+    requesterOrgId = identity.requesterOrgId;
 
-  if (resolvedRole === 'instructor' && !requesterOrgId) {
-    throw new functions.https.HttpsError('failed-precondition', 'Instructor has no Org ID.');
+    if (resolvedRole !== 'admin' && resolvedRole !== 'owner' && resolvedRole !== 'instructor' && resolvedRole !== 'trainee') {
+      await logEvidenceFailure('permission_denied');
+      throw new functions.https.HttpsError('permission-denied', 'Insufficient permissions.');
+    }
+
+    if (resolvedRole === 'instructor' && !requesterOrgId) {
+      throw new functions.https.HttpsError('failed-precondition', 'Instructor has no Org ID.');
+    }
   }
 
   const bucket = admin.storage().bucket();
+  if ((!isAuthenticated || resolvedRole === 'trainee') && !rawStoragePath) {
+    console.warn('[getSignedDocumentUrl] Trainee request missing storagePath.', {
+      uid: context.auth?.uid || null,
+      caseId,
+      appId,
+      docLabel: docLabel || null,
+    });
+    await logEvidenceFailure('missing_storage_path');
+    throw new functions.https.HttpsError('failed-precondition', 'Document unavailable—re-upload required.');
+  }
+
   const normalizedPath = normalizeStoragePath(rawStoragePath || rawDownloadUrl, bucket.name);
   if (!normalizedPath) {
     throw new functions.https.HttpsError('invalid-argument', 'Unable to resolve storage path.');
   }
 
   if (caseId === 'debug') {
-    if (resolvedRole !== 'admin' && resolvedRole !== 'owner') {
+    if (!isAuthenticated || (resolvedRole !== 'admin' && resolvedRole !== 'owner')) {
+      await logEvidenceFailure('permission_denied');
       throw new functions.https.HttpsError('permission-denied', 'Insufficient permissions for debug documents.');
     }
     const expectedPrefix = `artifacts/${appId}/debug/reference/`;
     if (!normalizedPath.startsWith(expectedPrefix)) {
+      await logEvidenceFailure('permission_denied');
       throw new functions.https.HttpsError('permission-denied', 'Document not within debug scope.');
     }
     const expiresAtMs = Date.now() + 10 * 60 * 1000;
-    const [url] = await bucket.file(normalizedPath).getSignedUrl({
-      action: 'read',
-      expires: expiresAtMs,
-    });
+    let url = '';
+    try {
+      [url] = await bucket.file(normalizedPath).getSignedUrl({
+        action: 'read',
+        expires: expiresAtMs,
+      });
+    } catch (err) {
+      await logEvidenceFailure('signing_error');
+      throw err;
+    }
+    try {
+      await writeAnalyticsEvent({
+        appId,
+        uid: context.auth?.uid || null,
+        eventName: 'evidence_signed_url_issued',
+        caseId,
+        props: { docKind: docKind || null, docLabel: docLabel || null },
+        source: 'server',
+        dedupeKey: `${context.auth?.uid || 'anon'}|${caseId}|${normalizedPath}|evidence_signed_url_issued`,
+      });
+    } catch (err) {
+      console.warn('[getSignedDocumentUrl] Failed to log evidence_signed_url_issued', err);
+    }
     return { url, expiresAt: expiresAtMs };
   }
 
@@ -1893,6 +1969,7 @@ exports.getSignedDocumentUrl = callable.https.onCall(async (data, context) => {
 
   if (resolvedRole === 'instructor') {
     if (!caseData?.orgId || caseData.orgId !== requesterOrgId) {
+      await logEvidenceFailure('permission_denied');
       throw new functions.https.HttpsError('permission-denied', 'Case is outside instructor org.');
     }
   }
@@ -1903,28 +1980,88 @@ exports.getSignedDocumentUrl = callable.https.onCall(async (data, context) => {
     const visibleToUserIds = Array.isArray(caseData?.visibleToUserIds) ? caseData.visibleToUserIds : [];
     const isPublicVisible = caseData?.publicVisible === true;
     const accessLevel = typeof caseData?.accessLevel === 'string' ? caseData.accessLevel.trim().toLowerCase() : 'paid';
+    const isNotDeleted = caseData?._deleted === false;
+    const opensAtMs = toCursorTimestamp(caseData?.opensAt);
+
+    if (!isNotDeleted) {
+      await logEvidenceFailure('permission_denied');
+      throw new functions.https.HttpsError('permission-denied', 'Case is not available.');
+    }
+
+    if (opensAtMs && opensAtMs > Date.now()) {
+      await logEvidenceFailure('permission_denied');
+      throw new functions.https.HttpsError('permission-denied', 'Case is not yet available.');
+    }
 
     if (isPaid) {
       if (!isPublicVisible && !visibleToUserIds.includes(uid)) {
+        await logEvidenceFailure('permission_denied');
         throw new functions.https.HttpsError('permission-denied', 'Case is not assigned to trainee.');
       }
     } else {
       if (!(isPublicVisible && accessLevel === 'demo')) {
+        await logEvidenceFailure('permission_denied');
         throw new functions.https.HttpsError('permission-denied', 'Case is not available for demo access.');
       }
     }
   }
 
-  const allowedPaths = collectCaseStoragePaths(caseData, bucket.name);
+  if (!isAuthenticated) {
+    const isPublicVisible = caseData?.publicVisible === true;
+    const accessLevel = typeof caseData?.accessLevel === 'string' ? caseData.accessLevel.trim().toLowerCase() : 'paid';
+    const isNotDeleted = caseData?._deleted === false;
+    const opensAtMs = toCursorTimestamp(caseData?.opensAt);
+    if (!(isPublicVisible && accessLevel === 'demo' && isNotDeleted)) {
+      await logEvidenceFailure('permission_denied');
+      throw new functions.https.HttpsError('permission-denied', 'Case is not available for demo access.');
+    }
+    if (opensAtMs && opensAtMs > Date.now()) {
+      await logEvidenceFailure('permission_denied');
+      throw new functions.https.HttpsError('permission-denied', 'Case is not available for demo access.');
+    }
+  }
+
+  const allowedPaths = collectCaseStoragePaths(caseData, bucket.name, {
+    allowDownloadUrl: !(requireStoragePath || resolvedRole === 'trainee' || !isAuthenticated),
+  });
   if (!allowedPaths.includes(normalizedPath)) {
+    await logEvidenceFailure('permission_denied');
     throw new functions.https.HttpsError('permission-denied', 'Document not associated with case.');
   }
 
+  if (
+    (!isAuthenticated || (resolvedRole !== 'admin' && resolvedRole !== 'owner')) &&
+    !isCaseScopedStoragePath({ appId: resolvedAppId, caseId, path: normalizedPath })
+  ) {
+    await logEvidenceFailure('path_outside_case_scope');
+    throw new functions.https.HttpsError('permission-denied', 'Document path is outside case scope.');
+  }
+
   const expiresAtMs = Date.now() + 10 * 60 * 1000;
-  const [url] = await bucket.file(normalizedPath).getSignedUrl({
-    action: 'read',
-    expires: expiresAtMs,
-  });
+  let url = '';
+  try {
+    [url] = await bucket.file(normalizedPath).getSignedUrl({
+      action: 'read',
+      expires: expiresAtMs,
+    });
+  } catch (err) {
+    await logEvidenceFailure('signing_error');
+    throw err;
+  }
+
+  try {
+    await writeAnalyticsEvent({
+      appId: resolvedAppId,
+      uid: context.auth?.uid || null,
+      eventName: 'evidence_signed_url_issued',
+      caseId,
+      props: { docKind: docKind || null, docLabel: docLabel || null },
+      source: 'server',
+      dedupeKey: `${context.auth?.uid || 'anon'}|${caseId}|${normalizedPath}|evidence_signed_url_issued`,
+    });
+  } catch (err) {
+    console.warn('[getSignedDocumentUrl] Failed to log evidence_signed_url_issued', err);
+  }
 
   return { url, expiresAt: expiresAtMs };
 });

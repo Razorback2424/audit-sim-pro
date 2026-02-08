@@ -3,7 +3,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useAuth, useModal, Input, Button, useRoute } from '../AppCore';
 import { getAuth, createUserWithEmailAndPassword } from 'firebase/auth';
-import { trackAnalyticsEvent } from '../services/analyticsService';
 
 const RegistrationPage = () => {
   const { currentUser } = useAuth();
@@ -48,11 +47,6 @@ const RegistrationPage = () => {
       const [, queryString] = (route || '').split('?');
       const params = new URLSearchParams(queryString || '');
       const next = params.get('next');
-      await trackAnalyticsEvent({
-        eventType: 'registration_completed',
-        metadata: { plan: plan || null, next: next || null },
-      });
-
       if (next) {
         navigate(next);
       } else if (isIndividualPlan) {

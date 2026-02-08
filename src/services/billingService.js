@@ -27,6 +27,18 @@ export const confirmCheckoutSession = async ({ sessionId }) => {
   return result?.data || {};
 };
 
+export const fetchEntitlementDebug = async ({ targetUid, email } = {}) => {
+  const callable = httpsCallable(functions, 'getEntitlementDebug');
+  const result = await callable({ targetUid: targetUid || null, email: email || null, appId });
+  return result?.data || {};
+};
+
+export const reconcileBillingAccess = async ({ targetUid, email } = {}) => {
+  const callable = httpsCallable(functions, 'reconcileBillingAccess');
+  const result = await callable({ targetUid: targetUid || null, email: email || null, appId });
+  return result?.data || {};
+};
+
 export const fetchBillingSummary = async ({ orgId, appId: appIdOverride } = {}) => {
   if (!orgId) return null;
   const ref = doc(db, `artifacts/${appIdOverride || appId}/billing/orgs/${orgId}`);
@@ -59,5 +71,5 @@ export const subscribeUserBilling = ({ uid, appId: appIdOverride } = {}, onData,
 
 export const isBillingPaid = (billing) => {
   const status = typeof billing?.status === 'string' ? billing.status.trim().toLowerCase() : '';
-  return status === 'active';
+  return status === 'active' || status === 'no_payment_required';
 };

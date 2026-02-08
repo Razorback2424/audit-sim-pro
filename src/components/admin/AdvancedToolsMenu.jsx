@@ -9,6 +9,7 @@ const AdvancedToolsMenu = ({
   loadingAccess = false,
   onNavigateUserManagement = noop,
   onNavigateDataAudit = noop,
+  onNavigateEntitlementDebug = noop,
   onRepairCases = noop,
   isRepairingCases = false,
   onAuditOrphanedInvoices = noop,
@@ -37,6 +38,13 @@ const AdvancedToolsMenu = ({
         disabled: false,
       },
       {
+        id: 'entitlement-debug',
+        label: 'Entitlement Debug',
+        icon: Users2,
+        onSelect: onNavigateEntitlementDebug,
+        disabled: false,
+      },
+      {
         id: 'repair-cases',
         label: isRepairingCases ? 'Repairing cases…' : 'Repair Cases',
         icon: Wrench,
@@ -56,6 +64,7 @@ const AdvancedToolsMenu = ({
     [
       onNavigateUserManagement,
       onNavigateDataAudit,
+      onNavigateEntitlementDebug,
       onRepairCases,
       isRepairingCases,
       onAuditOrphanedInvoices,

@@ -1072,6 +1072,7 @@ export default function AdminDashboardPage() {
               loadingAccess={loadingRole}
               onNavigateUserManagement={() => navigate('/admin/user-management')}
               onNavigateDataAudit={() => navigate('/admin/case-data-audit')}
+              onNavigateEntitlementDebug={() => navigate('/admin/entitlement-debug')}
               onRepairCases={handleRepairCases}
               isRepairingCases={repairingCases}
               onAuditOrphanedInvoices={handleAuditOrphanedInvoices}

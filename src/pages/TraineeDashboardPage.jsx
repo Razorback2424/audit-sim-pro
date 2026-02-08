@@ -126,23 +126,12 @@ export default function TraineeDashboardPage() {
   const [deletingRetakeIds, setDeletingRetakeIds] = useState(() => new Set());
   const hasPaidAccess = isBillingPaid(billing);
   const showPaywall = !loadingBilling && !hasPaidAccess;
-  const hasTrackedPaywallRef = useRef(false);
-  const hasTrackedCaseListRef = useRef(false);
   const billingStatusLabel = useMemo(() => {
     if (loadingBilling) return 'Checking billing status…';
     const status = typeof billing?.status === 'string' ? billing.status.trim() : '';
     if (status) return `Billing status: ${status}`;
     return 'Billing status: not found';
   }, [billing, loadingBilling]);
-
-  useEffect(() => {
-    if (!showPaywall || hasTrackedPaywallRef.current) return;
-    hasTrackedPaywallRef.current = true;
-    trackAnalyticsEvent({
-      eventType: ANALYTICS_EVENTS.PAYWALL_SHOWN,
-      metadata: { source: 'dashboard', route: window.location.pathname },
-    });
-  }, [showPaywall]);
 
   const fetchCases = useCallback(async () => {
     if (!userId || loadingBilling) return;
@@ -207,13 +196,6 @@ export default function TraineeDashboardPage() {
 
       setCases(collected);
       setError('');
-      if (!hasTrackedCaseListRef.current) {
-        hasTrackedCaseListRef.current = true;
-        trackAnalyticsEvent({
-          eventType: ANALYTICS_EVENTS.CASE_LIST_VIEWED,
-          metadata: { source: 'dashboard', count: collected.length, route: window.location.pathname },
-        });
-      }
     } catch (err) {
       if (process.env.NODE_ENV !== 'test') {
         console.error('Error fetching cases for trainee:', err);
@@ -495,10 +477,6 @@ export default function TraineeDashboardPage() {
     try {
       setStartingModuleId(moduleId);
       const caseId = await startCaseAttemptFromPool({ moduleId });
-      trackAnalyticsEvent({
-        eventType: ANALYTICS_EVENTS.CASE_STARTED,
-        metadata: { source: 'dashboard', moduleId, caseId, route: window.location.pathname },
-      });
       navigate(`/cases/${caseId}`);
     } catch (err) {
       console.error('Failed to start module:', err);
@@ -597,7 +575,10 @@ export default function TraineeDashboardPage() {
             <div className="flex flex-col sm:flex-row gap-3 justify-center">
               <Button
                 onClick={() => {
-                  trackAnalyticsEvent({ eventType: 'upgrade_clicked', metadata: { source: 'dashboard_paywall' } });
+                  trackAnalyticsEvent({
+                    eventName: ANALYTICS_EVENTS.CTA_CHECKOUT_CLICKED,
+                    props: { isDemo: true, intent: 'unlock-dashboard', plan: 'individual', ctaLocation: 'dashboard_paywall' },
+                  });
                   navigate('/checkout?plan=individual&intent=unlock-dashboard');
                 }}
               >
@@ -606,7 +587,6 @@ export default function TraineeDashboardPage() {
               <Button
                 variant="secondary"
                 onClick={() => {
-                  trackAnalyticsEvent({ eventType: 'demo_started', metadata: { source: 'dashboard_paywall' } });
                   navigate('/demo/surl');
                 }}
               >

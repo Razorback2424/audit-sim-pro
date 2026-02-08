@@ -3,6 +3,7 @@ import TraineeSubmissionHistoryPage from './TraineeSubmissionHistoryPage';
 import { listUserSubmissions } from '../services/submissionService';
 import { fetchCase } from '../services/caseService';
 import { fetchProgressForCases } from '../services/progressService';
+import { trackAnalyticsEvent } from '../services/analyticsService';
 
 jest.mock('../services/submissionService', () => ({
   listUserSubmissions: jest.fn(),
@@ -15,6 +16,13 @@ jest.mock('../services/caseService', () => ({
 jest.mock('../services/progressService', () => ({
   fetchProgressForCases: jest.fn(),
   saveProgress: jest.fn(),
+}));
+
+jest.mock('../services/analyticsService', () => ({
+  ANALYTICS_EVENTS: {
+    ATTEMPT_RESTARTED: 'attempt_restarted',
+  },
+  trackAnalyticsEvent: jest.fn(),
 }));
 
 
@@ -34,6 +42,7 @@ jest.mock('../AppCore', () => ({
 describe('TraineeSubmissionHistoryPage', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    trackAnalyticsEvent.mockResolvedValue();
   });
 
   it('renders empty state when no submissions exist', async () => {
@@ -172,6 +181,13 @@ describe('TraineeSubmissionHistoryPage', () => {
 
     expect(closeFirst).toHaveBeenCalled();
     await waitFor(() => expect(saveProgress).toHaveBeenCalled());
+    expect(trackAnalyticsEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventName: 'attempt_restarted',
+        caseId: 'case-1',
+        props: expect.objectContaining({ source: 'submission_history', hadDraft: true }),
+      })
+    );
     expect(mockShowModal).toHaveBeenCalledTimes(1);
     expect(mockNavigate).toHaveBeenCalledWith('/trainee/case/case-1');
   });
@@ -212,6 +228,13 @@ describe('TraineeSubmissionHistoryPage', () => {
     await waitFor(() => expect(fetchProgressForCases).toHaveBeenCalled());
     expect(mockShowModal).not.toHaveBeenCalled();
     expect(saveProgress).toHaveBeenCalled();
+    expect(trackAnalyticsEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventName: 'attempt_restarted',
+        caseId: 'case-1',
+        props: expect.objectContaining({ source: 'submission_history', hadDraft: false }),
+      })
+    );
     expect(mockNavigate).toHaveBeenCalledWith('/trainee/case/case-1');
   });
 

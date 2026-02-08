@@ -182,6 +182,8 @@ export default function useEvidenceViewer({
       caseId,
       storagePath: target.storagePath,
       downloadURL: target.downloadURL,
+      requireStoragePath: true,
+      docLabel: target.evidenceFileName || target.paymentId || target.evidenceId || '',
     })
       .then((url) => {
         if (cancelled) return;

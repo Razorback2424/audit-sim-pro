@@ -1,6 +1,7 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, PlusCircle, RotateCcw } from 'lucide-react';
 import { getSignedDocumentUrl } from '../../services/documentService';
+import { ANALYTICS_EVENTS, trackAnalyticsEvent } from '../../services/analyticsService';
 import { currencyFormatter } from '../../utils/formatters';
 
 const normalize = (val) => (typeof val === 'string' ? val.trim().toLowerCase() : '');
@@ -231,17 +232,21 @@ export default function ResultsAnalysis({
   const [highlightLoading, setHighlightLoading] = useState(false);
   const [highlightError, setHighlightError] = useState('');
   const [highlightInlineNotSupported, setHighlightInlineNotSupported] = useState(false);
+  const hasTrackedGuidedReviewRef = useRef(false);
   const tieOutGate = gateResults?.tieOut || null;
   const selectionGate = gateResults?.selection || null;
 
   const resolveDocumentUrl = useCallback(
-    async (doc) => {
+    async (doc, docKindOverride) => {
       if (!doc || (!doc.storagePath && !doc.downloadURL)) return '';
       if (!caseId) throw new Error('Case ID is required to open documents.');
       return getSignedDocumentUrl({
         caseId,
         storagePath: doc.storagePath,
         downloadURL: doc.downloadURL,
+        requireStoragePath: true,
+        docLabel: doc.fileName || doc.label || doc.type || '',
+        docKind: docKindOverride || doc.type || '',
       });
     },
     [caseId]
@@ -370,6 +375,17 @@ export default function ResultsAnalysis({
   const hasTraps = traps.length > 0;
   const showRetake = typeof onRequestRetake === 'function' && hasTraps;
   const showGenerate = typeof onGenerateNewCase === 'function' && hasTraps;
+
+  useEffect(() => {
+    if (hasTrackedGuidedReviewRef.current) return;
+    if (!hasTraps || issues.length === 0) return;
+    hasTrackedGuidedReviewRef.current = true;
+    trackAnalyticsEvent({
+      eventName: ANALYTICS_EVENTS.GUIDED_REVIEW_OPENED,
+      caseId,
+      props: { step: 'highlights' },
+    });
+  }, [caseId, hasTraps, issues.length]);
   const showReturn = typeof onReturnToDashboard === 'function';
   const selectedCount =
     studentAnswers && typeof studentAnswers === 'object' ? Object.keys(studentAnswers).length : 0;
@@ -451,7 +467,7 @@ export default function ResultsAnalysis({
     let cancelled = false;
     setHighlightLoading(true);
 
-    resolveDocumentUrl(doc)
+    resolveDocumentUrl(doc, 'invoice')
       .then((url) => {
         if (cancelled) return;
         setHighlightUrl(url || '');
@@ -497,7 +513,7 @@ export default function ResultsAnalysis({
     let cancelled = false;
     setApAgingLoading(true);
 
-    resolveDocumentUrl(apAgingDoc)
+    resolveDocumentUrl(apAgingDoc, 'ap_aging')
       .then((url) => {
         if (cancelled) return;
         setApAgingUrl(url || '');

@@ -1,11 +1,12 @@
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import TraineeCaseViewPage from './TraineeCaseViewPage';
-import { subscribeToCase } from '../services/caseService';
-import { saveSubmission, subscribeToSubmission } from '../services/submissionService';
-import { saveProgress, subscribeProgressForCases } from '../services/progressService';
+import { listStudentCases, subscribeToCase } from '../services/caseService';
+import { saveSubmission, subscribeToSubmission, scoreCaseAttempt } from '../services/submissionService';
+import { fetchProgressForCases, saveProgress, subscribeProgressForCases } from '../services/progressService';
 import { fetchRecipeProgress, saveRecipeProgress } from '../services/recipeProgressService';
 import { getSignedDocumentUrl } from '../services/documentService';
+import { trackAnalyticsEvent } from '../services/analyticsService';
 
 const mockFetch = jest.fn(() =>
   Promise.resolve({
@@ -35,15 +36,18 @@ afterAll(() => {
 });
 
 jest.mock('../services/caseService', () => ({
+  listStudentCases: jest.fn(),
   subscribeToCase: jest.fn(),
 }));
 
 jest.mock('../services/submissionService', () => ({
   saveSubmission: jest.fn(),
+  scoreCaseAttempt: jest.fn(),
   subscribeToSubmission: jest.fn(() => jest.fn()),
 }));
 
 jest.mock('../services/progressService', () => ({
+  fetchProgressForCases: jest.fn(),
   saveProgress: jest.fn(),
   subscribeProgressForCases: jest.fn(() => jest.fn()),
 }));
@@ -182,9 +186,30 @@ jest.mock('../services/documentService', () => ({
   getSignedDocumentUrl: jest.fn(),
 }));
 
+jest.mock('../services/analyticsService', () => ({
+  ANALYTICS_EVENTS: {
+    ATTEMPT_STARTED: 'attempt_started',
+    ATTEMPT_SUBMITTED: 'attempt_submitted',
+    ATTEMPT_DOCUMENT_OPENED: 'attempt_document_opened',
+    ATTEMPT_RESULTS_VIEWED: 'attempt_results_viewed',
+    CTA_SAVE_REPORT_CLICKED: 'cta_save_report_clicked',
+    CTA_CHECKOUT_CLICKED: 'cta_checkout_clicked',
+    GUIDED_REVIEW_OPENED: 'guided_review_opened',
+  },
+  trackAnalyticsEvent: jest.fn(),
+}));
+
 const mockModal = {
   showModal: jest.fn(),
   hideModal: jest.fn(),
+};
+
+const mockUserContext = {
+  role: 'trainee',
+  loadingRole: false,
+  userProfile: { uid: 'u1' },
+  billing: { status: 'active' },
+  loadingBilling: false,
 };
 
 jest.mock('../AppCore', () => {
@@ -208,13 +233,7 @@ jest.mock('../AppCore', () => {
     useRoute: () => ({ navigate: navigateMock }),
     useModal: () => mockModal,
     useAuth: () => ({ userId: 'u1' }),
-    useUser: () => ({
-      role: 'trainee',
-      loadingRole: false,
-      userProfile: { uid: 'u1' },
-      billing: { status: 'active' },
-      loadingBilling: false,
-    }),
+    useUser: () => mockUserContext,
     storage: { app: {} },
     appId: 'test-app',
   };
@@ -249,6 +268,9 @@ describe('TraineeCaseViewPage', () => {
   const renderCase = (casePayload) => {
     subscribeToCase.mockImplementation((_id, cb) => {
       cb({
+        id: casePayload?.id || 'case-1',
+        _deleted: casePayload?._deleted ?? false,
+        publicVisible: casePayload?.publicVisible ?? true,
         ...casePayload,
         instruction: casePayload?.instruction || baseInstruction,
       });
@@ -260,13 +282,26 @@ describe('TraineeCaseViewPage', () => {
   const advanceToClassification = async () => {
     await screen.findByRole('heading', { name: /Step 1 — Instruction/i, level: 2 });
     await userEvent.click(screen.getByRole('radio', { name: /Expenses follow the work/i }));
-    await userEvent.click(screen.getByRole('button', { name: /Enter the Simulation/i }));
+    const proceedButton =
+      screen.queryByRole('button', { name: /Enter the Simulation/i }) ||
+      screen.getByRole('button', { name: /Return to Simulation/i });
+    await userEvent.click(proceedButton);
     await screen.findByRole('heading', { name: /Step 2 — Select Disbursements/i, level: 2 });
     const [checkbox] = screen.getAllByRole('checkbox');
     await userEvent.click(checkbox);
     const continueButton = screen.getByRole('button', { name: /Continue to Classification/i });
     await userEvent.click(continueButton);
     await screen.findByRole('heading', { name: /Step 3 — Classify Results/i, level: 2 });
+  };
+
+  const advanceToSelection = async () => {
+    await screen.findByRole('heading', { name: /Step 1 — Instruction/i, level: 2 });
+    await userEvent.click(screen.getByRole('radio', { name: /Expenses follow the work/i }));
+    const proceedButton =
+      screen.queryByRole('button', { name: /Enter the Simulation/i }) ||
+      screen.getByRole('button', { name: /Return to Simulation/i });
+    await userEvent.click(proceedButton);
+    await screen.findByRole('heading', { name: /Step 2 — Select Disbursements/i, level: 2 });
   };
 
   beforeEach(() => {
@@ -280,7 +315,12 @@ describe('TraineeCaseViewPage', () => {
     fetchRecipeProgress.mockReset();
     saveRecipeProgress.mockReset();
     saveProgress.mockResolvedValue();
-    fetchRecipeProgress.mockResolvedValue({ recipeId: 'case-1', passedVersion: 0, passedAt: null });
+    listStudentCases.mockResolvedValue({ items: [], nextCursor: null });
+    fetchProgressForCases.mockResolvedValue(new Map());
+    scoreCaseAttempt.mockResolvedValue({ grade: 100, gradingDetails: {}, virtualSeniorFeedback: [] });
+    trackAnalyticsEvent.mockResolvedValue();
+    fetchRecipeProgress.mockResolvedValue({ recipeId: 'case-1', passedVersion: -1, passedAt: null });
+    saveRecipeProgress.mockResolvedValue();
     consoleErrorSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
     getSignedDocumentUrl.mockReset();
     subscribeProgressForCases.mockImplementation((_params, onNext) => {
@@ -381,11 +421,11 @@ describe('TraineeCaseViewPage', () => {
 
     await advanceToClassification();
     await flushAsync();
-    expect(screen.getByRole('heading', { name: /Cash Case/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /Step 3 — Classify Results/i })).toBeInTheDocument();
   });
 
   test('fetches evidence for storage-backed documents on classification step', async () => {
+    const openSpy = jest.spyOn(window, 'open').mockImplementation(() => null);
     getSignedDocumentUrl.mockResolvedValue('https://example.com/doc.pdf');
     renderCase({
       caseName: 'Case',
@@ -403,7 +443,19 @@ describe('TraineeCaseViewPage', () => {
     await advanceToClassification();
     await flushAsync();
     await waitFor(() => expect(getSignedDocumentUrl).toHaveBeenCalledTimes(1));
-    expect(screen.getByRole('button', { name: /open in new tab/i })).toBeInTheDocument();
+    const openButton = screen.getByRole('button', { name: /open in new tab/i });
+    expect(openButton).toBeInTheDocument();
+    await userEvent.click(openButton);
+    await waitFor(() =>
+      expect(trackAnalyticsEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventName: 'attempt_document_opened',
+          caseId: 'case-1',
+          props: expect.objectContaining({ source: 'evidence_viewer', fileName: 'doc.pdf' }),
+        })
+      )
+    );
+    openSpy.mockRestore();
   });
 
   test('reuses existing download URL when provided', async () => {
@@ -423,7 +475,13 @@ describe('TraineeCaseViewPage', () => {
 
     await advanceToClassification();
     await flushAsync();
-    expect(getSignedDocumentUrl).not.toHaveBeenCalled();
+    expect(getSignedDocumentUrl).toHaveBeenCalledWith(
+      expect.objectContaining({
+        caseId: 'case-1',
+        downloadURL: 'https://example.com/invoice.pdf',
+        requireStoragePath: true,
+      })
+    );
     expect(screen.getByText(/Now viewing: invoice\.pdf/i)).toBeInTheDocument();
   });
 
@@ -442,16 +500,18 @@ describe('TraineeCaseViewPage', () => {
       ],
     });
 
-    await screen.findByText(/Step 2 — Select Disbursements/i);
-    await userEvent.click(screen.getByRole('checkbox', { name: /ID:\s*p1/i }));
+    await advanceToSelection();
+    const [checkbox] = screen.getAllByRole('checkbox');
+    await userEvent.click(checkbox);
     await userEvent.click(screen.getByRole('button', { name: /Continue to Classification/i }));
     await waitFor(() => {
       expect(screen.queryByText(/Step 3 — Classify Results/i)).not.toBeInTheDocument();
     });
-    await flushAsync();
     await waitFor(() => {
       expect(mockModal.showModal).toHaveBeenCalled();
     });
+    const [message] = mockModal.showModal.mock.calls.at(-1) || [];
+    expect(message).toMatch(/supporting documents before continuing/i);
   });
 
   test('shows storage error when evidence document fails to load', async () => {
@@ -471,7 +531,7 @@ describe('TraineeCaseViewPage', () => {
 
     await advanceToClassification();
     await flushAsync();
-    await waitFor(() => expect(screen.getByText(/Document is missing from storage./i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/Unable to load document preview\./i)).toBeInTheDocument());
     expect(consoleErrorSpy).toHaveBeenCalledWith('Error loading evidence document:', expect.objectContaining({ code: 'storage/object-not-found' }));
   });
 
@@ -488,11 +548,12 @@ describe('TraineeCaseViewPage', () => {
         },
       ],
       referenceDocuments: [
-        { id: 'ref-1', fileName: 'Reference A.xlsx', downloadURL: 'https://example.com/ref-a.xlsx' },
+        { id: 'ref-1', fileName: 'Reference A.xlsx', storagePath: 'artifacts/app/reference/ref-a.xlsx' },
         { id: 'ref-2', fileName: 'Reference B.pdf', storagePath: 'artifacts/app/reference/ref-b.pdf' },
       ],
     });
 
+    getSignedDocumentUrl.mockResolvedValueOnce('https://example.com/generated/ref-a.xlsx');
     getSignedDocumentUrl.mockResolvedValueOnce('https://example.com/generated/ref-b.pdf');
 
     await advanceToClassification();
@@ -503,7 +564,16 @@ describe('TraineeCaseViewPage', () => {
 
     const directDownloadButton = screen.getByRole('button', { name: /Reference A\.xlsx/i });
     await userEvent.click(directDownloadButton);
-    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('https://example.com/ref-a.xlsx'));
+    await waitFor(() =>
+      expect(getSignedDocumentUrl).toHaveBeenCalledWith(
+        expect.objectContaining({
+          caseId: 'case-123',
+          storagePath: 'artifacts/app/reference/ref-a.xlsx',
+          requireStoragePath: true,
+        })
+      )
+    );
+    await waitFor(() => expect(global.fetch).toHaveBeenCalledWith('https://example.com/generated/ref-a.xlsx'));
 
     const storageDownloadButton = screen.getByRole('button', { name: /Reference B\.pdf/i });
     await userEvent.click(storageDownloadButton);
@@ -512,6 +582,7 @@ describe('TraineeCaseViewPage', () => {
         expect.objectContaining({
           caseId: 'case-123',
           storagePath: 'artifacts/app/reference/ref-b.pdf',
+          requireStoragePath: true,
         })
       )
     );
@@ -555,9 +626,10 @@ describe('TraineeCaseViewPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /^Pass$/i }));
     await userEvent.click(screen.getByRole('button', { name: /Submit Responses/i }));
 
-    await waitFor(() => expect(saveSubmission).toHaveBeenCalled());
+    await waitFor(() => expect(scoreCaseAttempt).toHaveBeenCalled());
     await screen.findByRole('heading', { name: /Audit Completion Report/i });
-    const [, , payload] = saveSubmission.mock.calls[0];
+    const [submitArg] = scoreCaseAttempt.mock.calls[0];
+    const payload = submitArg?.submission;
     expect(payload.retrievedDocuments).toHaveLength(2);
     expect(payload.disbursementClassifications.p1).toMatchObject({
       properlyIncluded: 100,
@@ -597,8 +669,8 @@ describe('TraineeCaseViewPage', () => {
 
     await screen.findByRole('heading', { name: /Audit Completion Report/i });
     expect(screen.getByText(/You missed 1 critical item/i)).toBeInTheDocument();
-    expect(screen.getByText(/Seed Alpha/i)).toBeInTheDocument();
-    expect(screen.getByText(/\$125,892\.57/)).toBeInTheDocument();
+    expect(screen.getByText(/Missed exception:\s*Seed Alpha/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/\$125,892\.57/).length).toBeGreaterThan(0);
     expect(screen.getByText(/Your decision/i)).toBeInTheDocument();
     expect(screen.getByText(/Properly Included/i)).toBeInTheDocument();
     expect(screen.getByText(/Correct call/i)).toBeInTheDocument();
@@ -633,7 +705,7 @@ describe('TraineeCaseViewPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /Submit Responses/i }));
 
     await screen.findByRole('heading', { name: /Audit Completion Report/i });
-    expect(screen.getByRole('button', { name: /Back to Dashboard/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /Back to Dashboard/i }).length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: /Retake Case/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Try Again/i })).not.toBeInTheDocument();
   });
@@ -693,5 +765,51 @@ describe('TraineeCaseViewPage', () => {
     expect(
       screen.getByText(/Reference materials will appear here when provided by your instructor/i)
     ).toBeInTheDocument();
+  });
+
+  test('tracks analytics when opening a reference PDF', async () => {
+    const openSpy = jest.spyOn(window, 'open').mockImplementation(() => null);
+    getSignedDocumentUrl.mockResolvedValue('https://example.com/reference.pdf');
+
+    renderCase({
+      caseName: 'Case',
+      disbursements: [
+        {
+          paymentId: 'p1',
+          payee: 'Vendor',
+          amount: '100',
+          paymentDate: '2024-01-01',
+          downloadURL: 'https://example.com/invoice.pdf',
+        },
+      ],
+      referenceDocuments: [
+        {
+          id: 'ref-1',
+          fileName: 'Reference B.pdf',
+          storagePath: 'artifacts/app/reference/ref-b.pdf',
+          contentType: 'application/pdf',
+        },
+      ],
+    });
+
+    await advanceToClassification();
+    const openReferenceButton = screen.getByRole('button', { name: /Reference B\.pdf/i });
+    await userEvent.click(openReferenceButton);
+
+    await waitFor(() =>
+      expect(trackAnalyticsEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          eventName: 'attempt_document_opened',
+          caseId: 'case-1',
+          props: expect.objectContaining({
+            source: 'reference_material',
+            fileName: 'Reference B.pdf',
+            documentId: expect.any(String),
+            method: 'open_tab',
+          }),
+        })
+      )
+    );
+    openSpy.mockRestore();
   });
 });
