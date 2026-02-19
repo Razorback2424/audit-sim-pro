@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Button, useRoute, useModal, appId } from '../AppCore';
 import { fetchCase } from '../services/caseService';
 import { fetchProgressRosterForCase } from '../services/progressService';
+import { fetchSubmissionsForCase } from '../services/submissionService';
 
 const DEFAULT_SORT = { key: 'percentComplete', direction: 'desc' };
 
@@ -23,6 +24,40 @@ const formatTimestamp = (timestamp) => {
   return '—';
 };
 
+const getLatestAttempt = (attempts = []) => {
+  if (!Array.isArray(attempts) || attempts.length === 0) return null;
+  const getMillis = (value) => {
+    if (!value) return 0;
+    if (typeof value.toMillis === 'function') return value.toMillis();
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? 0 : date.getTime();
+  };
+  return [...attempts].sort((a, b) => getMillis(b?.submittedAt) - getMillis(a?.submittedAt))[0];
+};
+
+const getReadinessStatus = (submission) => {
+  const attempts = Array.isArray(submission?.attempts) ? submission.attempts : [];
+  const latestAttempt = getLatestAttempt(attempts);
+  const criticalIssues = Number(latestAttempt?.attemptSummary?.criticalIssuesCount);
+  if (Number.isFinite(criticalIssues)) {
+    return criticalIssues === 0 ? 'Pass' : 'Needs review';
+  }
+  const latestGrade = Number(latestAttempt?.overallGrade ?? submission?.overallGrade);
+  if (Number.isFinite(latestGrade)) {
+    return latestGrade >= 80 ? 'Pass' : 'Needs review';
+  }
+  return 'In progress';
+};
+
+const getFeedbackCategory = (note) => {
+  if (typeof note !== 'string' || !note.trim()) return '';
+  const text = note.trim();
+  const idx = text.indexOf(':');
+  if (idx > 0) return text.slice(0, idx).trim();
+  const words = text.split(/\s+/).slice(0, 4).join(' ');
+  return words.trim();
+};
+
 export default function AdminCaseProgressPage({ params }) {
   const { caseId } = params;
   const { navigate } = useRoute();
@@ -31,6 +66,7 @@ export default function AdminCaseProgressPage({ params }) {
   const [loading, setLoading] = useState(true);
   const [caseName, setCaseName] = useState('');
   const [roster, setRoster] = useState([]);
+  const [submissions, setSubmissions] = useState([]);
   const [sortConfig, setSortConfig] = useState(DEFAULT_SORT);
 
   useEffect(() => {
@@ -83,6 +119,63 @@ export default function AdminCaseProgressPage({ params }) {
       isMounted = false;
     };
   }, [caseId, showModal]);
+
+  useEffect(() => {
+    if (!caseId) return;
+    let isMounted = true;
+    fetchSubmissionsForCase(caseId)
+      .then((entries) => {
+        if (!isMounted) return;
+        setSubmissions(Array.isArray(entries) ? entries : []);
+      })
+      .catch((error) => {
+        console.error('Error fetching case submissions for readiness:', error);
+        if (isMounted) {
+          showModal('Could not load readiness data. Please try again later.', 'Error');
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [caseId, showModal]);
+
+  const submissionSummaryByUser = useMemo(() => {
+    const map = new Map();
+    submissions.forEach((submission) => {
+      const userId = submission?.userId;
+      if (!userId) return;
+      const attempts = Array.isArray(submission?.attempts) ? submission.attempts : [];
+      map.set(userId, {
+        attemptCount: attempts.length > 0 ? attempts.length : 1,
+        readiness: getReadinessStatus(submission),
+      });
+    });
+    return map;
+  }, [submissions]);
+
+  const topFeedbackCategories = useMemo(() => {
+    const counts = new Map();
+    submissions.forEach((submission) => {
+      const attempts = Array.isArray(submission?.attempts) ? submission.attempts : [];
+      attempts.forEach((attempt) => {
+        const feedback = Array.isArray(attempt?.virtualSeniorFeedback)
+          ? attempt.virtualSeniorFeedback
+          : [];
+        feedback.forEach((entry) => {
+          const notes = Array.isArray(entry?.notes) ? entry.notes : [];
+          notes.forEach((note) => {
+            const category = getFeedbackCategory(note);
+            if (!category) return;
+            counts.set(category, (counts.get(category) || 0) + 1);
+          });
+        });
+      });
+    });
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3);
+  }, [submissions]);
 
   const sortedRoster = useMemo(() => {
     const { key, direction } = sortConfig;
@@ -155,8 +248,23 @@ export default function AdminCaseProgressPage({ params }) {
             <p className="text-gray-500">Trainees have not started this case or the progress data has not been captured.</p>
           </div>
         ) : (
-          <div className="bg-white rounded-lg shadow overflow-hidden">
-            <table className="min-w-full divide-y divide-gray-200">
+          <>
+            <div className="bg-white rounded-lg shadow p-4">
+              <h2 className="text-sm font-semibold text-gray-700 uppercase tracking-wide">Top Review Note Categories</h2>
+              {topFeedbackCategories.length === 0 ? (
+                <p className="mt-2 text-sm text-gray-500">No review note categories recorded yet.</p>
+              ) : (
+                <ul className="mt-2 space-y-1 text-sm text-gray-700">
+                  {topFeedbackCategories.map(([category, count]) => (
+                    <li key={category}>
+                      <span className="font-medium">{category}</span>: {count}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <div className="bg-white rounded-lg shadow overflow-hidden">
+              <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-100">
                 <tr>
                   <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -178,6 +286,12 @@ export default function AdminCaseProgressPage({ params }) {
                     </button>
                   </th>
                   <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Attempts
+                  </th>
+                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Readiness
+                  </th>
+                  <th scope="col" className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     <button type="button" className="flex items-center space-x-1" onClick={() => handleSort('updatedAt')}>
                       <span>Last Updated</span>
                       {sortConfig.key === 'updatedAt' ? <SortIndicator direction={sortConfig.direction} /> : null}
@@ -191,12 +305,15 @@ export default function AdminCaseProgressPage({ params }) {
                     <td className="px-4 py-3 font-mono text-xs text-gray-700 break-all">{userId}</td>
                     <td className="px-4 py-3 text-gray-700">{formatPercent(progress.percentComplete)}</td>
                     <td className="px-4 py-3 text-gray-700 capitalize">{progress.step || '—'}</td>
+                    <td className="px-4 py-3 text-gray-700">{submissionSummaryByUser.get(userId)?.attemptCount || 0}</td>
+                    <td className="px-4 py-3 text-gray-700">{submissionSummaryByUser.get(userId)?.readiness || 'In progress'}</td>
                     <td className="px-4 py-3 text-gray-500">{formatTimestamp(progress.updatedAt)}</td>
                   </tr>
                 ))}
               </tbody>
-            </table>
-          </div>
+              </table>
+            </div>
+          </>
         )}
       </div>
     </div>

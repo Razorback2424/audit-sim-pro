@@ -4,6 +4,7 @@ const { assertNoFieldValueInArrays } = require('../../utils/firestoreGuards');
 const { buildCaseDraftFromRecipe } = require('../../generation/buildCaseDraft');
 const { getCaseRecipe } = require('../../generation/recipeRegistry');
 const { writeAnalyticsEvent } = require('../analytics/events');
+const { buildFeedbackSignalProps } = require('./feedbackAnalytics');
 
 const ANSWER_TOLERANCE = 0.01;
 const CLASSIFICATION_KEYS = Object.freeze([
@@ -2692,6 +2693,26 @@ exports.scoreCaseAttempt = callable.https.onCall(async (data, context) => {
   });
 
   await submissionRef.set(docPayload, { merge: true });
+
+  try {
+    const feedbackSignalProps = buildFeedbackSignalProps(gradingOutput.virtualSeniorFeedback);
+    await writeAnalyticsEvent({
+      appId,
+      uid,
+      caseId,
+      eventName: 'attempt_feedback_signals',
+      props: {
+        ...feedbackSignalProps,
+        attemptIndex,
+        attemptType,
+        criticalIssuesCount: attemptSummary.criticalIssuesCount,
+      },
+      source: 'server',
+      dedupeKey: `${uid}|${caseId}|attempt-${attemptIndex}|attempt_feedback_signals`,
+    });
+  } catch (err) {
+    console.warn('[scoreCaseAttempt] Failed to log attempt_feedback_signals', err?.message || err);
+  }
 
   return {
     grade: gradingOutput.grade,

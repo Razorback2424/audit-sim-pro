@@ -48,6 +48,7 @@ import {
   generateCaseDraft as generateCaseDraftFromServer,
 } from '../services/caseGenerationService';
 import { listCaseRecipes } from '../generation/recipeRegistry';
+import { ANALYTICS_EVENTS, trackAnalyticsEvent } from '../services/analyticsService';
 
 const DEBUG_LOGS = process.env.REACT_APP_DEBUG_LOGS === 'true';
 
@@ -1206,6 +1207,12 @@ function useCaseForm({ params }) {
     disbursementCsvInputRef,
     setDisbursements,
     showModal,
+    onImportCompleted: ({ importedCount }) => {
+      trackAnalyticsEvent(ANALYTICS_EVENTS.ADMIN_CASE_IMPORT_COMPLETED, {
+        caseId: editingCaseId || draftCaseId || '',
+        importedCount: Number(importedCount) || 0,
+      });
+    },
   });
 
   const handleSubmit = createCaseFormSubmitHandler({
@@ -1247,6 +1254,15 @@ function useCaseForm({ params }) {
     ui: { showModal, navigate, setLoading },
     log: { ulog, logValidationFail },
     uploads: { uploadFileAndGetMetadata, uploadReferenceDocument, uploadHighlightedDocument },
+    analytics: {
+      onMilestoneEvent: ({ eventName, props }) => {
+        if (!eventName) return;
+        trackAnalyticsEvent(eventName, {
+          caseId: editingCaseId || draftCaseId || '',
+          ...props,
+        });
+      },
+    },
     draftStorageKey,
     highlightStartRef,
     highlightStartTimerRef,

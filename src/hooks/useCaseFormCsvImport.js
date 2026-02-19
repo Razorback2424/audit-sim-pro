@@ -1,7 +1,12 @@
 import getUUID from '../utils/getUUID';
 import { DEFAULT_ANSWER_KEY_CLASSIFICATION, buildSingleAnswerKey } from '../utils/caseFormHelpers';
 
-export function createCaseFormCsvImportHandler({ disbursementCsvInputRef, setDisbursements, showModal }) {
+export function createCaseFormCsvImportHandler({
+  disbursementCsvInputRef,
+  setDisbursements,
+  showModal,
+  onImportCompleted,
+}) {
   return function handleCsvImport(event) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -97,6 +102,11 @@ export function createCaseFormCsvImportHandler({ disbursementCsvInputRef, setDis
         }
 
         setDisbursements(imported);
+        if (typeof onImportCompleted === 'function') {
+          onImportCompleted({
+            importedCount: imported.length,
+          });
+        }
         showModal(
           `Imported ${imported.length} disbursement${imported.length === 1 ? '' : 's'} from CSV.`,
           'Import Complete'

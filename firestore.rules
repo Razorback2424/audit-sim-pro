@@ -265,6 +265,14 @@ service cloud.firestore {
              );
     }
 
+    function submissionSystemFieldsUnchanged() {
+      return gradeFieldUnchanged('grade') &&
+             gradeFieldUnchanged('gradedAt') &&
+             gradeFieldUnchanged('gradingDetails') &&
+             gradeFieldUnchanged('virtualSeniorFeedback') &&
+             gradeFieldUnchanged('scoredBy');
+    }
+
     // Role documents store whether a user is an admin, owner, or trainee
     match /roles/{userId} {
       // Allow users to read their own role document (optional for UI display).
@@ -360,8 +368,7 @@ service cloud.firestore {
       allow create, update: if request.auth != null &&
                                request.auth.uid == userId &&
                                isTrainee() &&
-                               gradeFieldUnchanged('grade') &&
-                               gradeFieldUnchanged('gradedAt');
+                               submissionSystemFieldsUnchanged();
       allow delete: if false;
     }
 
@@ -376,8 +383,7 @@ service cloud.firestore {
       allow create, update: if request.auth != null &&
                                isSubmissionOwner(path) &&
                                isTrainee() &&
-                               gradeFieldUnchanged('grade') &&
-                               gradeFieldUnchanged('gradedAt');
+                               submissionSystemFieldsUnchanged();
       allow delete: if false;
     }
 

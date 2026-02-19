@@ -1,50 +1,46 @@
 # AuditSim Pro — MVP Progress
 
 ## MVP Definition
-- Trainee can complete one full “safe-to-fail” practice loop: open case, work support docs, submit, receive coaching, retry.
-- Product provides specific coaching notes (not only a score) to emulate senior workpaper review.
-- Admin can author and publish case content (dataset + PDFs + mappings + lightweight answer key) without developer intervention.
-- Access is role-gated and billing-gated.
-- Core trainee/admin actions and outcomes are observable enough to assess readiness.
+- Productize senior workpaper review with realistic, workpaper-like practice and specific coaching on what was wrong, why it matters, and how to improve.
+- Provide unlimited safe-to-fail repetition so trainees build skill before client exposure.
+- Use microlearning loops (short, focused, low-friction, objective-driven) with immediate feedback.
+- Give leadership defensible readiness signals for reliability and next-responsibility decisions.
+- Keep admin authoring practical (dataset + PDFs + mappings + lightweight rubric fields) without developer intervention.
 
 ## MVP Checklist Status
 - Source of truth: `docs/mvp/MVP_CHECKLIST.md`
 - Completed items since last run:
-  - Marked trainee attempt lifecycle analytics (start, submit, results viewed, restart) as complete.
-  - Added restart lifecycle analytics event wiring and backend allowlist support.
+  - Commercial/Ops MVP status re-baselined against implementation evidence; billing/entitlement lifecycle and production observability items were marked complete.
 
 ## Current Slice (this run)
-- Slice title: Complete trainee restart lifecycle analytics
+- Slice title: Audit Commercial/Ops MVP implementation status and update checklist + gap analysis
 - Done when:
-  - [x] Restart action emits a dedicated analytics event from trainee flows.
-  - [x] Analytics backend allowlist accepts the restart event.
-  - [x] Targeted test coverage verifies restart-event emission.
+  - [x] Each Commercial/Ops checklist item is reviewed against current code paths before new implementation work.
+  - [x] `docs/mvp/MVP_CHECKLIST.md` checkboxes are updated to match code-verified implemented status.
+  - [x] `docs/codex/GAP_ANALYSIS.md` is updated with implemented vs missing Commercial/Ops gaps and evidence.
 
 ## Work Completed (this run)
-- Added `ATTEMPT_RESTARTED` event constant in client analytics service.
-- Added `attempt_restarted` to analytics backend allowlist.
-- Emitted restart analytics from `TraineeSubmissionHistoryPage` for both “restart with draft” and “fresh retake” paths.
-- Emitted restart analytics from `TraineeCaseViewPage` retake reset flow.
-- Extended `TraineeSubmissionHistoryPage` tests to verify restart event emission in both restart paths.
-- Updated MVP checklist status for trainee lifecycle analytics.
+- Audited Commercial/Ops MVP items against billing, analytics, admin ops, and trainee flow code paths (checkout/confirm/webhooks/reconcile, beta dashboard, problem reports, assignment/progress surfaces).
+- Marked as complete in checklist: billing+entitlements lifecycle baseline, reliability/observability baseline, and production reliability operator visibility.
+- Rewrote gap analysis to separate code-verified completed items from remaining pilot blockers, with file-level evidence and a recommended next slice.
 
 ## Evidence
 - Commands executed:
-  - `npm test -- --watch=false --runInBand src/pages/TraineeSubmissionHistoryPage.test.jsx`
-  - `npm test -- --watch=false --runInBand src/pages/TraineeCaseViewPage.test.jsx`
-  - `npm run build`
+  - `sed -n '1,260p' docs/mvp/MVP_CHECKLIST.md`
+  - `sed -n '1,340p' docs/codex/GAP_ANALYSIS.md`
+  - `rg -n "billing|entitlement|checkout|webhook|onboarding|privacy|terms|invite|assign|monitor|analytics|publish|qa" src functions docs --glob '!build/**' --glob '!node_modules/**'`
+  - `sed -n '1,340p' functions/src/billing/checkout.js`
+  - `sed -n '1,340p' functions/src/billing/webhooks.js`
+  - `sed -n '1,300p' src/pages/AdminBetaDashboardPage.jsx`
+  - `sed -n '150,560p' src/components/caseForm/CaseFormNavigation.jsx`
+  - `sed -n '360,440p' firestore.rules`
 - Results (short):
-  - Submission history tests passed (`7 passed`, `0 failed`).
-  - Trainee case view tests passed (`13 passed`, `2 skipped`, `0 failed`).
-  - Build succeeded with existing repo ESLint warnings unrelated to this slice.
+  - Verified implemented lifecycle and observability paths for paid pilot operations in code.
+  - Confirmed remaining gaps for onboarding/legal/seat-invite/feedback-QA/readiness semantics/attempt immutability.
 
 ## Files Changed
 - Modified:
-  - src/services/analyticsService.js
-  - functions/src/analytics/events.js
-  - src/pages/TraineeSubmissionHistoryPage.jsx
-  - src/pages/TraineeCaseViewPage.jsx
-  - src/pages/TraineeSubmissionHistoryPage.test.jsx
+  - docs/codex/GAP_ANALYSIS.md
   - docs/mvp/MVP_CHECKLIST.md
   - progress.md
 - Added:
@@ -53,11 +49,11 @@
   - (none)
 
 ## Next Slice (next run)
-- Add admin visibility of generated review notes in submission detail so coaching output is reviewable by instructors/admins.
+- Define and enforce explicit readiness semantics (pass/fail/mastery thresholds + review-note mapping) and apply the same contract in admin and trainee views.
 - Done when:
-  - [ ] Admin submission detail page renders `virtualSeniorFeedback` per attempt when present.
-  - [ ] Admin submissions list indicates whether review notes exist for each learner attempt set.
-  - [ ] Targeted admin submission page test coverage validates review-note rendering behavior.
+  - [ ] A single shared readiness rule is implemented in code (not duplicated) with documented threshold behavior.
+  - [ ] Admin progress/submission surfaces render readiness states from the shared rule.
+  - [ ] Trainee results/history surfaces render the same readiness state semantics for consistency.
 
 ## Blockers / Open Questions
 - None.

@@ -22,3 +22,26 @@ test('renders case submissions heading', async () => {
   render(<AdminCaseSubmissionsPage params={{ caseId: 'c1' }} />);
   expect(await screen.findByText(/submissions for/i)).toBeInTheDocument();
 });
+
+test('shows review note availability in submissions list', async () => {
+  fetchCase.mockResolvedValue({ caseName: 'Test Case' });
+  fetchSubmissionsForCase.mockResolvedValue([
+    {
+      userId: 'u1',
+      attempts: [
+        {
+          virtualSeniorFeedback: [
+            { paymentId: 'P-1', notes: ['Review note A'] },
+          ],
+        },
+      ],
+      selectedPaymentIds: [],
+      retrievedDocuments: [],
+    },
+  ]);
+
+  render(<AdminCaseSubmissionsPage params={{ caseId: 'c1' }} />);
+
+  expect(await screen.findByText(/Review Notes:/i)).toBeInTheDocument();
+  expect(screen.getByText(/1 available/i)).toBeInTheDocument();
+});

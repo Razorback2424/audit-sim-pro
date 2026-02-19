@@ -8,6 +8,7 @@ import { AUDIT_AREAS } from '../models/caseConstants';
 import { CASH_ARTIFACT_TYPES } from '../constants/caseFormOptions';
 import { ANSWER_KEY_FIELDS, ANSWER_KEY_TOLERANCE, ANSWER_KEY_PLACEHOLDER } from '../utils/caseFormHelpers';
 import { queueCaseGenerationJob, saveCaseGenerationPlan } from '../services/caseGenerationService';
+import { ANALYTICS_EVENTS, trackAnalyticsEvent } from '../services/analyticsService';
 
 const DEBUG_LOGS = process.env.REACT_APP_DEBUG_LOGS === 'true';
 
@@ -81,6 +82,7 @@ export function createCaseFormSubmitHandler({
   ui: { showModal, navigate, setLoading },
   log: { ulog, logValidationFail },
   uploads: { uploadFileAndGetMetadata, uploadReferenceDocument, uploadHighlightedDocument },
+  analytics: { onMilestoneEvent } = {},
   draftStorageKey,
   highlightStartRef,
   highlightStartTimerRef,
@@ -962,6 +964,41 @@ export function createCaseFormSubmitHandler({
 
       await updateCase(currentCaseId, caseDataPayload);
 
+    const uploadedArtifactsCount =
+      uploadedMappings.length +
+      finalReferenceDocuments.length +
+      finalCashArtifacts.length +
+      highlightedMap.size;
+    if (typeof onMilestoneEvent === 'function') {
+      onMilestoneEvent({
+        eventName: ANALYTICS_EVENTS.ADMIN_CASE_UPLOAD_COMPLETED,
+        caseId: currentCaseId,
+        props: {
+          uploadedArtifactsCount,
+          uploadedInvoiceMappings: uploadedMappings.length,
+          uploadedReferenceDocuments: finalReferenceDocuments.length + finalCashArtifacts.length,
+          uploadedHighlightedDocuments: highlightedMap.size,
+        },
+      });
+    }
+
+    const mappedDisbursements = new Set(
+      finalInvoiceMappings
+        .map((mapping) => String(mapping?.paymentId || '').trim())
+        .filter(Boolean)
+    );
+    if (typeof onMilestoneEvent === 'function') {
+      onMilestoneEvent({
+        eventName: ANALYTICS_EVENTS.ADMIN_CASE_MAPPING_COMPLETED,
+        caseId: currentCaseId,
+        props: {
+          mappedDisbursements: mappedDisbursements.size,
+          totalDisbursements: disbursementPayload.length,
+          unmappedDisbursements: Math.max(0, disbursementPayload.length - mappedDisbursements.size),
+        },
+      });
+    }
+
     if (generationPlan) {
       try {
         await saveCaseGenerationPlan({ caseId: currentCaseId, plan: generationPlan });
@@ -985,6 +1022,18 @@ export function createCaseFormSubmitHandler({
         console.warn('[CaseForm] Failed to queue generation job', err);
       }
     }
+
+      if (status !== 'draft' && typeof onMilestoneEvent === 'function') {
+        onMilestoneEvent({
+          eventName: ANALYTICS_EVENTS.ADMIN_CASE_PUBLISHED,
+          caseId: currentCaseId,
+          props: {
+            status,
+            isNewCaseCreation,
+            disbursementCount: disbursementPayload.length,
+          },
+        });
+      }
 
       showModal(`Case ${isNewCaseCreation ? 'created' : 'updated'} successfully!`, 'Success');
       try {

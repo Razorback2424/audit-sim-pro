@@ -4,6 +4,18 @@ import { fetchCase } from '../services/caseService';
 import { fetchSubmissionsForCase } from '../services/submissionService';
 import { DEFAULT_AUDIT_AREA, getAuditAreaLabel, getCaseGroupLabel } from '../models/caseConstants';
 
+const getReviewNotesCount = (submission) => {
+  if (!submission || typeof submission !== 'object') return 0;
+  const attemptNotesCount = Array.isArray(submission.attempts)
+    ? submission.attempts.reduce((sum, attempt) => {
+        if (!Array.isArray(attempt?.virtualSeniorFeedback)) return sum;
+        return sum + attempt.virtualSeniorFeedback.length;
+      }, 0)
+    : 0;
+  if (attemptNotesCount > 0) return attemptNotesCount;
+  return Array.isArray(submission.virtualSeniorFeedback) ? submission.virtualSeniorFeedback.length : 0;
+};
+
 export default function AdminCaseSubmissionsPage({ params }) {
   const { caseId } = params;
   const { navigate } = useRoute();
@@ -83,6 +95,14 @@ export default function AdminCaseSubmissionsPage({ params }) {
                 <h3 className="text-lg font-semibold text-gray-700">
                   User ID: <span className="font-normal text-sm break-all">{submission.userId}</span>
                 </h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  Review Notes:{' '}
+                  {getReviewNotesCount(submission) > 0 ? (
+                    <span className="font-medium text-emerald-700">{getReviewNotesCount(submission)} available</span>
+                  ) : (
+                    <span>None</span>
+                  )}
+                </p>
                 <p className="text-sm text-gray-500">Submitted At: {submission.submittedAt?.toDate ? submission.submittedAt.toDate().toLocaleString() : 'N/A'}</p>
                 <div className="mt-3">
                   <p className="text-sm font-medium text-gray-600">Selected Payment IDs:</p>

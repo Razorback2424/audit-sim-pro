@@ -147,6 +147,35 @@ const extractGrade = (attempt = {}) => {
   return undefined;
 };
 
+const toCount = (value) => {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+};
+
+const summarizeAttemptQuality = (attempt = {}) => {
+  const summary = attempt?.attemptSummary && typeof attempt.attemptSummary === 'object'
+    ? attempt.attemptSummary
+    : null;
+  const criticalIssues = toCount(summary?.criticalIssuesCount);
+  const missedExceptions = toCount(summary?.missedExceptionsCount);
+  const wrongClassifications = toCount(summary?.wrongClassificationCount);
+  const falsePositives = toCount(summary?.falsePositivesCount);
+
+  return {
+    criticalIssues,
+    missedExceptions,
+    wrongClassifications,
+    falsePositives,
+  };
+};
+
+const getTrendSignal = (latestValue, priorValue, label) => {
+  if (!Number.isFinite(latestValue) || !Number.isFinite(priorValue)) return null;
+  if (latestValue < priorValue) return `${label} improved (${priorValue} -> ${latestValue}).`;
+  if (latestValue > priorValue) return `${label} regressed (${priorValue} -> ${latestValue}).`;
+  return `${label} unchanged (${latestValue}).`;
+};
+
 export default function TraineeSubmissionHistoryPage() {
   const { navigate } = useRoute();
   const { userId } = useAuth();
@@ -363,9 +392,23 @@ export default function TraineeSubmissionHistoryPage() {
           .filter((entry) => Array.isArray(entry.attempts) && entry.attempts.length > 0)
           .map((entry) => {
             const latestAttempt = getLatestAttempt(entry.attempts);
+            const attemptsByTime = [...entry.attempts].sort((a, b) => (toMillis(b?.submittedAt) || 0) - (toMillis(a?.submittedAt) || 0));
+            const priorAttempt = attemptsByTime.length > 1 ? attemptsByTime[1] : null;
             const completedDate = latestAttempt ? formatTimestamp(latestAttempt.submittedAt) : 'N/A';
             const latestGrade = latestAttempt ? formatPercent(extractGrade(latestAttempt)) : '—';
             const timesCompleted = entry.attempts.length;
+            const latestQuality = summarizeAttemptQuality(latestAttempt || {});
+            const priorQuality = summarizeAttemptQuality(priorAttempt || {});
+            const criticalIssuesTrend = getTrendSignal(
+              latestQuality.criticalIssues,
+              priorQuality.criticalIssues,
+              'Critical issues'
+            );
+            const profileChanges = [
+              getTrendSignal(latestQuality.missedExceptions, priorQuality.missedExceptions, 'Missed exceptions'),
+              getTrendSignal(latestQuality.wrongClassifications, priorQuality.wrongClassifications, 'Wrong classifications'),
+              getTrendSignal(latestQuality.falsePositives, priorQuality.falsePositives, 'False positives'),
+            ].filter(Boolean);
             return (
               <div key={entry.caseId} className="bg-white border border-gray-200 rounded-lg shadow-sm p-6">
                 <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
@@ -397,6 +440,28 @@ export default function TraineeSubmissionHistoryPage() {
                     <p className="font-medium text-gray-800">{latestGrade}</p>
                   </div>
                 </div>
+                {timesCompleted > 1 ? (
+                  <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 p-3 text-sm">
+                    <p className="font-semibold text-blue-800">Improvement Trend</p>
+                    {criticalIssuesTrend ? (
+                      <p className="mt-1 text-blue-900">{criticalIssuesTrend}</p>
+                    ) : (
+                      <p className="mt-1 text-blue-900">Not enough scored attempt detail yet to compare trends.</p>
+                    )}
+                    <div className="mt-2">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-blue-700">Review-note profile change</p>
+                      {profileChanges.length > 0 ? (
+                        <ul className="mt-1 list-disc list-inside text-blue-900">
+                          {profileChanges.map((line) => (
+                            <li key={line}>{line}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="mt-1 text-blue-900">No comparable review-note profile change available.</p>
+                      )}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             );
           })}

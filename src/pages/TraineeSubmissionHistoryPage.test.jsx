@@ -315,4 +315,45 @@ describe('TraineeSubmissionHistoryPage', () => {
     expect(saveProgress).toHaveBeenCalled();
     expect(mockNavigate).toHaveBeenCalledWith('/trainee/case/case-1');
   });
+
+  it('shows cross-attempt improvement trend and review-note profile change summary', async () => {
+    listUserSubmissions.mockResolvedValueOnce([
+      {
+        caseId: 'case-1',
+        caseName: 'Case One',
+        submittedAt: { toMillis: () => 3000, toDate: () => new Date('2024-01-03T00:00:00Z') },
+        attempts: [
+          {
+            submittedAt: { toMillis: () => 2000, toDate: () => new Date('2024-01-02T00:00:00Z') },
+            selectedPaymentIds: ['p1'],
+            attemptSummary: {
+              criticalIssuesCount: 3,
+              missedExceptionsCount: 2,
+              wrongClassificationCount: 1,
+              falsePositivesCount: 1,
+            },
+          },
+          {
+            submittedAt: { toMillis: () => 3000, toDate: () => new Date('2024-01-03T00:00:00Z') },
+            selectedPaymentIds: ['p1'],
+            attemptSummary: {
+              criticalIssuesCount: 1,
+              missedExceptionsCount: 1,
+              wrongClassificationCount: 0,
+              falsePositivesCount: 0,
+            },
+          },
+        ],
+      },
+    ]);
+    fetchCase.mockResolvedValueOnce({ caseName: 'Case One', disbursements: [] });
+
+    render(<TraineeSubmissionHistoryPage />);
+
+    expect(await screen.findByText(/Improvement Trend/i)).toBeInTheDocument();
+    expect(screen.getByText(/Critical issues improved \(3 -> 1\)\./i)).toBeInTheDocument();
+    expect(screen.getByText(/Missed exceptions improved \(2 -> 1\)\./i)).toBeInTheDocument();
+    expect(screen.getByText(/Wrong classifications improved \(1 -> 0\)\./i)).toBeInTheDocument();
+    expect(screen.getByText(/False positives improved \(1 -> 0\)\./i)).toBeInTheDocument();
+  });
 });

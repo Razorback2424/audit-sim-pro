@@ -15,6 +15,7 @@ export default function AdminSubmissionDetailPage({ params }) {
   const [loading, setLoading] = useState(true);
   const currency = useMemo(() => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }), []);
   const classificationFields = useMemo(() => getClassificationFields(auditArea), [auditArea]);
+  const fallbackFeedback = Array.isArray(submission?.virtualSeniorFeedback) ? submission.virtualSeniorFeedback : [];
 
   useEffect(() => {
     if (!caseId || !userId) {
@@ -66,6 +67,7 @@ export default function AdminSubmissionDetailPage({ params }) {
         disbursementClassifications: submission.disbursementClassifications,
         submittedAt: submission.submittedAt,
         overallGrade: submission.overallGrade,
+        virtualSeniorFeedback: fallbackFeedback,
       }];
 
   return (
@@ -171,6 +173,38 @@ export default function AdminSubmissionDetailPage({ params }) {
             {attempt.overallGrade !== undefined && (
               <p className="text-sm font-medium text-gray-700">Grade: {attempt.overallGrade}</p>
             )}
+            <div>
+              <p className="text-sm font-medium text-gray-600">Senior Review Notes:</p>
+              {Array.isArray(attempt.virtualSeniorFeedback) && attempt.virtualSeniorFeedback.length > 0 ? (
+                <div className="mt-2 space-y-2">
+                  {attempt.virtualSeniorFeedback.map((entry, noteIndex) => {
+                    const notes = Array.isArray(entry?.notes) ? entry.notes : [];
+                    const paymentId = typeof entry?.paymentId === 'string' && entry.paymentId.trim()
+                      ? entry.paymentId.trim()
+                      : 'General';
+                    return (
+                      <div key={`${paymentId}-${noteIndex}`} className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2">
+                        <div className="text-xs font-semibold uppercase tracking-wide text-blue-800">
+                          {paymentId}
+                          {entry?.payee ? ` · ${entry.payee}` : ''}
+                        </div>
+                        {notes.length > 0 ? (
+                          <ul className="mt-1 list-disc list-inside text-sm text-blue-900">
+                            {notes.map((note, idx) => (
+                              <li key={`${paymentId}-note-${idx}`}>{note}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="mt-1 text-sm text-blue-900">Review note generated (details unavailable).</p>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500">No review notes available for this attempt.</p>
+              )}
+            </div>
           </div>
         ))}
       </div>
