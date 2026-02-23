@@ -22,6 +22,7 @@
     "start": "react-scripts start",
     "build": "react-scripts build",
     "sync:generation": "node scripts/sync-generation-shared.js",
+    "verify:rules:submissions": "firebase emulators:exec --only firestore --project demo-auditsim \"node scripts/verify-submission-rules.mjs\"",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },

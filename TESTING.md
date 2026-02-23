@@ -95,6 +95,7 @@ Frontend (from repo root):
 - Lint: Not configured (no `lint` script in `package.json`).
 - Tests: `npm test`
 - Build: `npm run build`
+- Submission rules regression (emulator): `npm run verify:rules:submissions`
 - Dev: `npm start`
 
 Functions (separate package):

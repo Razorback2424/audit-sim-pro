@@ -209,7 +209,7 @@ export default function TraineeDashboardPage() {
       setLoading(false);
       setInitialLoad(false);
     }
-  }, [userId, loadingBilling, showPaywall]);
+  }, [userId, loadingBilling]);
 
   useEffect(() => {
     if (!userId) {
@@ -239,7 +239,7 @@ export default function TraineeDashboardPage() {
     return () => {
       isActive = false;
     };
-  }, [userId, loadingBilling, showPaywall]);
+  }, [userId, loadingBilling]);
 
   const caseIds = useMemo(() => cases.map((c) => c.id), [cases]);
   const poolCountByModuleId = useMemo(() => {
