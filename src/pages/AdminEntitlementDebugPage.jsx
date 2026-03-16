@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Button, Input, useModal, useRoute, useUser } from '../AppCore';
-import { fetchEntitlementDebug, reconcileBillingAccess } from '../services/billingService';
+import { fetchEntitlementDebug, isBillingPaid, reconcileBillingAccess } from '../services/billingService';
 
 const formatTimestamp = (value) => {
   if (!value) return '—';
@@ -126,7 +126,7 @@ export default function AdminEntitlementDebugPage() {
               </div>
               <div>
                 <div className="text-xs uppercase text-gray-400">Has Paid Access</div>
-                <div className="font-medium text-gray-900">{billing?.status === 'active' ? 'Yes' : 'No'}</div>
+                <div className="font-medium text-gray-900">{isBillingPaid(billing) ? 'Yes' : 'No'}</div>
               </div>
               <div>
                 <div className="text-xs uppercase text-gray-400">Last Update Source</div>

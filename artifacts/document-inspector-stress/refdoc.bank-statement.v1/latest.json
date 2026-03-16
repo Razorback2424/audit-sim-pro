@@ -1,0 +1,10 @@
+{
+  "templateId": "refdoc.bank-statement.v1",
+  "variant": "stress",
+  "pageCount": 2,
+  "screenshots": [
+    "artifacts/document-inspector-stress/refdoc.bank-statement.v1/page-1.png",
+    "artifacts/document-inspector-stress/refdoc.bank-statement.v1/page-2.png"
+  ],
+  "generatedAt": "2026-02-23T03:50:20.083Z"
+}

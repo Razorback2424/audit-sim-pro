@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { isInlinePreviewable } from '../utils/evidenceUtils';
 import { getSignedDocumentUrl } from '../services/documentService';
 
+const SIGNED_URL_REFRESH_WINDOW_MS = 9 * 60 * 1000;
+
 export default function useEvidenceViewer({
   viewerEnabled,
   evidenceItems,
@@ -19,6 +21,7 @@ export default function useEvidenceViewer({
     storagePath: null,
     url: null,
     inlineNotSupported: false,
+    resolvedAt: 0,
   });
 
   const evidenceSource = useMemo(() => {
@@ -64,6 +67,7 @@ export default function useEvidenceViewer({
         storagePath: null,
         url: null,
         inlineNotSupported: false,
+        resolvedAt: 0,
       };
       return;
     }
@@ -78,6 +82,7 @@ export default function useEvidenceViewer({
         storagePath: null,
         url: null,
         inlineNotSupported: false,
+        resolvedAt: 0,
       };
       return;
     }
@@ -98,6 +103,7 @@ export default function useEvidenceViewer({
         storagePath: null,
         url: null,
         inlineNotSupported: false,
+        resolvedAt: 0,
       };
       return;
     }
@@ -112,6 +118,7 @@ export default function useEvidenceViewer({
         storagePath: null,
         url: null,
         inlineNotSupported: false,
+        resolvedAt: 0,
       };
       return;
     }
@@ -131,15 +138,19 @@ export default function useEvidenceViewer({
         storagePath: null,
         url: null,
         inlineNotSupported: false,
+        resolvedAt: 0,
       };
       return;
     }
 
     const lastResolved = lastResolvedEvidenceRef.current;
+    const cachedUrlIsFresh =
+      lastResolved.url &&
+      Date.now() - Number(lastResolved.resolvedAt || 0) < SIGNED_URL_REFRESH_WINDOW_MS;
     if (
       lastResolved.evidenceId === target.evidenceId &&
       lastResolved.storagePath === sourceKey &&
-      (lastResolved.url || lastResolved.inlineNotSupported)
+      ((lastResolved.url && cachedUrlIsFresh) || lastResolved.inlineNotSupported)
     ) {
       if (lastResolved.inlineNotSupported) {
         setActiveEvidenceUrl(null);
@@ -161,6 +172,7 @@ export default function useEvidenceViewer({
       storagePath: sourceKey,
       url: null,
       inlineNotSupported: false,
+      resolvedAt: 0,
     };
 
     if (!inlinePreviewAllowed) {
@@ -172,6 +184,7 @@ export default function useEvidenceViewer({
         storagePath: target.storagePath,
         url: null,
         inlineNotSupported: true,
+        resolvedAt: Date.now(),
       };
       return () => {
         cancelled = true;
@@ -194,6 +207,7 @@ export default function useEvidenceViewer({
           storagePath: sourceKey,
           url,
           inlineNotSupported: false,
+          resolvedAt: Date.now(),
         };
       })
       .catch((error) => {
@@ -207,6 +221,7 @@ export default function useEvidenceViewer({
           storagePath: sourceKey,
           url: null,
           inlineNotSupported: false,
+          resolvedAt: 0,
         };
       })
       .finally(() => {

@@ -10,6 +10,7 @@ export default function EvidenceViewer({
   activeEvidenceError,
   activeEvidenceUrl,
   onOpenDocument,
+  onFrameError,
 }) {
   const activeEvidence = items.find((item) => item.evidenceId === activeEvidenceId);
   const title = activeEvidence
@@ -61,6 +62,7 @@ export default function EvidenceViewer({
             src={activeEvidenceUrl}
             className="w-full h-full rounded-b-lg"
             style={{ minHeight: '480px' }}
+            onError={onFrameError}
           />
         ) : (
           <p className="text-sm text-gray-500 px-6 text-center">

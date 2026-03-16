@@ -1,0 +1,127 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+@page { size: Letter; margin: 0.6in; }
+html, body { margin: 0; padding: 0; }
+body { color: #111; font-family: Arial, Helvetica, sans-serif; font-size: 10.5pt; line-height: 1.25; }
+
+.page { width: 100%; }
+
+.topbar {
+  display: grid;
+  grid-template-columns: 1fr 1.2fr 1fr;
+  align-items: start;
+  column-gap: 10px;
+}
+
+.leftMeta, .rightMeta { font-size: 10pt; }
+.leftMeta .row, .rightMeta .row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 6px;
+  margin: 2px 0;
+}
+.rightMeta .row.single { grid-template-columns: 1fr; }
+.label { font-weight: 700; white-space: nowrap; }
+.value { white-space: nowrap; }
+
+.company { text-align: center; font-weight: 700; letter-spacing: 0.2px; }
+.company .line1 { font-size: 12pt; }
+.company .line2 { font-size: 12pt; }
+
+.rightMeta { text-align: right; }
+
+.divider { height: 10px; }
+
+.title { text-align: center; font-weight: 700; margin: 6px 0 10px; letter-spacing: 0.3px; }
+
+.summary { width: 100%; border-collapse: collapse; margin-top: 6px; }
+.summary td { padding: 2px 0; vertical-align: bottom; }
+.summary .key { width: 65%; }
+.summary .val {
+  width: 35%;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.rule { border-top: 1px solid #000; margin: 10px 0 6px; }
+
+.footerNote { margin-top: 12px; font-size: 9.5pt; }
+</style>
+</head>
+<body>
+    <div class="page" role="document" aria-label="Payroll Register">
+      <div class="topbar">
+        <div class="leftMeta">
+          <div class="row">
+            <div class="label">Pay Period:</div>
+            <div class="value">20X3-01-01 to 20X3-01-15</div>
+          </div>
+          <div class="row">
+            <div class="label"></div>
+            <div class="value">Hourly + Salaried</div>
+          </div>
+          <div class="row">
+            <div class="label">Pay Date:</div>
+            <div class="value">20X3-01-20</div>
+          </div>
+          <div class="row">
+            <div class="label">Company Code:</div>
+            <div class="value">TU-01</div>
+          </div>
+        </div>
+
+        <div class="company">
+          <div class="line1">Team Up Promotional Products, LLC</div>
+          <div class="line2">Payroll Department</div>
+        </div>
+
+        <div class="rightMeta">
+          <div class="row single">
+            <div class="value">Page 1 of 1</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="title">Payroll Register</div>
+
+      <div class="rule"></div>
+
+      <table class="summary" aria-label="Payroll totals summary">
+        <tbody>
+          
+      <tr>
+        <td class="key"><span class="label">Total Hours:</span> 412.5</td>
+        <td class="val"></td>
+      </tr>
+          
+      <tr>
+        <td class="key"><span class="label">Total Employees:</span> 18</td>
+        <td class="val"></td>
+      </tr>
+          
+        <tr>
+          <td class="key"><span class="label">Gross Pay</span></td>
+          <td class="val">$82,450.00</td>
+        </tr>
+        <tr>
+          <td class="key"><span class="label">Taxes</span></td>
+          <td class="val">$19,875.00</td>
+        </tr>
+        <tr>
+          <td class="key"><span class="label">Net Pay</span></td>
+          <td class="val">$62,575.00</td>
+        </tr>
+        </tbody>
+      </table>
+
+      <div class="footerNote">Confidential payroll report.</div>
+    </div>
+  </body>
+</html>

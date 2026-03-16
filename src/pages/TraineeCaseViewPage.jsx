@@ -34,6 +34,8 @@ const DEFAULT_STEP_SEQUENCE = [
   FLOW_STEPS.RESULTS,
 ];
 
+const SIGNED_URL_REFRESH_WINDOW_MS = 9 * 60 * 1000;
+
 const STEP_LABELS = {
   [FLOW_STEPS.INSTRUCTION]: 'Instruction',
   [FLOW_STEPS.CA_CHECK]: 'AP Aging C&A',
@@ -530,7 +532,14 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     [workpaperConfig]
   );
 
-  const lastResolvedEvidenceRef = useRef({ evidenceId: null, storagePath: null, url: null, inlineNotSupported: false });
+  const lastResolvedEvidenceRef = useRef({
+    evidenceId: null,
+    storagePath: null,
+    url: null,
+    inlineNotSupported: false,
+    resolvedAt: 0,
+  });
+  const evidenceFrameRetryRef = useRef('');
   const progressSaveTimeoutRef = useRef(null);
   const lastLocalChangeRef = useRef(0);
   const activeStepRef = useRef(FLOW_STEPS.INSTRUCTION);
@@ -1721,22 +1730,24 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
 
   useEffect(() => {
     if (!viewerEnabled) {
+      evidenceFrameRetryRef.current = '';
       setActiveEvidenceId(null);
       setActivePaymentId(null);
       setActiveEvidenceUrl(null);
       setActiveEvidenceError('');
       setActiveEvidenceLoading(false);
-      lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null, inlineNotSupported: false };
+      lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null, inlineNotSupported: false, resolvedAt: 0 };
       return;
     }
 
     if (evidenceSource.length === 0) {
+      evidenceFrameRetryRef.current = '';
       setActiveEvidenceId(null);
       setActivePaymentId(null);
       setActiveEvidenceUrl(null);
       setActiveEvidenceError('');
       setActiveEvidenceLoading(false);
-      lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null, inlineNotSupported: false };
+      lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null, inlineNotSupported: false, resolvedAt: 0 };
       return;
     }
 
@@ -1745,6 +1756,44 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       setActivePaymentId(evidenceSource[0].paymentId || null);
     }
   }, [viewerEnabled, evidenceSource, activeEvidenceId, requestSignedUrl]);
+
+  const handleEvidenceFrameError = useCallback(async () => {
+    const target = evidenceSource.find((item) => item.evidenceId === activeEvidenceId);
+    if (!target) return;
+
+    const retryKey = `${target.evidenceId}|${target.storagePath || target.downloadURL || ''}`;
+    if (evidenceFrameRetryRef.current === retryKey) {
+      setActiveEvidenceUrl(null);
+      setActiveEvidenceError('Unable to load document preview.');
+      return;
+    }
+
+    evidenceFrameRetryRef.current = retryKey;
+    setActiveEvidenceLoading(true);
+    setActiveEvidenceError('');
+    try {
+      const url = await requestSignedUrl({
+        storagePath: target.storagePath,
+        downloadURL: target.downloadURL,
+        docLabel: target.evidenceFileName || target.paymentId || target.evidenceId || '',
+      });
+      lastResolvedEvidenceRef.current = {
+        evidenceId: target.evidenceId,
+        storagePath: target.storagePath || target.downloadURL || null,
+        url,
+        inlineNotSupported: false,
+        resolvedAt: Date.now(),
+      };
+      evidenceFrameRetryRef.current = '';
+      setActiveEvidenceUrl(url);
+    } catch (error) {
+      console.error('Error refreshing evidence document:', error);
+      setActiveEvidenceUrl(null);
+      setActiveEvidenceError('Unable to load document preview.');
+    } finally {
+      setActiveEvidenceLoading(false);
+    }
+  }, [activeEvidenceId, evidenceSource, requestSignedUrl]);
 
   useEffect(() => {
     if (!activeEvidenceId || evidenceSource.length === 0) return;
@@ -1756,19 +1805,21 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
 
   useEffect(() => {
     if (!viewerEnabled || evidenceSource.length === 0 || !activeEvidenceId) {
+      evidenceFrameRetryRef.current = '';
       setActiveEvidenceUrl(null);
       setActiveEvidenceError('');
       setActiveEvidenceLoading(false);
-      lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null, inlineNotSupported: false };
+      lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null, inlineNotSupported: false, resolvedAt: 0 };
       return;
     }
 
     const target = evidenceSource.find((item) => item.evidenceId === activeEvidenceId);
     if (!target) {
+      evidenceFrameRetryRef.current = '';
       setActiveEvidenceUrl(null);
       setActiveEvidenceError('');
       setActiveEvidenceLoading(false);
-      lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null, inlineNotSupported: false };
+      lastResolvedEvidenceRef.current = { evidenceId: null, storagePath: null, url: null, inlineNotSupported: false, resolvedAt: 0 };
       return;
     }
 
@@ -1786,15 +1837,20 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
         evidenceId: target.evidenceId,
         storagePath: null,
         url: null,
+        inlineNotSupported: false,
+        resolvedAt: 0,
       };
       return;
     }
 
     const lastResolved = lastResolvedEvidenceRef.current;
+    const cachedUrlIsFresh =
+      lastResolved.url &&
+      Date.now() - Number(lastResolved.resolvedAt || 0) < SIGNED_URL_REFRESH_WINDOW_MS;
     if (
       lastResolved.evidenceId === target.evidenceId &&
       lastResolved.storagePath === sourceKey &&
-      (lastResolved.url || lastResolved.inlineNotSupported)
+      ((lastResolved.url && cachedUrlIsFresh) || lastResolved.inlineNotSupported)
     ) {
       if (lastResolved.inlineNotSupported) {
         setActiveEvidenceUrl(null);
@@ -1816,6 +1872,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       storagePath: sourceKey,
       url: null,
       inlineNotSupported: false,
+      resolvedAt: 0,
     };
 
     if (!inlinePreviewAllowed) {
@@ -1827,6 +1884,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
         storagePath: target.storagePath,
         url: null,
         inlineNotSupported: true,
+        resolvedAt: Date.now(),
       };
       return () => {
         cancelled = true;
@@ -1842,11 +1900,13 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
         if (cancelled) return;
         setActiveEvidenceUrl(url);
         setActiveEvidenceError('');
+        evidenceFrameRetryRef.current = '';
         lastResolvedEvidenceRef.current = {
           evidenceId: target.evidenceId,
           storagePath: sourceKey,
           url,
           inlineNotSupported: false,
+          resolvedAt: Date.now(),
         };
       })
       .catch((error) => {
@@ -1860,6 +1920,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
           storagePath: sourceKey,
           url: null,
           inlineNotSupported: false,
+          resolvedAt: 0,
         };
       })
       .finally(() => {
@@ -2850,6 +2911,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
               src={activeEvidenceUrl}
               className="w-full h-full rounded-b-xl"
               style={{ minHeight: '520px' }}
+              onError={handleEvidenceFrameError}
             />
           ) : (
             <p className="text-sm text-slate-500 px-6 text-center">

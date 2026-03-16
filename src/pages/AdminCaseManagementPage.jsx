@@ -26,7 +26,7 @@ export default function AdminCaseManagementPage() {
   const [search, setSearch] = useState('');
   const [selectedCaseIds, setSelectedCaseIds] = useState(() => new Set());
   const [pageIndex, setPageIndex] = useState(0);
-  const [pageCursors, setPageCursors] = useState({});
+  const [, setPageCursors] = useState({});
   const [pageInfo, setPageInfo] = useState({ hasNext: false, hasPrev: false, firstDoc: null, lastDoc: null });
 
   const loadCases = useCallback(async ({ direction = 'next', cursor = null, nextIndex } = {}) => {

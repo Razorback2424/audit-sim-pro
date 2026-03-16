@@ -1,0 +1,306 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+@page { size: Letter landscape; margin: 0.6in; }
+html, body { margin: 0; padding: 0; }
+body { color: #111111; font-family: Arial, Helvetica, sans-serif; font-size: 10pt; line-height: 1.25; }
+
+.page { width: 100%; }
+
+.meta { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+.meta td { padding: 2px 6px; vertical-align: top; }
+.meta .label { width: 130px; font-weight: 700; white-space: nowrap; }
+
+.sheet {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  border: 1px solid #000000;
+}
+
+.sheet col.c1 { width: 9.71%; }
+.sheet col.c2 { width: 16.98%; }
+.sheet col.c3 { width: 10.38%; }
+.sheet col.c4 { width: 3.04%; }
+.sheet col.c5 { width: 10.38%; }
+.sheet col.c6 { width: 2.44%; }
+.sheet col.c7 { width: 4.30%; }
+.sheet col.c8 { width: 10.38%; }
+.sheet col.c9 { width: 2.44%; }
+.sheet col.c10 { width: 4.30%; }
+.sheet col.c11 { width: 10.38%; }
+.sheet col.c12 { width: 2.44%; }
+.sheet col.c13 { width: 10.38%; }
+.sheet col.c14 { width: 2.44%; }
+
+.sheet th, .sheet td {
+  border: 1px solid #000000;
+  padding: 4px 6px;
+}
+
+.sheet th {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.1;
+}
+
+.sheet td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet td:nth-child(1),
+.sheet td:nth-child(2) {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-word;
+}
+
+.sheet td.num,
+.sheet td.tick {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.sheet td:nth-child(7),
+.sheet td:nth-child(10) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hdr th { background: #000080; color: #ffffff; font-weight: 700; text-align: left; font-size: 9pt; }
+.hdr .center { text-align: center; }
+.hdr .right { text-align: right; }
+
+.group-row td { background: #000080; color: #ffffff; font-weight: 700; }
+.subgroup-row td { background: #c0c0c0; color: #000000; font-weight: 700; }
+
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.tick { text-align: center; padding: 4px 0; }
+
+.total-row td { font-weight: 700; border-top: 1px solid #000000; border-bottom: 3px double #000000; }
+
+.muted { color: #444444; }
+
+.footer-note { margin-top: 10px; color: #444444; }
+</style>
+</head>
+<body>
+    <div class="page">
+      <table class="meta" aria-label="Engagement metadata">
+        <tr>
+          <td class="label">Client:</td>
+          <td>Team Up Promotional Products and Corporate Branding Solutions, LLC</td>
+        </tr>
+        <tr>
+          <td class="label">Period Ending:</td>
+          <td>20X2-12-31</td>
+        </tr>
+        <tr>
+          <td class="label">Trial Balance:</td>
+          <td>AP Trade</td>
+        </tr>
+        <tr>
+          <td class="label">Workpaper:</td>
+          <td>AP Lead Sheet</td>
+        </tr>
+      </table>
+
+      <table class="sheet" aria-label="Accounts payable leadsheet">
+        <colgroup>
+          <col class="c1" /><col class="c2" /><col class="c3" /><col class="c4" />
+          <col class="c5" /><col class="c6" /><col class="c7" /><col class="c8" />
+          <col class="c9" /><col class="c10" /><col class="c11" /><col class="c12" />
+          <col class="c13" /><col class="c14" />
+        </colgroup>
+        <thead>
+          <tr class="hdr">
+            <th rowspan="2">Account</th>
+            <th rowspan="2">Description</th>
+            <th colspan="2" class="center">1st PP-FINAL</th>
+            <th colspan="2" class="center">UNADJ</th>
+            <th rowspan="2" class="center">JE Ref</th>
+            <th colspan="2" class="center">AJE</th>
+            <th rowspan="2" class="center">JE Ref</th>
+            <th colspan="2" class="center">RJE</th>
+            <th colspan="2" class="center">FINAL</th>
+          </tr>
+          <tr class="hdr">
+            <th class="center">20X1-12-31</th>
+            <th class="center muted"></th>
+            <th class="center">20X2-12-31</th>
+            <th class="center muted"></th>
+            <th class="center">20X2-12-31</th>
+            <th class="center muted"></th>
+            <th class="center">20X2-12-31</th>
+            <th class="center muted"></th>
+            <th class="center">20X2-12-31</th>
+            <th class="center muted"></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="group-row">
+          <td colspan="14">Group : L02&nbsp;&nbsp;&nbsp;Accounts Payable</td>
+        </tr>
+          <tr class="subgroup-row">
+        <td colspan="14">Subgroup : Trade Payables and Accrued Vendor Liabilities - Domestic and International</td>
+      </tr>
+          
+        <tr>
+          <td>2100</td>
+          <td>Accounts Payable - Trade and Services - Region 1 - Extended description</td>
+          <td class="num">$80,500.00</td>
+          <td class="tick"></td>
+          <td class="num">$82,150.00</td>
+          <td class="tick"></td>
+          <td class="tick">AJE-REF-1-LONG-CODE</td>
+          <td class="num">-$4,500.00</td>
+          <td class="tick"></td>
+          <td class="tick">RJE-REF-1-LONG-CODE</td>
+          <td class="num">$0.00</td>
+          <td class="tick"></td>
+          <td class="num">$77,650.00</td>
+          <td class="tick"></td>
+        </tr>
+        <tr>
+          <td>2101</td>
+          <td>Accounts Payable - Trade and Services - Region 2 - Extended description</td>
+          <td class="num">$80,500.00</td>
+          <td class="tick"></td>
+          <td class="num">$82,150.00</td>
+          <td class="tick"></td>
+          <td class="tick">AJE-REF-2-LONG-CODE</td>
+          <td class="num">-$4,500.00</td>
+          <td class="tick"></td>
+          <td class="tick">RJE-REF-2-LONG-CODE</td>
+          <td class="num">$0.00</td>
+          <td class="tick"></td>
+          <td class="num">$77,650.00</td>
+          <td class="tick"></td>
+        </tr>
+        <tr>
+          <td>2102</td>
+          <td>Accounts Payable - Trade and Services - Region 3 - Extended description</td>
+          <td class="num">$80,500.00</td>
+          <td class="tick"></td>
+          <td class="num">$82,150.00</td>
+          <td class="tick"></td>
+          <td class="tick">AJE-REF-3-LONG-CODE</td>
+          <td class="num">-$4,500.00</td>
+          <td class="tick"></td>
+          <td class="tick">RJE-REF-3-LONG-CODE</td>
+          <td class="num">$0.00</td>
+          <td class="tick"></td>
+          <td class="num">$77,650.00</td>
+          <td class="tick"></td>
+        </tr>
+        <tr>
+          <td>2103</td>
+          <td>Accounts Payable - Trade and Services - Region 4 - Extended description</td>
+          <td class="num">$80,500.00</td>
+          <td class="tick"></td>
+          <td class="num">$82,150.00</td>
+          <td class="tick"></td>
+          <td class="tick">AJE-REF-4-LONG-CODE</td>
+          <td class="num">-$4,500.00</td>
+          <td class="tick"></td>
+          <td class="tick">RJE-REF-4-LONG-CODE</td>
+          <td class="num">$0.00</td>
+          <td class="tick"></td>
+          <td class="num">$77,650.00</td>
+          <td class="tick"></td>
+        </tr>
+        <tr>
+          <td>2104</td>
+          <td>Accounts Payable - Trade and Services - Region 5 - Extended description</td>
+          <td class="num">$80,500.00</td>
+          <td class="tick"></td>
+          <td class="num">$82,150.00</td>
+          <td class="tick"></td>
+          <td class="tick">AJE-REF-5-LONG-CODE</td>
+          <td class="num">-$4,500.00</td>
+          <td class="tick"></td>
+          <td class="tick">RJE-REF-5-LONG-CODE</td>
+          <td class="num">$0.00</td>
+          <td class="tick"></td>
+          <td class="num">$77,650.00</td>
+          <td class="tick"></td>
+        </tr>
+        <tr>
+          <td>2105</td>
+          <td>Accounts Payable - Trade and Services - Region 6 - Extended description</td>
+          <td class="num">$80,500.00</td>
+          <td class="tick"></td>
+          <td class="num">$82,150.00</td>
+          <td class="tick"></td>
+          <td class="tick">AJE-REF-6-LONG-CODE</td>
+          <td class="num">-$4,500.00</td>
+          <td class="tick"></td>
+          <td class="tick">RJE-REF-6-LONG-CODE</td>
+          <td class="num">$0.00</td>
+          <td class="tick"></td>
+          <td class="num">$77,650.00</td>
+          <td class="tick"></td>
+        </tr>
+        <tr>
+          <td>2106</td>
+          <td>Accounts Payable - Trade and Services - Region 7 - Extended description</td>
+          <td class="num">$80,500.00</td>
+          <td class="tick"></td>
+          <td class="num">$82,150.00</td>
+          <td class="tick"></td>
+          <td class="tick">AJE-REF-7-LONG-CODE</td>
+          <td class="num">-$4,500.00</td>
+          <td class="tick"></td>
+          <td class="tick">RJE-REF-7-LONG-CODE</td>
+          <td class="num">$0.00</td>
+          <td class="tick"></td>
+          <td class="num">$77,650.00</td>
+          <td class="tick"></td>
+        </tr>
+        <tr>
+          <td>2107</td>
+          <td>Accounts Payable - Trade and Services - Region 8 - Extended description</td>
+          <td class="num">$80,500.00</td>
+          <td class="tick"></td>
+          <td class="num">$82,150.00</td>
+          <td class="tick"></td>
+          <td class="tick">AJE-REF-8-LONG-CODE</td>
+          <td class="num">-$4,500.00</td>
+          <td class="tick"></td>
+          <td class="tick">RJE-REF-8-LONG-CODE</td>
+          <td class="num">$0.00</td>
+          <td class="tick"></td>
+          <td class="num">$77,650.00</td>
+          <td class="tick"></td>
+        </tr>
+          <tr class="total-row">
+            <td>Total L02</td>
+            <td>Accounts Payable</td>
+            <td class="num">$644,000.00</td>
+            <td class="tick"></td>
+            <td class="num">$657,200.00</td>
+            <td class="tick"></td>
+            <td class="tick"></td>
+            <td class="num">-$36,000.00</td>
+            <td class="tick"></td>
+            <td class="tick"></td>
+            <td class="num">$0.00</td>
+            <td class="tick"></td>
+            <td class="num">$621,200.00</td>
+            <td class="tick"></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="footer-note">Prepared for internal audit training only.</div>
+    </div>
+  </body>
+</html>

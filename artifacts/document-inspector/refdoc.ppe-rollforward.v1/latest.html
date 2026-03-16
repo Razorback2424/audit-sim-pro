@@ -1,0 +1,75 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+@page { size: Letter; margin: 0.6in; }
+html, body { margin: 0; padding: 0; }
+body { color: #111; font-family: Arial, Helvetica, sans-serif; font-size: 11pt; line-height: 1.35; }
+.page { width: 100%; }
+.title { font-size: 18pt; font-weight: 700; letter-spacing: 0.2px; }
+.meta { margin-top: 6px; font-size: 10pt; color: #555; }
+.rule { border-top: 2px solid #111; margin: 12px 0 14px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { border-bottom: 1px solid #ddd; padding: 6px 4px; text-align: left; }
+.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tfoot .total td { font-weight: 700; border-top: 2px solid #111; }
+.footer { margin-top: 14px; font-size: 10pt; color: #555; }
+.muted { color: #555; font-size: 10pt; }
+</style>
+</head>
+<body>
+    <div class="page" role="document" aria-label="PP&E rollforward">
+      <div class="header">
+        <div class="title">PP&E Rollforward</div>
+        <div class="meta">
+          <div><strong>Client:</strong> Clearwater Outfitters, Inc.</div>
+          <div><strong>Fiscal Year:</strong> 20X3-01-01 to 20X3-12-31</div>
+          <div><strong>Prepared:</strong> 20X3-12-31</div>
+        </div>
+      </div>
+      <div class="rule"></div>
+      <table>
+        <thead>
+          <tr>
+            <th>Asset Class</th>
+            <th class="num">BOY</th>
+            <th class="num">Additions</th>
+            <th class="num">Disposals</th>
+            <th class="num">EOY</th>
+          </tr>
+        </thead>
+        <tbody>
+          
+        <tr>
+          <td>Buildings</td>
+          <td class="num">$900,000.00</td>
+          <td class="num">$150,000.00</td>
+          <td class="num">$0.00</td>
+          <td class="num">$1,050,000.00</td>
+        </tr>
+      
+        <tr>
+          <td>Equipment</td>
+          <td class="num">$650,000.00</td>
+          <td class="num">$80,000.00</td>
+          <td class="num">$0.00</td>
+          <td class="num">$730,000.00</td>
+        </tr>
+      
+        </tbody>
+        <tfoot>
+          <tr class="total">
+            <td>Total</td>
+            <td class="num">$1,550,000.00</td>
+            <td class="num">$230,000.00</td>
+            <td class="num">$0.00</td>
+            <td class="num">$1,780,000.00</td>
+          </tr>
+        </tfoot>
+      </table>
+      <div class="footer">Prepared from fixed asset subledger; agrees to general ledger.</div>
+    </div>
+  </body>
+</html>

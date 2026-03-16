@@ -41,7 +41,7 @@ const RegistrationPage = () => {
     setSubmitting(true);
     try {
       const auth = getAuth();
-      const cred = await createUserWithEmailAndPassword(auth, trimmedEmail, password);
+      await createUserWithEmailAndPassword(auth, trimmedEmail, password);
       showModal?.('Account created successfully. You are now signed in.', 'Success');
       // Respect any ?next=... redirect in the current hash route
       const [, queryString] = (route || '').split('?');

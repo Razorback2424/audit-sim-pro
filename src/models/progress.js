@@ -60,7 +60,36 @@ const normalizeDraft = (draft) => {
   };
 };
 
-const normalizeTimestamp = (value) => (value instanceof Timestamp ? value : new Timestamp(0, 0));
+const normalizeTimestamp = (value) => {
+  if (value instanceof Timestamp) return value;
+  const seconds =
+    value && typeof value?.seconds === 'number'
+      ? value.seconds
+      : value && typeof value?._seconds === 'number'
+      ? value._seconds
+      : null;
+  const nanoseconds =
+    value && typeof value?.nanoseconds === 'number'
+      ? value.nanoseconds
+      : value && typeof value?._nanoseconds === 'number'
+      ? value._nanoseconds
+      : null;
+  if (typeof seconds === 'number' && typeof nanoseconds === 'number') {
+    try {
+      return new Timestamp(seconds, nanoseconds);
+    } catch {
+      return new Timestamp(0, 0);
+    }
+  }
+  if (value && typeof value?.toDate === 'function') {
+    try {
+      return Timestamp.fromDate(value.toDate());
+    } catch {
+      return new Timestamp(0, 0);
+    }
+  }
+  return new Timestamp(0, 0);
+};
 
 /**
  * Safely converts a Firestore document to a ProgressModel, with defaults.

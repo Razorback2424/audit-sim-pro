@@ -1,0 +1,897 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+@page { size: Letter; margin: 0.6in; }
+html, body { margin: 0; padding: 0; }
+body { color: #111; font-family: Arial, Helvetica, sans-serif; font-size: 10.5pt; line-height: 1.25; }
+
+.page { width: 100%; page-break-after: always; break-after: page; }
+.page:last-of-type { page-break-after: auto; break-after: auto; }
+
+.hdr {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  column-gap: 16px;
+  align-items: start;
+}
+.title { font-size: 16pt; font-weight: 700; letter-spacing: 0.3px; }
+.sub { color: #666; margin: 2px 0; font-size: 10pt; }
+.addr { margin-top: 12px; white-space: pre-line; font-size: 10pt; }
+.logo { text-align: right; min-width: 160px; }
+.logo img { max-width: 170px; height: auto; display: block; margin-left: auto; }
+.bank-name { margin-top: 6px; font-weight: 700; letter-spacing: 0.3px; font-size: 10pt; }
+.rule { border-top: 4px solid #111; margin: 14px 0; }
+
+.sectionTitle { font-weight: 700; font-size: 14pt; margin: 0 0 6px 0; letter-spacing: 0.2px; }
+.summary {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 10pt;
+  margin-bottom: 12px;
+}
+.summary th, .summary td {
+  padding: 6px 6px;
+  border-bottom: 2px solid #000;
+}
+.summary thead th {
+  text-align: left;
+  color: #666;
+  font-weight: 700;
+  padding-bottom: 4px;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+.summary tbody td { font-weight: 700; overflow: visible; text-overflow: clip; }
+.summary tbody td:not(.num) { white-space: normal; }
+.summary tbody td.num { white-space: nowrap; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+.txGrid {
+  display: grid;
+  grid-template-columns: 1fr;
+  row-gap: 18px;
+  margin-top: 8px;
+}
+.txBlock h3 {
+  margin: 0 0 6px 0;
+  font-size: 12pt;
+  letter-spacing: 0.2px;
+}
+.txTable {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 10pt;
+}
+.txTable th, .txTable td {
+  padding: 4px 4px;
+  vertical-align: top;
+  border-bottom: 1px solid #000;
+}
+.txTable thead th {
+  color: #666;
+  font-weight: 700;
+  text-align: left;
+  padding-bottom: 6px;
+}
+.txTable .date { width: 38%; white-space: nowrap; }
+.txTable .amt { width: 24%; }
+.txTable .desc { width: 38%; }
+.txTable td.desc { white-space: normal; overflow: visible; }
+.txTable .empty {
+  color: #666;
+  font-style: italic;
+  padding: 8px 4px;
+}
+.continuedNote {
+  margin-top: 8px;
+  font-size: 9.5pt;
+  color: #666;
+}
+
+.footer {
+  margin-top: 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+  font-size: 9.5pt;
+  color: #666;
+}
+.pageBreak { page-break-before: always; break-before: page; }
+.checksGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-auto-rows: 180px;
+  align-content: start;
+  gap: 12px 14px;
+  margin-top: 10px;
+  --check-scale: 0.38;
+}
+.checksGrid.checksGrid-single {
+  grid-template-columns: 1fr;
+  grid-auto-rows: 320px;
+  --check-scale: 0.68;
+}
+.checkCard {
+  border: none;
+  padding: 0;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.checkImg { width: 100%; height: 100%; display: block; object-fit: contain; }
+.checkPlaceholder {
+  width: 100%;
+  color: #666;
+  font-size: 9.5pt;
+  line-height: 1.2;
+}
+.checkScale {
+  width: 1000px;
+  height: 468px;
+  transform: scale(var(--check-scale));
+  transform-origin: center center;
+}
+.checkScale .check {
+  width: 1000px;
+  max-width: none;
+  height: 468px;
+}
+
+.check {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #f7f7f7;
+  border: 18px solid #8a7d6e;
+  padding: 0;
+  color: #111;
+  overflow: hidden;
+  box-sizing: border-box;
+  --W: 1000px;
+  --H: 468px;
+  --L: 14px;
+  --lh: calc(var(--L) * 1.2);
+  --inset-x: 6%;
+  --inset-y: 6%;
+  --x-right: 94%;
+  --x-date-right: 82%;
+  --x-amount-left: 78%;
+  --x-amount-right: 94%;
+  --x-dollar: 70%;
+  --x-dollars: 86%;
+  --x-words-end: 84%;
+  --date-field-w: calc(var(--W) * 0.12);
+  --date-gap: 10px;
+  /* Amount column width = (94% - 78%) of W */
+  --amount-col-w: calc(var(--W) * 0.16);
+  /* Height-anchored vertical coordinates (stable under scaling) */
+  --y-name: calc(var(--H) * 0.12);
+  --y-addr: calc(var(--H) * 0.16);
+  --y-check: calc(var(--H) * 0.12);
+  --y-date: calc(var(--H) * 0.16);
+
+  /* Legacy vars retained (not used for placement, but kept to avoid surprises) */
+  --y-payee: calc(var(--H) * 0.26);
+  --y-payee-rule: calc(var(--H) * 0.28);
+  --y-amount-top: calc(var(--H) * 0.27);
+  --y-amount-bottom: calc(var(--H) * 0.37);
+  --y-words: calc(var(--H) * 0.35);
+  --y-words-rule: calc(var(--H) * 0.37);
+
+  /* Branding band */
+  --y-brand-top: calc(var(--H) * 0.52);
+  --y-logo: calc(var(--H) * 0.56);
+
+  /* Footer */
+  --y-memo: calc(var(--H) * 0.78);
+  --y-memo-rule: calc(var(--H) * 0.80);
+  --y-micr: calc(var(--H) * 0.90);
+
+  /* Payment block moved down to reduce top compression */
+  --payment-top: calc(var(--H) * 0.28);
+  --payee-row-h: calc(var(--H) * 0.08);
+  --words-row-h: calc(var(--H) * 0.07);
+  --payment-row-gap: calc(var(--H) * 0.02);
+  --amount-top: calc(var(--payment-top) + var(--payee-row-h) - (var(--L) * 0.3));
+  --amount-bottom: calc(var(--payment-top) + var(--payee-row-h) + var(--payment-row-gap) + var(--words-row-h));
+  --payer-name-scale: 1;
+  --date-scale: 1;
+  --payto-scale: 1;
+  --words-scale: 1;
+  --amount-scale: 1;
+  --memo-scale: 1;
+  --bankname-scale: 1;
+}
+
+.hand {
+  font-family: "Bradley Hand", "Segoe Script", "Comic Sans MS", "Apple Chancery", cursive;
+  letter-spacing: 0.2px;
+}
+
+.payer-name {
+  position: absolute;
+  left: var(--inset-x);
+  top: calc(var(--y-name) - (var(--L) * 1.2));
+  font-size: calc(var(--L) * 1.6 * var(--payer-name-scale));
+  font-weight: 700;
+  line-height: 1.1;
+  max-width: 68%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.payer-addr {
+  position: absolute;
+  left: var(--inset-x);
+  top: calc(var(--y-addr) - (var(--L) * 0.9));
+  font-size: calc(var(--L) * 0.9);
+  line-height: 1.05;
+  max-width: 60%;
+}
+
+.check-no {
+  position: absolute;
+  right: calc(100% - var(--x-right));
+  top: calc(var(--y-check) - (var(--L) * 1.1));
+  font-size: calc(var(--L) * 1.4);
+  font-weight: 700;
+  line-height: 1;
+  text-align: right;
+}
+
+.date-label {
+  position: absolute;
+  right: calc(100% - var(--x-date-right) + var(--date-field-w) + var(--date-gap));
+  top: calc(var(--y-date) - (var(--L) * 1.28));
+  font-size: var(--L);
+  font-weight: 700;
+  line-height: 1;
+  text-align: right;
+}
+.date-value {
+  position: absolute;
+  right: calc(100% - var(--x-date-right));
+  top: calc(var(--y-date) - (var(--L) * 1.28));
+  width: var(--date-field-w);
+  font-size: calc(var(--L) * 1.6 * var(--date-scale));
+  line-height: 1;
+  text-align: left;
+  border-bottom: 2px solid #000;
+  padding: 0 6px 4px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.paymentBlock {
+  position: absolute;
+  left: calc(var(--W) * 0.06);
+  top: var(--payment-top);
+  width: calc(var(--W) * 0.88);
+  height: calc(var(--payee-row-h) + var(--payment-row-gap) + var(--words-row-h));
+  display: grid;
+  grid-template-rows: var(--payee-row-h) var(--words-row-h);
+  row-gap: var(--payment-row-gap);
+  align-items: end;
+  padding-right: var(--amount-col-w);
+  box-sizing: border-box;
+}
+.payto-row,
+.words-row {
+  display: flex;
+  align-items: flex-end;
+  gap: calc(var(--W) * 0.015);
+}
+.payto-label {
+  font-size: var(--L);
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+.payto-field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  padding-bottom: 4px;
+}
+.payto-field::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-bottom: 2px solid #000;
+}
+.payto-value {
+  display: block;
+  font-size: calc(var(--L) * 2.2 * var(--payto-scale));
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-bottom: 2px;
+}
+.words-field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  padding-bottom: 4px;
+}
+.words-field::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-bottom: 2px solid #000;
+}
+.words-text {
+  display: block;
+  font-size: calc(var(--L) * 1.6 * var(--words-scale));
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-bottom: 2px;
+}
+.dollars-label {
+  font-size: var(--L);
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  margin-left: calc(var(--W) * 0.01);
+  padding-bottom: 6px;
+}
+
+.amount-dollar { display: none; }
+.amount-box {
+  position: absolute;
+  left: calc(var(--W) * 0.78);
+  right: calc(var(--W) * 0.06);
+  top: var(--amount-top);
+  height: calc(var(--amount-bottom) - var(--amount-top));
+  border: 2px solid #000;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: 0 12px 6px calc(var(--L) * 0.8);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.amount-box::before {
+  content: '$';
+  position: absolute;
+  left: calc(-1 * (var(--L) * 1.2));
+  bottom: 6px;
+  font-size: var(--L);
+  font-weight: 700;
+  line-height: 1;
+}
+.amount-value {
+  font-size: calc(var(--L) * 1.8 * var(--amount-scale));
+  line-height: 1;
+  white-space: nowrap;
+  margin-left: auto;
+  text-align: right;
+  max-width: 100%;
+}
+
+.bankmark {
+  position: absolute;
+  left: var(--inset-x);
+  top: var(--y-logo);
+  width: 11%;
+  height: 16%;
+}
+.bankmark-box {
+  width: 100%;
+  height: 100%;
+  border: 1px solid #999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.bankmark-box img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+.bankname-block {
+  position: absolute;
+  left: var(--inset-x);
+  top: var(--y-brand-top);
+  max-width: 30%;
+}
+.bankname {
+  font-size: calc(var(--L) * 0.9 * var(--bankname-scale));
+  letter-spacing: 0.6px;
+  font-weight: 600;
+  color: #111;
+  line-height: 1.05;
+}
+.bankname .sub {
+  display: block;
+  letter-spacing: 0.4px;
+  font-weight: 600;
+  font-size: calc(var(--L) * 0.85);
+  margin-top: 2px;
+}
+
+.memo-label {
+  position: absolute;
+  left: var(--inset-x);
+  top: calc(var(--y-memo) - (var(--L) * 0.8));
+  font-size: var(--L);
+  font-weight: 700;
+  line-height: 1;
+}
+.memo-line {
+  position: absolute;
+  left: calc(var(--inset-x) + 6.5%);
+  width: 40%;
+  top: var(--y-memo-rule);
+  border-bottom: 2px solid #000;
+  height: 0;
+}
+.memo-value {
+  position: absolute;
+  left: calc(var(--inset-x) + 6.5% + (var(--L) * 0.6));
+  top: calc(var(--y-memo) - (var(--L) * 0.8));
+  width: 34%;
+  font-size: calc(var(--L) * var(--memo-scale));
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sig-value {
+  position: absolute;
+  left: calc(var(--inset-x) + 60% + (var(--L) * 0.6));
+  right: calc(100% - var(--x-right));
+  top: calc(var(--y-memo) - (var(--L) * 1.7));
+  font-size: calc(var(--L) * 2.2);
+  line-height: 1;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sig-line {
+  position: absolute;
+  left: calc(var(--inset-x) + 60%);
+  right: calc(100% - var(--x-right));
+  top: var(--y-memo-rule);
+  border-bottom: 2px solid #000;
+  height: 0;
+}
+
+.micr {
+  position: absolute;
+  left: var(--inset-x);
+  top: calc(var(--y-micr) - (var(--L) * 0.8));
+  font-family: "OCRB", "Courier New", monospace;
+  font-size: calc(var(--L) * 1.4);
+  letter-spacing: 2px;
+  white-space: nowrap;
+}
+
+</style>
+</head>
+<body>
+    <div class="page">
+      <div class="hdr">
+        <div>
+          <div class="title">Account Statement</div>
+          <div class="sub"><span class="label">Account Number:</span> *** 4812</div>
+          <div class="sub">January 20X3</div>
+          <div class="addr">Team Up Promotional Products and Corporate Branding Solutions, LLC<br />2150 Riverfront Avenue, Building 4, Accounts Payable Department<br />Denver, CO 80202-4567<br />Attn: Treasury Operations / Cash Management</div>
+        </div>
+        <div class="logo"><div class="bank-name">Cascade National Bank and Trust</div></div>
+      </div>
+
+      <div class="rule"></div>
+
+      <div class="sectionTitle">ACCOUNT SUMMARY</div>
+      <table class="summary" aria-label="Account summary">
+        <thead>
+          <tr>
+            <th>Account Number</th>
+            <th class="num">Beginning Balance</th>
+            <th class="num">Total Debits</th>
+            <th class="num">Total Credits</th>
+            <th class="num">Ending Balance</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>*** 4812</td>
+            <td class="num">$98,120.55</td>
+            <td class="num">$15,395.40</td>
+            <td class="num">$9,450.00</td>
+            <td class="num">$92,175.15</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="txGrid">
+        
+          <div class="txBlock">
+            <h3>DEBITS</h3>
+            <table class="txTable" aria-label="Debits">
+              <thead>
+                <tr>
+                  <th class="date">Date</th>
+                  <th class="amt num">Amount</th>
+                  <th class="desc">Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                
+              <tr>
+                <td class="date">20X3-01-02</td>
+                <td class="amt num">$942.55</td>
+                <td class="desc">ACH MetroNet Business Internet - extended narrative detail 2 for layout stress</td>
+              </tr>
+              <tr>
+                <td class="date">20X3-01-03</td>
+                <td class="amt num">$985.10</td>
+                <td class="desc">Check 10451 PayPilot Payroll Services - extended narrative detail 3 for layout stress</td>
+              </tr>
+              <tr>
+                <td class="date">20X3-01-05</td>
+                <td class="amt num">$1,070.20</td>
+                <td class="desc">ACH InkRiver Print &amp; Pack - extended narrative detail 5 for layout stress</td>
+              </tr>
+              <tr>
+                <td class="date">20X3-01-06</td>
+                <td class="amt num">$1,112.75</td>
+                <td class="desc">Remote Deposit - Customer Payment - extended narrative detail 6 for layout stress</td>
+              </tr>
+              <tr>
+                <td class="date">20X3-01-08</td>
+                <td class="amt num">$1,197.85</td>
+                <td class="desc">ACH MetroNet Business Internet - extended narrative detail 8 for layout stress</td>
+              </tr>
+              <tr>
+                <td class="date">20X3-01-09</td>
+                <td class="amt num">$1,240.40</td>
+                <td class="desc">Check 10451 PayPilot Payroll Services - extended narrative detail 9 for layout stress</td>
+              </tr>
+              <tr>
+                <td class="date">20X3-01-11</td>
+                <td class="amt num">$1,325.50</td>
+                <td class="desc">ACH InkRiver Print &amp; Pack - extended narrative detail 11 for layout stress</td>
+              </tr>
+              <tr>
+                <td class="date">20X3-01-12</td>
+                <td class="amt num">$1,368.05</td>
+                <td class="desc">Remote Deposit - Customer Payment - extended narrative detail 12 for layout stress</td>
+              </tr>
+              <tr>
+                <td class="date">20X3-01-14</td>
+                <td class="amt num">$1,453.15</td>
+                <td class="desc">ACH MetroNet Business Internet - extended narrative detail 14 for layout stress</td>
+              </tr>
+              <tr>
+                <td class="date">20X3-01-15</td>
+                <td class="amt num">$1,495.70</td>
+                <td class="desc">Check 10451 PayPilot Payroll Services - extended narrative detail 15 for layout stress</td>
+              </tr>
+              <tr>
+                <td class="date">20X3-01-17</td>
+                <td class="amt num">$1,580.80</td>
+                <td class="desc">ACH InkRiver Print &amp; Pack - extended narrative detail 17 for layout stress</td>
+              </tr>
+              <tr>
+                <td class="date">20X3-01-18</td>
+                <td class="amt num">$1,623.35</td>
+                <td class="desc">Remote Deposit - Customer Payment - extended narrative detail 18 for layout stress</td>
+              </tr>
+              </tbody>
+            </table>
+          </div>
+        
+          <div class="txBlock">
+            <h3>CREDITS</h3>
+            <table class="txTable" aria-label="Credits">
+              <thead>
+                <tr>
+                  <th class="date">Date</th>
+                  <th class="amt num">Amount</th>
+                  <th class="desc">Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                
+              <tr>
+                <td class="date">20X3-01-01</td>
+                <td class="amt num">$1,500.00</td>
+                <td class="desc">Remote Deposit - Checks - extended narrative detail 1 for layout stress</td>
+              </tr>
+              <tr>
+                <td class="date">20X3-01-04</td>
+                <td class="amt num">$1,530.00</td>
+                <td class="desc">Check 10452 SummitDrinkware Supply - extended narrative detail 4 for layout stress</td>
+              </tr>
+              <tr>
+                <td class="date">20X3-01-07</td>
+                <td class="amt num">$1,560.00</td>
+                <td class="desc">Remote Deposit - Checks - extended narrative detail 7 for layout stress</td>
+              </tr>
+              <tr>
+                <td class="date">20X3-01-10</td>
+                <td class="amt num">$1,590.00</td>
+                <td class="desc">Check 10452 SummitDrinkware Supply - extended narrative detail 10 for layout stress</td>
+              </tr>
+              <tr>
+                <td class="date">20X3-01-13</td>
+                <td class="amt num">$1,620.00</td>
+                <td class="desc">Remote Deposit - Checks - extended narrative detail 13 for layout stress</td>
+              </tr>
+              <tr>
+                <td class="date">20X3-01-16</td>
+                <td class="amt num">$1,650.00</td>
+                <td class="desc">Check 10452 SummitDrinkware Supply - extended narrative detail 16 for layout stress</td>
+              </tr>
+              </tbody>
+            </table>
+            
+          </div>
+      </div>
+
+      
+        <div class="footer">
+          <div class="note">Ending balance: $92,175.15</div>
+          <div>Page 1 of 2</div>
+        </div>
+    </div>
+    
+            <div class="page pageBreak">
+              <div class="hdr">
+                <div>
+                  <div class="title">Canceled Checks</div>
+                  <div class="sub"><span class="label">Account Number:</span> *** 4812</div>
+                  <div class="sub">January 20X3</div>
+                  <div class="addr">Team Up Promotional Products and Corporate Branding Solutions, LLC<br />2150 Riverfront Avenue, Building 4, Accounts Payable Department<br />Denver, CO 80202-4567<br />Attn: Treasury Operations / Cash Management</div>
+                </div>
+                <div class="logo"><div class="bank-name">Cascade National Bank and Trust</div></div>
+              </div>
+              <div class="rule"></div>
+              <div class="sectionTitle">CANCELED CHECK IMAGES</div>
+              <div class="checksGrid" aria-label="Canceled check images">
+                <div class="checkCard">
+    <div class="checkScale">
+      
+    <div class="check" aria-label="Check image template" style="--payer-name-scale:0.940;--date-scale:0.820;--payto-scale:0.460;--words-scale:0.979;--amount-scale:0.840;--memo-scale:0.970;--bankname-scale:0.990">
+      <div class="payer-name">Team Up Promotional Products, LLC</div>
+      <div class="payer-addr">2150 Riverfront Ave, Denver, CO 80202</div>
+
+      <div class="check-no">10451</div>
+
+      <div class="date-label">Date:</div>
+      <div class="date-value hand">20X3-01-10</div>
+
+      <div class="paymentBlock">
+        <div class="payto-row">
+          <div class="payto-label">Pay to the Order of:</div>
+          <div class="payto-field">
+            <span class="payto-value hand">Northwest Industrial Supplies and Maintenance Services Group, LLC 1</span>
+          </div>
+        </div>
+        <div class="words-row">
+          <div class="words-field">
+            <span class="words-text hand">Seventeen Thousand Four Hundred Five and 00/100</span>
+          </div>
+          <div class="dollars-label">Dollars</div>
+        </div>
+      </div>
+
+      <div class="amount-dollar">$</div>
+      <div class="amount-box">
+        <div class="amount-value hand">17,405.00</div>
+      </div>
+
+      <div class="bankmark">
+        <div class="bankmark-box">
+          <div class="logo-fallback">LOGO</div>
+        </div>
+      </div>
+      <div class="bankname-block">
+        <div class="bankname">Cascade National Bank<span class="sub">Member FDIC</span></div>
+      </div>
+
+      <div class="memo-label">Memo:</div>
+      <div class="memo-line"></div>
+      <div class="memo-value">Payroll and benefits settlement</div>
+
+      <div class="sig-line"></div>
+      <div class="sig-value hand">K. Ramirez</div>
+
+      <div class="micr">
+        T102000021T A0004812001A 10451
+      </div>
+    </div>
+  
+    </div>
+  </div><div class="checkCard">
+    <div class="checkScale">
+      
+    <div class="check" aria-label="Check image template" style="--payer-name-scale:0.940;--date-scale:0.820;--payto-scale:0.460;--words-scale:0.979;--amount-scale:0.840;--memo-scale:0.970;--bankname-scale:0.990">
+      <div class="payer-name">Team Up Promotional Products, LLC</div>
+      <div class="payer-addr">2150 Riverfront Ave, Denver, CO 80202</div>
+
+      <div class="check-no">10451</div>
+
+      <div class="date-label">Date:</div>
+      <div class="date-value hand">20X3-01-10</div>
+
+      <div class="paymentBlock">
+        <div class="payto-row">
+          <div class="payto-label">Pay to the Order of:</div>
+          <div class="payto-field">
+            <span class="payto-value hand">Northwest Industrial Supplies and Maintenance Services Group, LLC 2</span>
+          </div>
+        </div>
+        <div class="words-row">
+          <div class="words-field">
+            <span class="words-text hand">Seventeen Thousand Four Hundred Five and 00/100</span>
+          </div>
+          <div class="dollars-label">Dollars</div>
+        </div>
+      </div>
+
+      <div class="amount-dollar">$</div>
+      <div class="amount-box">
+        <div class="amount-value hand">17,405.00</div>
+      </div>
+
+      <div class="bankmark">
+        <div class="bankmark-box">
+          <div class="logo-fallback">LOGO</div>
+        </div>
+      </div>
+      <div class="bankname-block">
+        <div class="bankname">Cascade National Bank<span class="sub">Member FDIC</span></div>
+      </div>
+
+      <div class="memo-label">Memo:</div>
+      <div class="memo-line"></div>
+      <div class="memo-value">Payroll and benefits settlement</div>
+
+      <div class="sig-line"></div>
+      <div class="sig-value hand">K. Ramirez</div>
+
+      <div class="micr">
+        T102000021T A0004812001A 10451
+      </div>
+    </div>
+  
+    </div>
+  </div><div class="checkCard">
+    <div class="checkScale">
+      
+    <div class="check" aria-label="Check image template" style="--payer-name-scale:0.940;--date-scale:0.820;--payto-scale:0.460;--words-scale:0.979;--amount-scale:0.840;--memo-scale:0.970;--bankname-scale:0.990">
+      <div class="payer-name">Team Up Promotional Products, LLC</div>
+      <div class="payer-addr">2150 Riverfront Ave, Denver, CO 80202</div>
+
+      <div class="check-no">10451</div>
+
+      <div class="date-label">Date:</div>
+      <div class="date-value hand">20X3-01-10</div>
+
+      <div class="paymentBlock">
+        <div class="payto-row">
+          <div class="payto-label">Pay to the Order of:</div>
+          <div class="payto-field">
+            <span class="payto-value hand">Northwest Industrial Supplies and Maintenance Services Group, LLC 3</span>
+          </div>
+        </div>
+        <div class="words-row">
+          <div class="words-field">
+            <span class="words-text hand">Seventeen Thousand Four Hundred Five and 00/100</span>
+          </div>
+          <div class="dollars-label">Dollars</div>
+        </div>
+      </div>
+
+      <div class="amount-dollar">$</div>
+      <div class="amount-box">
+        <div class="amount-value hand">17,405.00</div>
+      </div>
+
+      <div class="bankmark">
+        <div class="bankmark-box">
+          <div class="logo-fallback">LOGO</div>
+        </div>
+      </div>
+      <div class="bankname-block">
+        <div class="bankname">Cascade National Bank<span class="sub">Member FDIC</span></div>
+      </div>
+
+      <div class="memo-label">Memo:</div>
+      <div class="memo-line"></div>
+      <div class="memo-value">Payroll and benefits settlement</div>
+
+      <div class="sig-line"></div>
+      <div class="sig-value hand">K. Ramirez</div>
+
+      <div class="micr">
+        T102000021T A0004812001A 10451
+      </div>
+    </div>
+  
+    </div>
+  </div><div class="checkCard">
+    <div class="checkScale">
+      
+    <div class="check" aria-label="Check image template" style="--payer-name-scale:0.940;--date-scale:0.820;--payto-scale:0.460;--words-scale:0.979;--amount-scale:0.840;--memo-scale:0.970;--bankname-scale:0.990">
+      <div class="payer-name">Team Up Promotional Products, LLC</div>
+      <div class="payer-addr">2150 Riverfront Ave, Denver, CO 80202</div>
+
+      <div class="check-no">10451</div>
+
+      <div class="date-label">Date:</div>
+      <div class="date-value hand">20X3-01-10</div>
+
+      <div class="paymentBlock">
+        <div class="payto-row">
+          <div class="payto-label">Pay to the Order of:</div>
+          <div class="payto-field">
+            <span class="payto-value hand">Northwest Industrial Supplies and Maintenance Services Group, LLC 4</span>
+          </div>
+        </div>
+        <div class="words-row">
+          <div class="words-field">
+            <span class="words-text hand">Seventeen Thousand Four Hundred Five and 00/100</span>
+          </div>
+          <div class="dollars-label">Dollars</div>
+        </div>
+      </div>
+
+      <div class="amount-dollar">$</div>
+      <div class="amount-box">
+        <div class="amount-value hand">17,405.00</div>
+      </div>
+
+      <div class="bankmark">
+        <div class="bankmark-box">
+          <div class="logo-fallback">LOGO</div>
+        </div>
+      </div>
+      <div class="bankname-block">
+        <div class="bankname">Cascade National Bank<span class="sub">Member FDIC</span></div>
+      </div>
+
+      <div class="memo-label">Memo:</div>
+      <div class="memo-line"></div>
+      <div class="memo-value">Payroll and benefits settlement</div>
+
+      <div class="sig-line"></div>
+      <div class="sig-value hand">K. Ramirez</div>
+
+      <div class="micr">
+        T102000021T A0004812001A 10451
+      </div>
+    </div>
+  
+    </div>
+  </div>
+              </div>
+              <div class="footer">
+                <div class="note">Ending balance: $92,175.15</div>
+                <div>Page 2 of 2</div>
+              </div>
+            </div>
+          
+  </body>
+</html>

@@ -1,0 +1,9 @@
+RewriteEngine On
+
+# Let real files/directories resolve normally.
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# React SPA fallback for client-side routes.
+RewriteRule ^ index.html [L]

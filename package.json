@@ -21,7 +21,11 @@
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
+    "build:prod:bluehost": "node scripts/validate-prod-env.mjs .env.production.local && npm run build",
+    "preflight:launch:mvp": "node scripts/mvp-launch-preflight.mjs",
     "sync:generation": "node scripts/sync-generation-shared.js",
+    "validate:env:functions": "node scripts/validate-functions-env.mjs functions/.env.production.local",
+    "validate:env:prod": "node scripts/validate-prod-env.mjs .env.production.local",
     "verify:rules:submissions": "firebase emulators:exec --only firestore --project demo-auditsim \"node scripts/verify-submission-rules.mjs\"",
     "test": "react-scripts test",
     "eject": "react-scripts eject"

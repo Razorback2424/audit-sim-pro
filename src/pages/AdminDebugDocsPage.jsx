@@ -7,7 +7,7 @@ import { getSignedDocumentUrl } from '../services/documentService';
 const buildTemplatePath = (templateId) =>
   String(templateId || '')
     .trim()
-    .replace(/[^\w.\-]/g, '_');
+    .replace(/[^\w.-]/g, '_');
 
 const inferTimestampLabel = (fileName, prefix) => {
   const normalized = String(fileName || '');

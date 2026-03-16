@@ -122,6 +122,7 @@ export default function TraineeDashboardPage() {
   const [selectedModuleId, setSelectedModuleId] = useState(null);
   const [recipes, setRecipes] = useState([]);
   const [recipesLoading, setRecipesLoading] = useState(false);
+  const [recipesError, setRecipesError] = useState('');
   const [startingModuleId, setStartingModuleId] = useState('');
   const [deletingRetakeIds, setDeletingRetakeIds] = useState(() => new Set());
   const hasPaidAccess = isBillingPaid(billing);
@@ -225,12 +226,18 @@ export default function TraineeDashboardPage() {
     const loadRecipes = async () => {
       try {
         setRecipesLoading(true);
+        setRecipesError('');
         const items = await listRecipes({ pageSize: 25 });
         if (!isActive) return;
-        const active = items.filter((recipe) => recipe.isActive && isRecipeConfigured(recipe));
+        const safeItems = Array.isArray(items) ? items : [];
+        const active = safeItems.filter((recipe) => recipe.isActive && isRecipeConfigured(recipe));
         setRecipes(active);
       } catch (err) {
         console.error('Error loading recipes:', err);
+        if (isActive) {
+          setRecipes([]);
+          setRecipesError('Module guidance is temporarily unavailable. Your assigned cases still work.');
+        }
       } finally {
         if (isActive) setRecipesLoading(false);
       }
@@ -605,6 +612,11 @@ export default function TraineeDashboardPage() {
         {error ? (
           <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-md p-4">
             {error}
+          </div>
+        ) : null}
+        {recipesError ? (
+          <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-md p-4">
+            {recipesError}
           </div>
         ) : null}
         <div className="text-xs text-gray-500">{billingStatusLabel}</div>

@@ -58,8 +58,25 @@ const renderCheckBodyHtml = ({ data = {} } = {}) => {
     ? `<span class="sub">${escapeHtml(bank.subName)}</span>`
     : '';
 
+  const fitCheckTextScale = (value, { softLimit = 24, slope = 0.01, minScale = 0.6 } = {}) => {
+    const len = String(value || '').trim().length;
+    if (!len || len <= softLimit) return 1;
+    const scale = 1 - (len - softLimit) * slope;
+    return Math.max(minScale, Math.min(1, scale));
+  };
+
+  const styleVars = [
+    `--payer-name-scale:${fitCheckTextScale(payer.name, { softLimit: 28, slope: 0.012, minScale: 0.58 }).toFixed(3)}`,
+    `--date-scale:${fitCheckTextScale(date, { softLimit: 8, slope: 0.09, minScale: 0.72 }).toFixed(3)}`,
+    `--payto-scale:${fitCheckTextScale(payee, { softLimit: 22, slope: 0.0125, minScale: 0.46 }).toFixed(3)}`,
+    `--words-scale:${fitCheckTextScale(amountWords, { softLimit: 44, slope: 0.007, minScale: 0.68 }).toFixed(3)}`,
+    `--amount-scale:${fitCheckTextScale(amountNumeric, { softLimit: 7, slope: 0.08, minScale: 0.64 }).toFixed(3)}`,
+    `--memo-scale:${fitCheckTextScale(memo, { softLimit: 28, slope: 0.01, minScale: 0.78 }).toFixed(3)}`,
+    `--bankname-scale:${fitCheckTextScale(bank.name, { softLimit: 20, slope: 0.01, minScale: 0.72 }).toFixed(3)}`,
+  ].join(';');
+
   return `
-    <div class="check" aria-label="Check image template">
+    <div class="check" aria-label="Check image template" style="${styleVars}">
       <div class="payer-name">${escapeHtml(payer.name)}</div>
       <div class="payer-addr">${escapeHtml(payer.addressLine)}</div>
 
@@ -183,6 +200,13 @@ const renderCheckBodyCss = ({ theme = {} }) => {
   --payment-row-gap: calc(var(--H) * 0.02);
   --amount-top: calc(var(--payment-top) + var(--payee-row-h) - (var(--L) * 0.3));
   --amount-bottom: calc(var(--payment-top) + var(--payee-row-h) + var(--payment-row-gap) + var(--words-row-h));
+  --payer-name-scale: 1;
+  --date-scale: 1;
+  --payto-scale: 1;
+  --words-scale: 1;
+  --amount-scale: 1;
+  --memo-scale: 1;
+  --bankname-scale: 1;
 }
 
 .hand {
@@ -194,10 +218,10 @@ const renderCheckBodyCss = ({ theme = {} }) => {
   position: absolute;
   left: var(--inset-x);
   top: calc(var(--y-name) - (var(--L) * 1.2));
-  font-size: calc(var(--L) * 1.6);
+  font-size: calc(var(--L) * 1.6 * var(--payer-name-scale));
   font-weight: 700;
   line-height: 1.1;
-  max-width: 60%;
+  max-width: 68%;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -235,11 +259,13 @@ const renderCheckBodyCss = ({ theme = {} }) => {
   right: calc(100% - var(--x-date-right));
   top: calc(var(--y-date) - (var(--L) * 1.28));
   width: var(--date-field-w);
-  font-size: calc(var(--L) * 1.6);
+  font-size: calc(var(--L) * 1.6 * var(--date-scale));
   line-height: 1;
   text-align: left;
   border-bottom: 2px solid #000;
   padding: 0 6px 4px;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .paymentBlock {
@@ -283,7 +309,7 @@ const renderCheckBodyCss = ({ theme = {} }) => {
 }
 .payto-value {
   display: block;
-  font-size: calc(var(--L) * 2.2);
+  font-size: calc(var(--L) * 2.2 * var(--payto-scale));
   line-height: 1;
   white-space: nowrap;
   overflow: hidden;
@@ -306,7 +332,7 @@ const renderCheckBodyCss = ({ theme = {} }) => {
 }
 .words-text {
   display: block;
-  font-size: calc(var(--L) * 1.6);
+  font-size: calc(var(--L) * 1.6 * var(--words-scale));
   line-height: 1;
   white-space: nowrap;
   overflow: hidden;
@@ -332,8 +358,10 @@ const renderCheckBodyCss = ({ theme = {} }) => {
   border: 2px solid #000;
   display: flex;
   align-items: flex-end;
-  justify-content: flex-start;
-  padding: 0 10px 6px calc(var(--L) * 0.9);
+  justify-content: flex-end;
+  padding: 0 12px 6px calc(var(--L) * 0.8);
+  box-sizing: border-box;
+  overflow: hidden;
 }
 .amount-box::before {
   content: '$';
@@ -345,8 +373,12 @@ const renderCheckBodyCss = ({ theme = {} }) => {
   line-height: 1;
 }
 .amount-value {
-  font-size: calc(var(--L) * 1.8);
+  font-size: calc(var(--L) * 1.8 * var(--amount-scale));
   line-height: 1;
+  white-space: nowrap;
+  margin-left: auto;
+  text-align: right;
+  max-width: 100%;
 }
 
 .bankmark {
@@ -377,7 +409,7 @@ const renderCheckBodyCss = ({ theme = {} }) => {
   max-width: 30%;
 }
 .bankname {
-  font-size: calc(var(--L) * 0.9);
+  font-size: calc(var(--L) * 0.9 * var(--bankname-scale));
   letter-spacing: 0.6px;
   font-weight: 600;
   color: ${t.ink};
@@ -412,7 +444,7 @@ const renderCheckBodyCss = ({ theme = {} }) => {
   left: calc(var(--inset-x) + 6.5% + (var(--L) * 0.6));
   top: calc(var(--y-memo) - (var(--L) * 0.8));
   width: 34%;
-  font-size: var(--L);
+  font-size: calc(var(--L) * var(--memo-scale));
   line-height: 1;
   white-space: nowrap;
   overflow: hidden;
@@ -1159,8 +1191,6 @@ const renderSeedBetaInvoiceV1 = ({ data = {}, theme = {}, layout = {} }) => {
     ...layout,
   };
 
-  const itemCount = Math.max(1, Array.isArray(items) ? items.length : 0);
-  const spacerHeight = Math.max(0, 3.85 - Math.max(0, itemCount - 2) * 1.18);
   const brandText = escapeHtml(brandName);
   const brandLength = String(brandName || '').replace(/\s+/g, '').length;
   const brandClass =
@@ -1241,13 +1271,6 @@ const renderSeedBetaInvoiceV1 = ({ data = {}, theme = {}, layout = {} }) => {
 
             <tbody>
               ${rowsHtml}
-              <tr class="spacer" style="--spacer-height: ${spacerHeight}in;">
-                <td></td>
-                <td></td>
-                <td></td>
-                <td></td>
-                <td></td>
-              </tr>
             </tbody>
           </table>
           <div class="totals-block">
@@ -1370,6 +1393,9 @@ body { background: #fff; color: ${t.ink}; }
 
 .items-wrap{
   margin-top: 30px;
+  display: flex;
+  flex-direction: column;
+  min-height: 5.5in;
 }
 
 table.items{
@@ -1430,15 +1456,8 @@ table.items tbody tr + tr td{ border-top: 0; }
 }
 .money .dollar{ padding-right: 10px; }
 
-tr.spacer td{
-  height: var(--spacer-height, 3.85in);
-  padding: 0;
-  page-break-inside: avoid;
-  break-inside: avoid;
-}
-
 .totals-block{
-  margin-top: 0;
+  margin-top: auto;
   border-left: 1px solid ${t.tableBorder};
   border-right: 1px solid ${t.tableBorder};
   border-bottom: 1px solid ${t.tableBorder};
@@ -1624,6 +1643,7 @@ body { background: #fff; color: ${t.ink}; font-family: system-ui, -apple-system,
   background: #fff;
   padding: ${l.pad};
   position: relative;
+  box-sizing: border-box;
 }
 
 .top{
@@ -2062,9 +2082,9 @@ const renderApLeadSheetV1 = ({ data = {}, theme = {} }) => {
             <th rowspan="2">Description</th>
             <th colspan="2" class="center">1st PP-FINAL</th>
             <th colspan="2" class="center">UNADJ</th>
-            <th rowspan="2" class="center">JE Ref #</th>
+            <th rowspan="2" class="center">JE Ref</th>
             <th colspan="2" class="center">AJE</th>
-            <th rowspan="2" class="center">JE Ref #</th>
+            <th rowspan="2" class="center">JE Ref</th>
             <th colspan="2" class="center">RJE</th>
             <th colspan="2" class="center">FINAL</th>
           </tr>
@@ -2152,12 +2172,43 @@ body { color: ${t.text}; font-family: Arial, Helvetica, sans-serif; font-size: 1
 .sheet th, .sheet td {
   border: 1px solid ${t.grid};
   padding: 4px 6px;
+}
+
+.sheet th {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  line-height: 1.1;
+}
+
+.sheet td {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.hdr th { background: ${t.navy}; color: #ffffff; font-weight: 700; text-align: left; }
+.sheet td:nth-child(1),
+.sheet td:nth-child(2) {
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+  word-break: break-word;
+}
+
+.sheet td.num,
+.sheet td.tick {
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.sheet td:nth-child(7),
+.sheet td:nth-child(10) {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hdr th { background: ${t.navy}; color: #ffffff; font-weight: 700; text-align: left; font-size: 9pt; }
 .hdr .center { text-align: center; }
 .hdr .right { text-align: right; }
 
@@ -2191,7 +2242,8 @@ const renderDisbursementListingV1 = ({ data = {}, theme = {} }) => {
     return trimmed ? trimmed : '-';
   };
 
-  const rowHtml = (rows || [])
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const rowHtml = safeRows
     .map((row) => {
       return `
         <tr>
@@ -2205,7 +2257,7 @@ const renderDisbursementListingV1 = ({ data = {}, theme = {} }) => {
     })
     .join('');
 
-  const total = rows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const total = safeRows.reduce((sum, row) => sum + Number(row.amount || 0), 0);
 
   const t = {
     ink: '#111',
@@ -2306,7 +2358,8 @@ const renderRemittanceBundleV1 = ({ data = {}, theme = {} }) => {
   const { companyName = '', vendor = '', paymentId = '', paymentDate = '', invoices = [], currency = 'USD' } =
     data || {};
 
-  const rowHtml = (invoices || [])
+  const safeInvoices = Array.isArray(invoices) ? invoices : [];
+  const rowHtml = safeInvoices
     .map((row) => {
       return `
         <tr>
@@ -2319,7 +2372,7 @@ const renderRemittanceBundleV1 = ({ data = {}, theme = {} }) => {
     })
     .join('');
 
-  const total = invoices.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  const total = safeInvoices.reduce((sum, row) => sum + Number(row.amount || 0), 0);
 
   const t = {
     ink: '#111',
@@ -2344,7 +2397,7 @@ const renderRemittanceBundleV1 = ({ data = {}, theme = {} }) => {
         </div>
         <div class="metaRow">
           <span class="label">Invoice count</span>
-          <span class="value">${escapeHtml(invoices.length)}</span>
+          <span class="value">${escapeHtml(safeInvoices.length)}</span>
         </div>
       </div>
 
@@ -2808,7 +2861,7 @@ const renderBankStatementV1 = ({ data = {}, theme = {}, layout = {} }) => {
               </div>
               <div class="rule"></div>
               <div class="sectionTitle">CANCELED CHECK IMAGES</div>
-              <div class="checksGrid" aria-label="Canceled check images">
+              <div class="checksGrid${checks.length <= 1 ? ' checksGrid-single' : ''}" aria-label="Canceled check images">
                 ${checksHtml}
               </div>
               <div class="footer">
@@ -2953,17 +3006,19 @@ body { color: ${t.ink}; font-family: Arial, Helvetica, sans-serif; font-size: 10
 .summary th, .summary td {
   padding: 6px 6px;
   border-bottom: 2px solid ${t.grid};
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .summary thead th {
   text-align: left;
   color: ${t.muted};
   font-weight: 700;
   padding-bottom: 4px;
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
 }
-.summary tbody td { font-weight: 700; }
+.summary tbody td { font-weight: 700; overflow: visible; text-overflow: clip; }
+.summary tbody td:not(.num) { white-space: normal; }
+.summary tbody td.num { white-space: nowrap; }
 .num { text-align: right; font-variant-numeric: tabular-nums; }
 
 .txGrid {
@@ -3028,10 +3083,15 @@ body { color: ${t.ink}; font-family: Arial, Helvetica, sans-serif; font-size: 10
   margin-top: 10px;
   --check-scale: 0.38;
 }
+.checksGrid.checksGrid-single {
+  grid-template-columns: 1fr;
+  grid-auto-rows: 320px;
+  --check-scale: 0.68;
+}
 .checkCard {
   border: none;
   padding: 0;
-  height: 180px;
+  height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;

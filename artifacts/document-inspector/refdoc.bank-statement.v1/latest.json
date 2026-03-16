@@ -1,0 +1,10 @@
+{
+  "templateId": "refdoc.bank-statement.v1",
+  "variant": "default",
+  "pageCount": 2,
+  "screenshots": [
+    "artifacts/document-inspector/refdoc.bank-statement.v1/page-1.png",
+    "artifacts/document-inspector/refdoc.bank-statement.v1/page-2.png"
+  ],
+  "generatedAt": "2026-02-23T03:51:12.375Z"
+}

@@ -1,0 +1,108 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+@page { size: Letter; margin: 0.6in; }
+html, body { margin: 0; padding: 0; }
+body { color: #111; font-family: Arial, Helvetica, sans-serif; font-size: 11pt; line-height: 1.35; }
+.page { width: 100%; }
+.title { font-size: 18pt; font-weight: 700; letter-spacing: 0.2px; }
+.meta { margin-top: 6px; font-size: 10pt; color: #555; }
+.rule { border-top: 2px solid #111; margin: 12px 0 14px; }
+section { margin-bottom: 14px; }
+h2 { font-size: 11pt; margin: 0 0 6px; text-transform: uppercase; letter-spacing: 0.4px; }
+.value { font-size: 13pt; font-weight: 700; }
+ul { margin: 0 0 0 18px; padding: 0; }
+li { margin-bottom: 4px; }
+.grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { border-bottom: 1px solid #ddd; padding: 6px 4px; text-align: left; }
+.num { text-align: right; font-variant-numeric: tabular-nums; }
+.muted { color: #555; font-size: 10pt; }
+</style>
+</head>
+<body>
+    <div class="page" role="document" aria-label="Capitalization policy">
+      <div class="header">
+        <div class="title">Capitalization Policy</div>
+        <div class="meta">
+          <div><strong>Client:</strong> Clearwater Outfitters, Inc.</div>
+          <div><strong>Fiscal Year:</strong> 20X3-01-01 to 20X3-12-31</div>
+          <div><strong>Document Date:</strong> 20X3-12-31</div>
+        </div>
+      </div>
+
+      <div class="rule"></div>
+
+      <section>
+        <h2>Capitalization Threshold</h2>
+        <div class="value">$10,000.00</div>
+      </section>
+
+      <section>
+        <h2>Costs to Capitalize</h2>
+        <ul><li>Purchase price</li><li>Freight and delivery</li><li>Installation and testing</li></ul>
+      </section>
+
+      <section>
+        <h2>Costs to Expense</h2>
+        <ul><li>Routine repairs</li><li>Training</li><li>Software subscriptions</li></ul>
+      </section>
+
+      <section class="grid">
+        <div>
+          <h2>Depreciation Start Rule</h2>
+          <div>Placed in service / available for intended use</div>
+        </div>
+        <div>
+          <h2>Default Method</h2>
+          <div>Straight-line</div>
+        </div>
+        <div>
+          <h2>Convention</h2>
+          <div>Monthly</div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Useful Lives by Class</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Class Code</th>
+              <th>Class Name</th>
+              <th class="num">Life (yrs)</th>
+              <th>Method</th>
+            </tr>
+          </thead>
+          <tbody>
+            
+        <tr>
+          <td>BLDG</td>
+          <td>Buildings</td>
+          <td class="num">30</td>
+          <td>Straight-line</td>
+        </tr>
+      
+        <tr>
+          <td>EQUIP</td>
+          <td>Equipment</td>
+          <td class="num">7</td>
+          <td>Straight-line</td>
+        </tr>
+      
+        <tr>
+          <td>VEH</td>
+          <td>Vehicles</td>
+          <td class="num">5</td>
+          <td>Straight-line</td>
+        </tr>
+      
+          </tbody>
+        </table>
+      </section>
+    </div>
+  </body>
+</html>

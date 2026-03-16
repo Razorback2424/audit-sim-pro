@@ -3,7 +3,6 @@ import { useAuth } from './AuthContext';
 import { cacheRole, getCachedRole } from '../services/roleService';
 import { fetchUserProfile, ensureOrgIdForUser } from '../services/userService';
 import { fetchUserBilling, subscribeUserBilling } from '../services/billingService';
-import { db, FirestorePaths } from '../services/firebase';
 
 const DEBUG_LOGS = process.env.REACT_APP_DEBUG_LOGS === 'true';
 

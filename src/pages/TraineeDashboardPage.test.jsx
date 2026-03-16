@@ -44,6 +44,7 @@ jest.mock('../utils/dates', () => ({
 describe('TraineeDashboardPage', () => {
   afterEach(() => {
     jest.clearAllMocks();
+    listRecipes.mockResolvedValue([]);
   });
 
   it('renders trainee dashboard empty state', async () => {
@@ -54,5 +55,16 @@ describe('TraineeDashboardPage', () => {
     expect(screen.getByText(/program path/i)).toBeInTheDocument();
     expect(fetchRecipeProgress).not.toHaveBeenCalled();
     expect(startCaseAttemptFromPool).not.toHaveBeenCalled();
+  });
+
+  it('renders a non-blocking warning when recipe metadata fails to load', async () => {
+    listRecipes.mockRejectedValueOnce(new Error('recipes unavailable'));
+
+    render(<TraineeDashboardPage />);
+
+    expect(await screen.findByText(/no activities assigned yet/i)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/module guidance is temporarily unavailable/i)
+    ).toBeInTheDocument();
   });
 });

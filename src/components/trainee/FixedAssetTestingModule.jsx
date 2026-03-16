@@ -130,6 +130,8 @@ const DEFAULT_WORKFLOW = {
   },
 };
 
+const SIGNED_URL_REFRESH_WINDOW_MS = 9 * 60 * 1000;
+
 const resolveStepKey = (stepKey, steps) => {
   if (!Array.isArray(steps) || steps.length === 0) return FLOW_STEPS.INSTRUCTION;
   if (steps.includes(stepKey)) return stepKey;
@@ -238,6 +240,8 @@ export default function FixedAssetTestingModule({ caseId, caseData, userId, navi
   const isLockedRef = useRef(false);
   const lastLocalChangeRef = useRef(0);
   const progressSaveTimeoutRef = useRef(null);
+  const evidenceCacheRef = useRef({ evidenceId: null, sourceKey: null, url: '', resolvedAt: 0 });
+  const evidenceRetryRef = useRef('');
 
   const requestSignedUrl = useCallback(
     async ({ storagePath, downloadURL }) => {
@@ -245,6 +249,46 @@ export default function FixedAssetTestingModule({ caseId, caseData, userId, navi
       return getSignedDocumentUrl({ caseId, storagePath, downloadURL, requireStoragePath: true });
     },
     [caseId]
+  );
+
+  const resolveEvidenceUrl = useCallback(
+    async (selected, { forceRefresh = false } = {}) => {
+      if (!selected?.storagePath && !selected?.downloadURL) {
+        setActiveEvidenceUrl('');
+        setActiveEvidenceError('');
+        return;
+      }
+
+      const sourceKey = selected.storagePath || selected.downloadURL || '';
+      const cached = evidenceCacheRef.current;
+      const isFresh =
+        !forceRefresh &&
+        cached.evidenceId === selected.evidenceId &&
+        cached.sourceKey === sourceKey &&
+        cached.url &&
+        Date.now() - cached.resolvedAt < SIGNED_URL_REFRESH_WINDOW_MS;
+
+      if (isFresh) {
+        setActiveEvidenceUrl(cached.url);
+        setActiveEvidenceError('');
+        return;
+      }
+
+      const url = await requestSignedUrl({
+        storagePath: selected.storagePath,
+        downloadURL: selected.downloadURL,
+      });
+      evidenceCacheRef.current = {
+        evidenceId: selected.evidenceId,
+        sourceKey,
+        url,
+        resolvedAt: Date.now(),
+      };
+      evidenceRetryRef.current = '';
+      setActiveEvidenceUrl(url);
+      setActiveEvidenceError('');
+    },
+    [requestSignedUrl]
   );
 
   const fixedAssetSummary = useMemo(
@@ -255,7 +299,10 @@ export default function FixedAssetTestingModule({ caseId, caseData, userId, navi
   const fixedAssetRisk = caseData?.faRisk || {};
   const fixedAssetAdditions = Array.isArray(caseData?.faAdditions) ? caseData.faAdditions : [];
   const fixedAssetDisposals = Array.isArray(caseData?.faDisposals) ? caseData.faDisposals : [];
-  const referenceDocuments = Array.isArray(caseData?.referenceDocuments) ? caseData.referenceDocuments : [];
+  const referenceDocuments = useMemo(
+    () => (Array.isArray(caseData?.referenceDocuments) ? caseData.referenceDocuments : []),
+    [caseData]
+  );
 
   const viewerEvidenceItems = selectedEvidenceItems;
   const viewerEnabled = selectedEvidenceItems.length > 0;
@@ -427,15 +474,7 @@ export default function FixedAssetTestingModule({ caseId, caseData, userId, navi
       setActiveEvidenceLoading(true);
       setActiveEvidenceError('');
       try {
-        if (!selected.storagePath && !selected.downloadURL) {
-          setActiveEvidenceUrl('');
-          return;
-        }
-        const url = await requestSignedUrl({
-          storagePath: selected.storagePath,
-          downloadURL: selected.downloadURL,
-        });
-        setActiveEvidenceUrl(url);
+        await resolveEvidenceUrl(selected);
       } catch (error) {
         console.error('[FixedAssetTesting] Failed to resolve evidence URL', error);
         setActiveEvidenceUrl('');
@@ -446,7 +485,32 @@ export default function FixedAssetTestingModule({ caseId, caseData, userId, navi
     };
 
     resolveEvidence();
-  }, [activeEvidenceId, selectedEvidenceItems, requestSignedUrl]);
+  }, [activeEvidenceId, selectedEvidenceItems, resolveEvidenceUrl]);
+
+  const handleEvidenceFrameError = useCallback(async () => {
+    const selected = selectedEvidenceItems.find((item) => item.evidenceId === activeEvidenceId);
+    if (!selected) return;
+
+    const retryKey = `${selected.evidenceId}|${selected.storagePath || selected.downloadURL || ''}`;
+    if (evidenceRetryRef.current === retryKey) {
+      setActiveEvidenceUrl('');
+      setActiveEvidenceError('Unable to load document preview.');
+      return;
+    }
+
+    evidenceRetryRef.current = retryKey;
+    setActiveEvidenceLoading(true);
+    setActiveEvidenceError('');
+    try {
+      await resolveEvidenceUrl(selected, { forceRefresh: true });
+    } catch (error) {
+      console.error('[FixedAssetTesting] Failed to refresh expired evidence URL', error);
+      setActiveEvidenceUrl('');
+      setActiveEvidenceError('Unable to load document preview.');
+    } finally {
+      setActiveEvidenceLoading(false);
+    }
+  }, [activeEvidenceId, resolveEvidenceUrl, selectedEvidenceItems]);
 
   useEffect(() => {
     if (isLocked) return;
@@ -749,6 +813,7 @@ export default function FixedAssetTestingModule({ caseId, caseData, userId, navi
       activeEvidenceError={activeEvidenceError}
       activeEvidenceUrl={activeEvidenceUrl}
       handleViewDocument={handleViewDocument}
+      handleEvidenceFrameError={handleEvidenceFrameError}
       handleDownloadAllReferences={handleDownloadAllReferences}
       isEvidenceWorkflowLinked={() => true}
       pdfViewerState={{}}

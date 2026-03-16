@@ -51,9 +51,9 @@ jest.mock('../AppCore', () => {
   appCoreMocks.showModalMock = showModalMock;
   appCoreMocks.setQueryMock = setQueryMock;
   return {
-    Button: React.forwardRef(({ children, onClick, className = '', ...props }, ref) => (
+    Button: React.forwardRef(({ children, onClick, className = '', isLoading = false, ...props }, ref) => (
       <button ref={ref} onClick={onClick} className={className} {...props}>
-        {children}
+        {isLoading ? 'Loading…' : children}
       </button>
     )),
     Input: React.forwardRef(({ onChange, ...props }, ref) => <input ref={ref} onChange={onChange} {...props} />),

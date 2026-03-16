@@ -1,0 +1,200 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+@page { size: Letter; margin: 0.6in; }
+html, body { margin: 0; padding: 0; }
+body { color: #111; font-family: "Times New Roman", Times, serif; }
+
+.page { width: 100%; }
+
+.header { text-align: center; margin-bottom: 18px; }
+.company { font-size: 18px; font-weight: 700; letter-spacing: 0.3px; }
+.title { font-size: 22px; font-weight: 700; margin-top: 6px; }
+.subtitle { font-size: 12px; margin-top: 4px; }
+
+.meta { display: grid; gap: 6px; margin-bottom: 14px; font-size: 11px; }
+.metaRow { display: flex; justify-content: space-between; border: 1px solid #b6b6b6; padding: 6px 8px; }
+.metaRow .label { font-weight: 700; }
+
+.bundleTable {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 11px;
+}
+
+.bundleTable .col-invoice { width: 18%; }
+.bundleTable .col-inv-date { width: 16%; }
+.bundleTable .col-service { width: 18%; }
+.bundleTable .col-amount { width: 20%; }
+.bundleTable .col-recorded { width: 12%; }
+
+.bundleTable th,
+.bundleTable td {
+  border: 1px solid #b6b6b6;
+  padding: 6px 8px;
+}
+
+.bundleTable thead th {
+  background: #0f172a;
+  color: #ffffff;
+  font-weight: 700;
+  text-align: left;
+}
+
+.bundleTable .num { text-align: right; }
+.bundleTable tfoot td { font-weight: 700; }
+.bundleTable tfoot .totalLabel { text-align: right; }
+</style>
+</head>
+<body>
+    <div class="page">
+      <div class="header">
+        <div class="company">Team Up Promotional Products and Corporate Branding Solutions, LLC</div>
+        <div class="title">Remittance Advice</div>
+        <div class="subtitle">Payment P-10452 - 20X3-01-12</div>
+      </div>
+
+      <div class="meta">
+        <div class="metaRow">
+          <span class="label">Payee</span>
+          <span class="value">Northwest Industrial Supplies and Maintenance Services Group, LLC</span>
+        </div>
+        <div class="metaRow">
+          <span class="label">Invoice count</span>
+          <span class="value">14</span>
+        </div>
+      </div>
+
+      <table class="bundleTable" role="table" aria-label="Invoice bundle listing">
+        <colgroup>
+          <col class="col-invoice" />
+          <col class="col-inv-date" />
+          <col class="col-service" />
+          <col class="col-amount" />
+          <col class="col-recorded" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Invoice #</th>
+            <th>Invoice Date</th>
+            <th>Service Date</th>
+            <th class="num">Amount</th>
+            <th>In AP Aging</th>
+          </tr>
+        </thead>
+        <tbody>
+          
+        <tr>
+          <td>SD-2000-EXTENDED</td>
+          <td>20X2-12-28</td>
+          <td>20X3-01-01</td>
+          <td class="num">$9,445.25</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td>SD-2001-EXTENDED</td>
+          <td>20X3-01-05</td>
+          <td>20X3-01-02</td>
+          <td class="num">$3,120.00</td>
+          <td>No</td>
+        </tr>
+        <tr>
+          <td>SD-2002-EXTENDED</td>
+          <td>20X2-12-28</td>
+          <td>20X3-01-03</td>
+          <td class="num">$9,445.25</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td>SD-2003-EXTENDED</td>
+          <td>20X3-01-05</td>
+          <td>20X3-01-04</td>
+          <td class="num">$3,120.00</td>
+          <td>No</td>
+        </tr>
+        <tr>
+          <td>SD-2004-EXTENDED</td>
+          <td>20X2-12-28</td>
+          <td>20X3-01-05</td>
+          <td class="num">$9,445.25</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td>SD-2005-EXTENDED</td>
+          <td>20X3-01-05</td>
+          <td>20X3-01-06</td>
+          <td class="num">$3,120.00</td>
+          <td>No</td>
+        </tr>
+        <tr>
+          <td>SD-2006-EXTENDED</td>
+          <td>20X2-12-28</td>
+          <td>20X3-01-07</td>
+          <td class="num">$9,445.25</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td>SD-2007-EXTENDED</td>
+          <td>20X3-01-05</td>
+          <td>20X3-01-08</td>
+          <td class="num">$3,120.00</td>
+          <td>No</td>
+        </tr>
+        <tr>
+          <td>SD-2008-EXTENDED</td>
+          <td>20X2-12-28</td>
+          <td>20X3-01-09</td>
+          <td class="num">$9,445.25</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td>SD-2009-EXTENDED</td>
+          <td>20X3-01-05</td>
+          <td>20X3-01-10</td>
+          <td class="num">$3,120.00</td>
+          <td>No</td>
+        </tr>
+        <tr>
+          <td>SD-2010-EXTENDED</td>
+          <td>20X2-12-28</td>
+          <td>20X3-01-11</td>
+          <td class="num">$9,445.25</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td>SD-2011-EXTENDED</td>
+          <td>20X3-01-05</td>
+          <td>20X3-01-12</td>
+          <td class="num">$3,120.00</td>
+          <td>No</td>
+        </tr>
+        <tr>
+          <td>SD-2012-EXTENDED</td>
+          <td>20X2-12-28</td>
+          <td>20X3-01-13</td>
+          <td class="num">$9,445.25</td>
+          <td>Yes</td>
+        </tr>
+        <tr>
+          <td>SD-2013-EXTENDED</td>
+          <td>20X3-01-05</td>
+          <td>20X3-01-14</td>
+          <td class="num">$3,120.00</td>
+          <td>No</td>
+        </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="3" class="totalLabel">Total Paid</td>
+            <td class="num">$87,956.75</td>
+            <td></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </body>
+</html>

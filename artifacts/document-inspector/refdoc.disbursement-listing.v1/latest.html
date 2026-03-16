@@ -1,0 +1,105 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+@page { size: Letter; margin: 0.6in; }
+html, body { margin: 0; padding: 0; }
+body { color: #111; font-family: "Times New Roman", Times, serif; }
+
+.page { width: 100%; }
+
+.header { text-align: center; margin-bottom: 20px; }
+.company { font-size: 18px; font-weight: 700; letter-spacing: 0.3px; }
+.title { font-size: 22px; font-weight: 700; margin-top: 6px; }
+.subtitle { font-size: 12px; margin-top: 4px; }
+
+.listingTable {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 11px;
+}
+
+.listingTable .col-date { width: 14%; }
+.listingTable .col-check { width: 12%; }
+.listingTable .col-payment { width: 12%; }
+.listingTable .col-payee { width: 32%; }
+.listingTable .col-type { width: 12%; }
+.listingTable .col-amount { width: 18%; }
+
+.listingTable th,
+.listingTable td {
+  border: 1px solid #b6b6b6;
+  padding: 6px 8px;
+}
+
+.listingTable thead th {
+  background: #111827;
+  color: #ffffff;
+  font-weight: 700;
+  text-align: left;
+}
+
+.listingTable .num { text-align: right; }
+.listingTable tfoot td { font-weight: 700; }
+.listingTable tfoot .totalLabel { text-align: right; }
+</style>
+</head>
+<body>
+    <div class="page">
+      <div class="header">
+        <div class="company">Team Up Promotional Products, LLC</div>
+        <div class="title">January Disbursements Listing</div>
+        <div class="subtitle">January 20X3</div>
+      </div>
+
+      <table class="listingTable" role="table" aria-label="January disbursements listing">
+        <colgroup>
+          <col class="col-date" />
+          <col class="col-check" />
+          <col class="col-payment" />
+          <col class="col-payee" />
+          <col class="col-type" />
+          <col class="col-amount" />
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Check #</th>
+            <th>Payment ID</th>
+            <th>Payee</th>
+            <th>Type</th>
+            <th class="num">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          
+        <tr>
+          <td>20X3-01-10</td>
+          <td>10451</td>
+          <td>P-10451</td>
+          <td>PayPilot Payroll Services</td>
+          <td>Check</td>
+          <td class="num">$17,405.00</td>
+        </tr>
+        <tr>
+          <td>20X3-01-12</td>
+          <td>10452</td>
+          <td>P-10452</td>
+          <td>SummitDrinkware Supply</td>
+          <td>Check</td>
+          <td class="num">$9,445.25</td>
+        </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="5" class="totalLabel">Total</td>
+            <td class="num">$26,850.25</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </body>
+</html>

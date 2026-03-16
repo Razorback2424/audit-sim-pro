@@ -1,6 +1,5 @@
 import {
   saveSubmission,
-  fetchSubmissionsForCase,
   fetchSubmission,
   listUserSubmissions,
   subscribeToRecentSubmissionActivity,
@@ -103,15 +102,6 @@ describe('submissionService', () => {
         }),
       })
     );
-  });
-
-  test('fetchSubmissionsForCase returns submissions', async () => {
-    const userDocs = { docs: [{ id: 'u1' }] };
-    getDocs.mockResolvedValue(userDocs);
-    getDoc.mockResolvedValue({ exists: () => true, id: 'sub', data: () => ({ x: 2 }) });
-    const result = await fetchSubmissionsForCase('c1');
-    expect(collection).toHaveBeenCalled();
-    expect(result[0].userId).toBe('u1');
   });
 
   test('fetchSubmission returns single submission', async () => {

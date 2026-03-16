@@ -1,0 +1,21 @@
+# Default Debug Template IDs (from Admin Debug Docs)
+
+Use these as the default audit list when dialing in generated client documents.
+
+- `invoice.seed.alpha.v1`
+- `invoice.seed.beta.v1`
+- `invoice.seed.gamma.v1`
+- `refdoc.bank-statement.v1`
+- `refdoc.check-copy.v1`
+- `refdoc.ap-aging.v1`
+- `refdoc.ap-leadsheet.v1`
+- `refdoc.disbursement-listing.v1`
+- `refdoc.payroll-register.v1`
+- `refdoc.remittance-bundle.v1`
+- `refdoc.accrual-estimate.v1`
+- `refdoc.fa-policy.v1`
+- `refdoc.ppe-rollforward.v1`
+- `refdoc.fa-listing.v1`
+
+Source of truth for current debug UI list:
+- `src/pages/AdminDebugDocsPage.jsx`

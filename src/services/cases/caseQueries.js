@@ -7,7 +7,6 @@ import {
   limit,
   startAfter,
   and,
-  or,
   endBefore,
   limitToLast,
 } from 'firebase/firestore';
@@ -298,7 +297,18 @@ export const fetchCasesPage = async ({
   return { items, pageInfo };
 };
 
-const DEFAULT_STUDENT_STATUSES = ['assigned', 'in_progress', 'submitted', 'draft'];
+const TRAINEE_VISIBLE_STATUSES = ['assigned', 'in_progress', 'submitted', 'archived'];
+
+const normalizeStudentStatusFilter = (input) => {
+  const values = Array.isArray(input) && input.length > 0 ? input : TRAINEE_VISIBLE_STATUSES;
+  const normalized = values.reduce((acc, status) => {
+    const next = typeof status === 'string' ? status.trim().toLowerCase() : '';
+    if (!next || next === 'draft' || acc.includes(next)) return acc;
+    acc.push(next);
+    return acc;
+  }, []);
+  return normalized.length > 0 ? normalized : TRAINEE_VISIBLE_STATUSES;
+};
 
 /**
  * Build a Firestore query for trainee-visible cases with pagination support.
@@ -310,7 +320,7 @@ export const buildStudentCasesQuery = ({
   pageSize = 20,
   cursor,
   includeOpensAtGate = false,
-  statusFilter = DEFAULT_STUDENT_STATUSES,
+  statusFilter = TRAINEE_VISIBLE_STATUSES,
   sortBy = 'due',
   hasPaidAccess = false,
 } = {}) => {
@@ -329,8 +339,9 @@ export const buildStudentCasesQuery = ({
     );
   }
 
-  if (statusFilter && statusFilter.length > 0) {
-    filterConstraint = and(filterConstraint, where('status', 'in', statusFilter));
+  const normalizedStatusFilter = normalizeStudentStatusFilter(statusFilter);
+  if (normalizedStatusFilter.length > 0) {
+    filterConstraint = and(filterConstraint, where('status', 'in', normalizedStatusFilter));
   }
 
   if (includeOpensAtGate) {

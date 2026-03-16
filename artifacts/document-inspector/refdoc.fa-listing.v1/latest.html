@@ -1,0 +1,83 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+@page { size: Letter; margin: 0.5in; }
+html, body { margin: 0; padding: 0; }
+body { color: #111; font-family: Arial, Helvetica, sans-serif; font-size: 9.5pt; line-height: 1.3; }
+.page { width: 100%; }
+.title { font-size: 16pt; font-weight: 700; letter-spacing: 0.2px; }
+.meta { margin-top: 4px; font-size: 9pt; color: #555; }
+.rule { border-top: 2px solid #111; margin: 10px 0 12px; }
+table { width: 100%; border-collapse: collapse; }
+thead { display: table-header-group; }
+tr { page-break-inside: avoid; }
+th, td { border-bottom: 1px solid #ddd; padding: 4px 3px; text-align: left; vertical-align: top; }
+.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.muted { color: #555; font-size: 9pt; }
+</style>
+</head>
+<body>
+    <div class="page" role="document" aria-label="Fixed asset listing">
+      <div class="header">
+        <div class="title">Fixed Asset Listing</div>
+        <div class="meta">
+          <div><strong>Client:</strong> Clearwater Outfitters, Inc.</div>
+          <div><strong>Fiscal Year:</strong> 20X3-01-01 to 20X3-12-31</div>
+          <div><strong>As of:</strong> 20X3-12-31</div>
+        </div>
+      </div>
+      <div class="rule"></div>
+      <table>
+        <thead>
+          <tr>
+            <th>Asset ID</th>
+            <th>Description</th>
+            <th>Class</th>
+            <th>Location</th>
+            <th>Vendor</th>
+            <th>Invoice #</th>
+            <th>Invoice Date</th>
+            <th>Placed In Service</th>
+            <th class="num">Cost</th>
+            <th class="num">Life (yrs)</th>
+            <th>Method</th>
+          </tr>
+        </thead>
+        <tbody>
+          
+        <tr>
+          <td>FA-BLDG-001</td>
+          <td>Warehouse build-out (Denver)</td>
+          <td>Buildings</td>
+          <td>Denver, CO</td>
+          <td>Atlas Construction Co.</td>
+          <td>INV-2450</td>
+          <td>20X3-03-12</td>
+          <td>20X3-04-15</td>
+          <td class="num">$120,000.00</td>
+          <td class="num">30</td>
+          <td>Straight-line</td>
+        </tr>
+      
+        <tr>
+          <td>FA-EQUIP-014</td>
+          <td>Automated packing line (Austin)</td>
+          <td>Equipment</td>
+          <td>Austin, TX</td>
+          <td>Millstone Robotics</td>
+          <td>INV-3881</td>
+          <td>20X3-05-06</td>
+          <td>20X3-06-01</td>
+          <td class="num">$75,000.00</td>
+          <td class="num">7</td>
+          <td>Straight-line</td>
+        </tr>
+      
+        </tbody>
+      </table>
+    </div>
+  </body>
+</html>

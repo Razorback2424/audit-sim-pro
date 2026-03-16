@@ -1,0 +1,9 @@
+{
+  "templateId": "invoice.seed.alpha.v1",
+  "variant": "stress",
+  "pageCount": 1,
+  "screenshots": [
+    "artifacts/document-inspector-stress/invoice.seed.alpha.v1/page-1.png"
+  ],
+  "generatedAt": "2026-02-23T03:50:16.225Z"
+}

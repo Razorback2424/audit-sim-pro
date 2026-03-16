@@ -198,7 +198,12 @@ export default function AdminDashboardPage() {
     }
   });
   const prevPageIndexRef = useRef(0);
+  const pageCursorsRef = useRef([]);
   const isAdmin = role === 'admin' || role === 'owner';
+
+  useEffect(() => {
+    pageCursorsRef.current = pageCursors;
+  }, [pageCursors]);
 
   useEffect(() => {
     let active = true;
@@ -428,12 +433,13 @@ export default function AdminDashboardPage() {
       try {
         const direction =
           pageIndex > prevPageIndexRef.current ? 'next' : pageIndex < prevPageIndexRef.current ? 'prev' : 'next';
+        const currentPageCursors = pageCursorsRef.current;
         const cursor =
           direction === 'next'
             ? pageIndex > 0
-              ? pageCursors[pageIndex - 1]
+              ? currentPageCursors[pageIndex - 1]
               : null
-            : pageCursors[pageIndex + 1] || pageCursors[pageIndex] || null;
+            : currentPageCursors[pageIndex + 1] || currentPageCursors[pageIndex] || null;
         const result = await fetchCasesPage({
           search: debouncedSearch,
           status: statusFilters,
@@ -479,7 +485,12 @@ export default function AdminDashboardPage() {
   }, [
     pageIndex,
     refreshToken,
-    filterSignature,
+    debouncedSearch,
+    statusFilters,
+    visibilityFilters,
+    auditAreaFilter,
+    sortOption,
+    pageSize,
   ]);
 
   useEffect(() => {

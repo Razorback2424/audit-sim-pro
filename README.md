@@ -32,6 +32,10 @@ The app will automatically connect to the emulators if the config in `.env` poin
 - `npm start` – run the app in development mode
 - `npm test` – execute Jest and React Testing Library tests
 - `npm run build` – build the production bundle
+- `npm run validate:env:prod` – validate required frontend production env values in `.env.production.local`
+- `npm run validate:env:functions` – validate required Functions/Stripe production env values in `functions/.env.production.local`
+- `npm run build:prod:bluehost` – validate production env and build a static bundle for Bluehost upload
+- `npm run preflight:launch:mvp` – run frontend + Functions env validation and cross-config consistency checks
 
 To generate a coverage report run:
 
@@ -46,6 +50,14 @@ On first load the app shows a role selection screen. No user ID is created until
 ## Security Rules Overview
 
 The application relies on Firebase security rules for both Firestore and Storage. Administrators can read and write all case and user data. Trainees may only read the cases they are authorized for and submit their own selections. See `firestore.rules` and `storage.rules` for the exact RBAC logic.
+
+## MVP Launch Docs
+
+- `docs/launch/bluehost-spa-deploy.md` – Bluehost frontend deploy (static SPA + route fallback)
+- `docs/launch/firebase-production-backend-checklist.md` – Firebase backend + Stripe production checklist
+- `docs/verification/mvp-feedback-beta-launch-checklist.md` – real-user feedback MVP launch gate checklist
+- `docs/verification/mvp-smoke-results-template.md` – worksheet for recording smoke-test evidence and ship decision
+- `docs/ops/feedback-beta-operations.md` – day-to-day beta monitoring and incident response runbook
 
 ## Admin Workflow
 
@@ -75,4 +87,3 @@ The application relies on Firebase security rules for both Firestore and Storage
 ## Firebase Service Modules
 
 Firestore queries and mutations are centralized under `src/services/`. Pages import these modules instead of calling Firestore directly. This keeps page components slimmer and allows tests to easily mock Firebase interactions.
-

@@ -22,6 +22,7 @@ export default function FixedAssetTestingStep({
   activeEvidenceError,
   activeEvidenceUrl,
   handleViewDocument,
+  handleEvidenceFrameError,
   handleDownloadAllReferences,
   isEvidenceWorkflowLinked,
   pdfViewerState,
@@ -493,6 +494,7 @@ export default function FixedAssetTestingStep({
                 activeEvidenceError={activeEvidenceError}
                 activeEvidenceUrl={activeEvidenceUrl}
                 onOpenDocument={handleViewDocument}
+                onFrameError={handleEvidenceFrameError}
               />
             </div>
           </div>

@@ -10,7 +10,8 @@ import {
   serverTimestamp,
   deleteField,
 } from 'firebase/firestore';
-import { db, FirestorePaths } from '../AppCore';
+import { httpsCallable } from 'firebase/functions';
+import { db, FirestorePaths, functions } from '../AppCore';
 import { deriveProgressState, toProgressModel } from '../models/progress';
 
 const BATCH_SIZE = 10;
@@ -18,8 +19,29 @@ const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 500;
 
 const offlineQueue = new Map();
+const offlineFlushWarnings = new Set();
 
 const isRecord = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const mergeProgressPatches = (currentPatch = {}, nextPatch = {}) => {
+  const merged = { ...currentPatch, ...nextPatch };
+
+  if (isRecord(currentPatch.draft) || isRecord(nextPatch.draft)) {
+    merged.draft = {
+      ...(isRecord(currentPatch.draft) ? currentPatch.draft : {}),
+      ...(isRecord(nextPatch.draft) ? nextPatch.draft : {}),
+    };
+  }
+
+  if (isRecord(currentPatch.activeAttempt) || isRecord(nextPatch.activeAttempt)) {
+    merged.activeAttempt = {
+      ...(isRecord(currentPatch.activeAttempt) ? currentPatch.activeAttempt : {}),
+      ...(isRecord(nextPatch.activeAttempt) ? nextPatch.activeAttempt : {}),
+    };
+  }
+
+  return merged;
+};
 
 if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
   const markerKey = '__auditsimProgressOnlineListenerBound';
@@ -29,11 +51,23 @@ if (typeof window !== 'undefined' && typeof window.addEventListener === 'functio
       offlineQueue.forEach((patch, key) => {
         const [appId, uid, caseId] = String(key).split('|');
         if (!appId || !uid || !caseId) return;
-        saveProgress({ appId, uid, caseId, patch }).catch((err) => {
-          console.warn('[progressService] Failed to flush offline progress patch', { key, error: err?.message });
-        });
+        saveProgress({ appId, uid, caseId, patch })
+          .then(() => {
+            if (offlineQueue.get(key) === patch) {
+              offlineQueue.delete(key);
+            }
+            offlineFlushWarnings.delete(key);
+          })
+          .catch((err) => {
+            if (!offlineFlushWarnings.has(key)) {
+              console.warn('[progressService] Failed to flush offline progress patch', {
+                key,
+                error: err?.message,
+              });
+              offlineFlushWarnings.add(key);
+            }
+          });
       });
-      offlineQueue.clear();
     });
   }
 }
@@ -137,25 +171,16 @@ export const fetchProgressRosterForCase = async ({ appId, caseId }) => {
     throw new Error('fetchProgressRosterForCase requires both appId and caseId.');
   }
 
-  const rosterRoot = collection(db, `artifacts/${appId}/student_progress`);
-  const rosterSnapshot = await getDocs(rosterRoot);
-  const roster = [];
-
-  await Promise.all(
-    rosterSnapshot.docs.map(async (userDoc) => {
-      const userId = userDoc.id;
-      const progressRef = doc(db, FirestorePaths.STUDENT_PROGRESS_COLLECTION(appId, userId), caseId);
-      const progressSnap = await getDoc(progressRef);
-      if (!progressSnap.exists()) return;
-      roster.push({
-        userId,
-        progress: toProgressModel(progressSnap.data(), progressSnap.id),
-      });
-    })
-  );
-
-  roster.sort((a, b) => a.userId.localeCompare(b.userId));
-  return roster;
+  const callable = httpsCallable(functions, 'listCaseProgressRoster');
+  const result = await callable({ appId, caseId });
+  const roster = Array.isArray(result?.data?.roster) ? result.data.roster : [];
+  return roster
+    .map((entry) => ({
+      userId: entry?.userId || '',
+      progress: toProgressModel(entry?.progress || null, caseId),
+    }))
+    .filter((entry) => Boolean(entry.userId))
+    .sort((a, b) => a.userId.localeCompare(b.userId));
 };
 
 /**
@@ -179,7 +204,9 @@ export const saveProgress = async ({
 
   const isOffline = typeof navigator !== 'undefined' && typeof navigator.onLine === 'boolean' && !navigator.onLine;
   if (isOffline) {
-    offlineQueue.set(`${appId}|${uid}|${caseId}`, patch);
+    const queueKey = `${appId}|${uid}|${caseId}`;
+    const existingPatch = offlineQueue.get(queueKey);
+    offlineQueue.set(queueKey, mergeProgressPatches(existingPatch, patch));
     return;
   }
 
@@ -191,16 +218,12 @@ export const saveProgress = async ({
   }
   patch.percentComplete = percentComplete;
 
-  let { state } = patch;
-  if (!state) {
-    state = deriveProgressState({ step: patch.step, percentComplete });
-  }
-
   const progressRef = doc(db, FirestorePaths.STUDENT_PROGRESS_COLLECTION(appId, uid), caseId);
   const shouldClearActiveAttempt = clearActiveAttempt === true;
 
   for (let i = 0; i < MAX_RETRIES; i++) {
     try {
+      const nextPatch = { ...patch, percentComplete };
       const serverDoc = await getDoc(progressRef);
       const serverData = serverDoc.data();
       const serverHasSuccess = Boolean(serverData?.hasSuccessfulAttempt);
@@ -210,45 +233,65 @@ export const saveProgress = async ({
           ? serverData.updatedAt.toMillis()
           : 0;
       const patchUpdatedAtMs =
-        patch?.updatedAt && typeof patch.updatedAt.toMillis === 'function' ? patch.updatedAt.toMillis() : 0;
+        nextPatch?.updatedAt && typeof nextPatch.updatedAt.toMillis === 'function'
+          ? nextPatch.updatedAt.toMillis()
+          : 0;
 
       if (!forceOverwrite && serverData && serverUpdatedAtMs > patchUpdatedAtMs) {
-        patch.percentComplete = Math.max(patch.percentComplete, serverData.percentComplete);
-        patch.state = deriveProgressState({
-          step: patch.step ?? serverData?.step,
-          percentComplete: patch.percentComplete,
+        nextPatch.percentComplete = Math.max(nextPatch.percentComplete, serverData.percentComplete);
+        nextPatch.state = deriveProgressState({
+          step: nextPatch.step ?? serverData?.step,
+          percentComplete: nextPatch.percentComplete,
         });
       }
 
-      if (patch.hasSuccessfulAttempt === undefined) {
-        patch.hasSuccessfulAttempt = serverHasSuccess;
+      if (nextPatch.hasSuccessfulAttempt === undefined) {
+        nextPatch.hasSuccessfulAttempt = serverHasSuccess;
       } else if (!forceOverwrite && serverHasSuccess) {
-        patch.hasSuccessfulAttempt = true;
+        nextPatch.hasSuccessfulAttempt = true;
       }
 
       if (shouldClearActiveAttempt) {
-        patch.activeAttempt = deleteField();
-      } else if (patch.activeAttempt === undefined && isRecord(patch.draft)) {
+        nextPatch.activeAttempt = deleteField();
+      } else if (nextPatch.activeAttempt === undefined && isRecord(nextPatch.draft)) {
         const existingStartedAt = serverData?.activeAttempt?.startedAt;
-        patch.activeAttempt = {
-          draft: patch.draft,
+        nextPatch.activeAttempt = {
+          draft: nextPatch.draft,
           startedAt: existingStartedAt || serverTimestamp(),
           updatedAt: serverTimestamp(),
         };
-      } else if (!shouldClearActiveAttempt && isRecord(patch.activeAttempt) && !patch.activeAttempt.updatedAt) {
-        patch.activeAttempt = {
-          ...patch.activeAttempt,
+      } else if (
+        !shouldClearActiveAttempt &&
+        isRecord(nextPatch.activeAttempt) &&
+        !nextPatch.activeAttempt.updatedAt
+      ) {
+        nextPatch.activeAttempt = {
+          ...nextPatch.activeAttempt,
           updatedAt: serverTimestamp(),
         };
-      } else if (!shouldClearActiveAttempt && isRecord(patch.activeAttempt) && !patch.activeAttempt.startedAt) {
-        patch.activeAttempt = {
-          ...patch.activeAttempt,
+      } else if (
+        !shouldClearActiveAttempt &&
+        isRecord(nextPatch.activeAttempt) &&
+        !nextPatch.activeAttempt.startedAt
+      ) {
+        nextPatch.activeAttempt = {
+          ...nextPatch.activeAttempt,
           startedAt: serverData?.activeAttempt?.startedAt || serverTimestamp(),
           updatedAt: serverTimestamp(),
         };
       }
 
-      await setDoc(progressRef, { ...patch, state, updatedAt: serverTimestamp() }, { merge: true });
+      const finalState =
+        nextPatch.state ||
+        deriveProgressState({
+          step: nextPatch.step,
+          percentComplete: nextPatch.percentComplete,
+        });
+      await setDoc(
+        progressRef,
+        { ...nextPatch, state: finalState, updatedAt: serverTimestamp() },
+        { merge: true }
+      );
       return;
     } catch (err) {
       if (i === MAX_RETRIES - 1) {

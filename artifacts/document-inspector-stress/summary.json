@@ -1,0 +1,132 @@
+{
+  "summary": [
+    {
+      "templateId": "invoice.seed.alpha.v1",
+      "variant": "stress",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector-stress/invoice.seed.alpha.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:50:16.225Z"
+    },
+    {
+      "templateId": "invoice.seed.beta.v1",
+      "variant": "stress",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector-stress/invoice.seed.beta.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:50:17.157Z"
+    },
+    {
+      "templateId": "invoice.seed.gamma.v1",
+      "variant": "stress",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector-stress/invoice.seed.gamma.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:50:17.641Z"
+    },
+    {
+      "templateId": "refdoc.ap-aging.v1",
+      "variant": "stress",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector-stress/refdoc.ap-aging.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:50:18.186Z"
+    },
+    {
+      "templateId": "refdoc.ap-leadsheet.v1",
+      "variant": "stress",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector-stress/refdoc.ap-leadsheet.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:50:18.687Z"
+    },
+    {
+      "templateId": "refdoc.disbursement-listing.v1",
+      "variant": "stress",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector-stress/refdoc.disbursement-listing.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:50:19.171Z"
+    },
+    {
+      "templateId": "refdoc.bank-statement.v1",
+      "variant": "stress",
+      "pageCount": 2,
+      "screenshots": [
+        "artifacts/document-inspector-stress/refdoc.bank-statement.v1/page-1.png",
+        "artifacts/document-inspector-stress/refdoc.bank-statement.v1/page-2.png"
+      ],
+      "generatedAt": "2026-02-23T03:50:20.083Z"
+    },
+    {
+      "templateId": "refdoc.fa-policy.v1",
+      "variant": "stress",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector-stress/refdoc.fa-policy.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:50:20.570Z"
+    },
+    {
+      "templateId": "refdoc.ppe-rollforward.v1",
+      "variant": "stress",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector-stress/refdoc.ppe-rollforward.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:50:20.996Z"
+    },
+    {
+      "templateId": "refdoc.fa-listing.v1",
+      "variant": "stress",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector-stress/refdoc.fa-listing.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:50:21.497Z"
+    },
+    {
+      "templateId": "refdoc.payroll-register.v1",
+      "variant": "stress",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector-stress/refdoc.payroll-register.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:50:21.875Z"
+    },
+    {
+      "templateId": "refdoc.remittance-bundle.v1",
+      "variant": "stress",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector-stress/refdoc.remittance-bundle.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:50:22.327Z"
+    },
+    {
+      "templateId": "refdoc.accrual-estimate.v1",
+      "variant": "stress",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector-stress/refdoc.accrual-estimate.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:50:22.716Z"
+    },
+    {
+      "templateId": "refdoc.check-copy.v1",
+      "variant": "stress",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector-stress/refdoc.check-copy.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:50:23.214Z"
+    }
+  ],
+  "failures": []
+}

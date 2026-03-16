@@ -1,0 +1,132 @@
+{
+  "summary": [
+    {
+      "templateId": "invoice.seed.alpha.v1",
+      "variant": "default",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector/invoice.seed.alpha.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:51:09.009Z"
+    },
+    {
+      "templateId": "invoice.seed.beta.v1",
+      "variant": "default",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector/invoice.seed.beta.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:51:09.928Z"
+    },
+    {
+      "templateId": "invoice.seed.gamma.v1",
+      "variant": "default",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector/invoice.seed.gamma.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:51:10.437Z"
+    },
+    {
+      "templateId": "refdoc.ap-aging.v1",
+      "variant": "default",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector/refdoc.ap-aging.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:51:10.935Z"
+    },
+    {
+      "templateId": "refdoc.ap-leadsheet.v1",
+      "variant": "default",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector/refdoc.ap-leadsheet.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:51:11.312Z"
+    },
+    {
+      "templateId": "refdoc.disbursement-listing.v1",
+      "variant": "default",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector/refdoc.disbursement-listing.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:51:11.662Z"
+    },
+    {
+      "templateId": "refdoc.bank-statement.v1",
+      "variant": "default",
+      "pageCount": 2,
+      "screenshots": [
+        "artifacts/document-inspector/refdoc.bank-statement.v1/page-1.png",
+        "artifacts/document-inspector/refdoc.bank-statement.v1/page-2.png"
+      ],
+      "generatedAt": "2026-02-23T03:51:12.375Z"
+    },
+    {
+      "templateId": "refdoc.fa-policy.v1",
+      "variant": "default",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector/refdoc.fa-policy.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:51:12.812Z"
+    },
+    {
+      "templateId": "refdoc.ppe-rollforward.v1",
+      "variant": "default",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector/refdoc.ppe-rollforward.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:51:13.181Z"
+    },
+    {
+      "templateId": "refdoc.fa-listing.v1",
+      "variant": "default",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector/refdoc.fa-listing.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:51:13.542Z"
+    },
+    {
+      "templateId": "refdoc.payroll-register.v1",
+      "variant": "default",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector/refdoc.payroll-register.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:51:13.886Z"
+    },
+    {
+      "templateId": "refdoc.remittance-bundle.v1",
+      "variant": "default",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector/refdoc.remittance-bundle.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:51:14.256Z"
+    },
+    {
+      "templateId": "refdoc.accrual-estimate.v1",
+      "variant": "default",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector/refdoc.accrual-estimate.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:51:14.630Z"
+    },
+    {
+      "templateId": "refdoc.check-copy.v1",
+      "variant": "default",
+      "pageCount": 1,
+      "screenshots": [
+        "artifacts/document-inspector/refdoc.check-copy.v1/page-1.png"
+      ],
+      "generatedAt": "2026-02-23T03:51:15.010Z"
+    }
+  ],
+  "failures": []
+}

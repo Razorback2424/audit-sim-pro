@@ -1,0 +1,9 @@
+{
+  "templateId": "invoice.seed.beta.v1",
+  "variant": "default",
+  "pageCount": 1,
+  "screenshots": [
+    "artifacts/document-inspector/invoice.seed.beta.v1/page-1.png"
+  ],
+  "generatedAt": "2026-02-23T03:51:09.928Z"
+}

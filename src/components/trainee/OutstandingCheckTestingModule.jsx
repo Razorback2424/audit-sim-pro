@@ -1033,7 +1033,6 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
 
   const renderTestingRow = (checkNo) => {
     const bankItem = bankPopulation.find((b) => b.checkNo === checkNo) || null;
-    const evalRow = evalForCheck(checkNo);
     const checkCopy = checkCopyMap.get(checkNo) || null;
     const classification = classificationByCheck[checkNo] || '';
     const hasCheckCopy = Boolean(checkCopy);

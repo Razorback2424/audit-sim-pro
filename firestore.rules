@@ -50,6 +50,7 @@ service cloud.firestore {
     // Checks if the trainee can view the case currently being read
     function traineeCaseAccessible(appId) {
       return resource.data._deleted == false &&
+        resource.data.status != 'draft' &&
         (
           (
             hasPaidAccess(appId) &&
@@ -67,6 +68,14 @@ service cloud.firestore {
             resource.data.publicVisible == true
           )
         );
+    }
+
+    function anonymousDemoCaseAccessible() {
+      return resource.data._deleted == false &&
+        resource.data.status != 'draft' &&
+        isDemoCase(resource.data) &&
+        resource.data.publicVisible == true &&
+        (!('opensAt' in resource.data) || resource.data.opensAt == null || resource.data.opensAt <= request.time);
     }
 
     function belongsToOrg(resourceData) {
@@ -135,7 +144,7 @@ service cloud.firestore {
     function isValidProgressDocument(data) {
       return data.state in ['not_started', 'in_progress', 'submitted'] &&
              data.percentComplete >= 0 && data.percentComplete <= 100 &&
-             (!('step' in data) || data.step in ['selection', 'support', 'testing', 'results']) &&
+             (!('step' in data) || data.step in ['instruction', 'ca_check', 'ca_completeness', 'selection', 'testing', 'results']) &&
              (!('draft' in data) || isValidProgressDraft(data.draft));
     }
 
@@ -290,10 +299,13 @@ service cloud.firestore {
           (isInstructor() && belongsToOrg(resource.data)) ||
           (isTrainee() && traineeCaseAccessible(appId))
         )) ||
-        (request.auth == null && isDemoCase(resource.data) && resource.data.publicVisible == true)
+        (request.auth == null && anonymousDemoCaseAccessible())
       );
-      // For queries, allow admins/instructors and paid trainees.
-      allow list: if request.auth != null && (isAdmin() || isInstructor() || (isTrainee() && hasPaidAccess(appId)));
+      allow list: if request.auth != null && (
+        isAdmin() ||
+        isInstructor() ||
+        (isTrainee() && traineeCaseAccessible(appId))
+      );
       allow create: if request.auth != null &&
         (
           isAdmin() ||
@@ -390,10 +402,12 @@ service cloud.firestore {
 
     // Student progress is private to each user
     match /artifacts/{appId}/student_progress/{uid}/cases/{caseId} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
-      // validation
+      allow read: if request.auth != null && request.auth.uid == uid;
       allow create, update: if isValidProgressDocument(request.resource.data) &&
+                               request.auth != null &&
+                               request.auth.uid == uid &&
                                request.resource.data.updatedAt == request.time;
+      allow delete: if false;
     }
 
     // Recipe progress (gate completion) is private to each user

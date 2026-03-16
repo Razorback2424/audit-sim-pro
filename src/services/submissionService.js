@@ -191,18 +191,24 @@ export const fetchSubmission = async (userId, caseId) => {
 };
 
 export const fetchSubmissionsForCase = async (caseId) => {
-  const usersRef = collection(db, FirestorePaths.USERS_COLLECTION());
-  const userDocs = await getDocs(usersRef);
-  const submissions = [];
-  for (const userDoc of userDocs.docs) {
-    const userId = userDoc.id;
-    const submissionRef = doc(db, FirestorePaths.USER_CASE_SUBMISSION(userId, caseId));
-    const submissionSnap = await getDoc(submissionRef);
-    if (submissionSnap.exists()) {
-      submissions.push({ id: submissionSnap.id, userId, ...submissionSnap.data() });
-    }
+  if (!caseId) {
+    return [];
   }
-  return submissions;
+  const callable = httpsCallable(functions, 'listCaseSubmissions');
+  const result = await callable({ appId: defaultAppId, caseId });
+  const submissions = Array.isArray(result?.data?.submissions) ? result.data.submissions : [];
+  return submissions
+    .map((entry) => {
+      const data = entry?.data && typeof entry.data === 'object' ? entry.data : {};
+      return {
+        id: entry?.id || caseId,
+        userId: entry?.userId || '',
+        ...data,
+        submittedAt: coerceSubmittedAt(data),
+        attempts: normalizeAttemptList(data),
+      };
+    })
+    .filter((entry) => Boolean(entry.userId));
 };
 
 const normalizeAttemptList = (docData) => {
@@ -270,7 +276,18 @@ const toTimestampOrNull = (value) => {
     return value;
   }
 
-  const { seconds, nanoseconds } = value;
+  const seconds =
+    typeof value?.seconds === 'number'
+      ? value.seconds
+      : typeof value?._seconds === 'number'
+      ? value._seconds
+      : null;
+  const nanoseconds =
+    typeof value?.nanoseconds === 'number'
+      ? value.nanoseconds
+      : typeof value?._nanoseconds === 'number'
+      ? value._nanoseconds
+      : null;
   if (typeof seconds === 'number' && typeof nanoseconds === 'number') {
     try {
       return new Timestamp(seconds, nanoseconds);

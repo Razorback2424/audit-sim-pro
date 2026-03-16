@@ -1,0 +1,9 @@
+{
+  "templateId": "refdoc.payroll-register.v1",
+  "variant": "stress",
+  "pageCount": 1,
+  "screenshots": [
+    "artifacts/document-inspector-stress/refdoc.payroll-register.v1/page-1.png"
+  ],
+  "generatedAt": "2026-02-23T03:50:21.875Z"
+}

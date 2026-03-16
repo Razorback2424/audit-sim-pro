@@ -5,6 +5,15 @@ const { buildCaseDraftFromRecipe } = require('../../generation/buildCaseDraft');
 const { getCaseRecipe } = require('../../generation/recipeRegistry');
 const { writeAnalyticsEvent } = require('../analytics/events');
 const { buildFeedbackSignalProps } = require('./feedbackAnalytics');
+const {
+  evaluateAnonymousDemoCaseAccess,
+  evaluateTraineeCaseAccess,
+  hasPaidBillingAccess,
+} = require('./access');
+const {
+  queuePoolReplenishmentJob,
+  shouldQueuePoolReplenishment,
+} = require('./poolBackfill');
 
 const ANSWER_TOLERANCE = 0.01;
 const CLASSIFICATION_KEYS = Object.freeze([
@@ -571,6 +580,48 @@ const buildCaseFromRecipe = async ({ firestore, appId, moduleId, createdBy, orgI
   const generationPlan = stripUndefinedDeep(draft.generationPlan || null);
 
   return { caseData, caseKeys, generationPlan };
+};
+
+const createGeneratedCase = async ({ firestore, appId, moduleId, createdBy, orgId }) => {
+  const { caseData, caseKeys, generationPlan } = await buildCaseFromRecipe({
+    firestore,
+    appId,
+    moduleId,
+    createdBy,
+    orgId,
+  });
+
+  const caseRef = firestore.collection(`artifacts/${appId}/public/data/cases`).doc();
+  await caseRef.set(caseData, { merge: true });
+
+  if (caseKeys && Object.keys(caseKeys).length > 0) {
+    await firestore
+      .doc(`artifacts/${appId}/private/data/case_keys/${caseRef.id}`)
+      .set(
+        {
+          items: caseKeys,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+  }
+
+  if (generationPlan) {
+    const phaseList = Array.isArray(generationPlan?.phases) ? generationPlan.phases : [];
+    const initialPhaseId =
+      phaseList.length > 0 ? String(phaseList[0]?.id || phaseList[0] || '').trim() : '';
+    await queueGenerationJob({
+      firestore,
+      appId,
+      caseId: caseRef.id,
+      plan: generationPlan,
+      phaseId: initialPhaseId || null,
+      requestedBy: createdBy || null,
+      orgId: orgId || null,
+    });
+  }
+
+  return caseRef.id;
 };
 
 const buildDebugDataForTemplate = (templateId) => {
@@ -1596,18 +1647,36 @@ const hasPaidAccessServer = async ({ firestore, appId, uid }) => {
   if (!appId || !uid) return false;
   const billingSnap = await firestore.doc(buildBillingPath(appId, uid)).get();
   if (!billingSnap.exists) return false;
-  const status = typeof billingSnap.data()?.status === 'string' ? billingSnap.data().status.toLowerCase() : '';
-  return status === 'active';
+  return hasPaidBillingAccess(billingSnap.data() || {});
 };
 
-const DEFAULT_STUDENT_STATUSES = ['assigned', 'in_progress', 'submitted', 'draft'];
+const traineeAccessErrorForReason = (reason) => {
+  if (reason === 'case_deleted') {
+    return new functions.https.HttpsError('failed-precondition', 'Case is not available.');
+  }
+  if (reason === 'case_draft') {
+    return new functions.https.HttpsError('permission-denied', 'Case is not available.');
+  }
+  if (reason === 'case_not_open') {
+    return new functions.https.HttpsError('permission-denied', 'Case is not yet available.');
+  }
+  if (reason === 'case_not_assigned') {
+    return new functions.https.HttpsError('permission-denied', 'Case is not assigned to trainee.');
+  }
+  if (reason === 'demo_only') {
+    return new functions.https.HttpsError('permission-denied', 'Case is not available for demo access.');
+  }
+  return new functions.https.HttpsError('permission-denied', 'Case is not available.');
+};
+
+const DEFAULT_STUDENT_STATUSES = ['assigned', 'in_progress', 'submitted', 'archived'];
 const VALID_STUDENT_STATUSES = new Set(['assigned', 'in_progress', 'submitted', 'draft', 'archived']);
 
 const normalizeStudentStatusFilter = (value) => {
   if (!Array.isArray(value)) return DEFAULT_STUDENT_STATUSES;
   const normalized = value
     .map((entry) => (typeof entry === 'string' ? entry.trim().toLowerCase() : ''))
-    .filter((entry) => VALID_STUDENT_STATUSES.has(entry));
+    .filter((entry) => VALID_STUDENT_STATUSES.has(entry) && entry !== 'draft');
   return normalized.length > 0 ? normalized : DEFAULT_STUDENT_STATUSES;
 };
 
@@ -1831,6 +1900,135 @@ exports.listRosterOptions = callable.https.onCall(async (data, context) => {
   return { roster };
 });
 
+const assertCaseScopedReviewAccess = async ({ firestore, context, appId, caseId, logLabel }) => {
+  const { resolvedRole, requesterOrgId } = await resolveRequesterIdentity({
+    context,
+    appId,
+    firestore,
+    logLabel,
+  });
+
+  if (resolvedRole !== 'admin' && resolvedRole !== 'owner' && resolvedRole !== 'instructor') {
+    throw new functions.https.HttpsError('permission-denied', 'Insufficient permissions.');
+  }
+
+  const resolved = await resolveCaseAppId(firestore, appId, caseId);
+  if (!resolved || resolved.caseMissing || !resolved.caseData) {
+    throw new functions.https.HttpsError('not-found', 'Case not found.');
+  }
+
+  if (resolvedRole === 'instructor') {
+    if (!requesterOrgId) {
+      throw new functions.https.HttpsError('failed-precondition', 'Instructor has no Org ID.');
+    }
+    if (!resolved.caseData?.orgId || resolved.caseData.orgId !== requesterOrgId) {
+      throw new functions.https.HttpsError('permission-denied', 'Case is outside instructor org.');
+    }
+  }
+
+  return {
+    resolvedAppId: resolved.appId,
+  };
+};
+
+exports.listCaseSubmissions = callable.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
+  }
+
+  const appId = toOptionalString(data?.appId);
+  const caseId = toOptionalString(data?.caseId);
+  if (!appId) {
+    throw new functions.https.HttpsError('invalid-argument', 'appId is required.');
+  }
+  if (!caseId) {
+    throw new functions.https.HttpsError('invalid-argument', 'caseId is required.');
+  }
+
+  const firestore = admin.firestore();
+  const { resolvedAppId } = await assertCaseScopedReviewAccess({
+    firestore,
+    context,
+    appId,
+    caseId,
+    logLabel: 'listCaseSubmissions',
+  });
+
+  const pathPrefix = `artifacts/${resolvedAppId}/users/`;
+  const pathSuffix = `/caseSubmissions/${caseId}`;
+  const snapshot = await firestore
+    .collectionGroup('caseSubmissions')
+    .where(admin.firestore.FieldPath.documentId(), '==', caseId)
+    .get();
+
+  const submissions = [];
+  snapshot.forEach((docSnap) => {
+    const path = docSnap.ref.path || '';
+    if (!path.startsWith(pathPrefix) || !path.endsWith(pathSuffix)) {
+      return;
+    }
+    const userId = docSnap.ref.parent?.parent?.id || null;
+    if (!userId) return;
+    submissions.push({
+      id: docSnap.id,
+      userId,
+      data: docSnap.data() || {},
+    });
+  });
+
+  submissions.sort((left, right) => left.userId.localeCompare(right.userId));
+  return { submissions };
+});
+
+exports.listCaseProgressRoster = callable.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
+  }
+
+  const appId = toOptionalString(data?.appId);
+  const caseId = toOptionalString(data?.caseId);
+  if (!appId) {
+    throw new functions.https.HttpsError('invalid-argument', 'appId is required.');
+  }
+  if (!caseId) {
+    throw new functions.https.HttpsError('invalid-argument', 'caseId is required.');
+  }
+
+  const firestore = admin.firestore();
+  const { resolvedAppId } = await assertCaseScopedReviewAccess({
+    firestore,
+    context,
+    appId,
+    caseId,
+    logLabel: 'listCaseProgressRoster',
+  });
+
+  const pathPrefix = `artifacts/${resolvedAppId}/student_progress/`;
+  const pathSuffix = `/cases/${caseId}`;
+  const snapshot = await firestore
+    .collectionGroup('cases')
+    .where(admin.firestore.FieldPath.documentId(), '==', caseId)
+    .get();
+
+  const roster = [];
+  snapshot.forEach((docSnap) => {
+    const path = docSnap.ref.path || '';
+    if (!path.startsWith(pathPrefix) || !path.endsWith(pathSuffix)) {
+      return;
+    }
+    const segments = path.split('/');
+    const userId = segments.length >= 4 ? segments[3] : null;
+    if (!userId) return;
+    roster.push({
+      userId,
+      progress: docSnap.data() || {},
+    });
+  });
+
+  roster.sort((left, right) => left.userId.localeCompare(right.userId));
+  return { roster };
+});
+
 exports.getSignedDocumentUrl = callable.https.onCall(async (data, context) => {
   const appId = data?.appId;
   const caseId = data?.caseId;
@@ -1978,47 +2176,22 @@ exports.getSignedDocumentUrl = callable.https.onCall(async (data, context) => {
   if (resolvedRole === 'trainee') {
     const uid = context.auth.uid;
     const isPaid = await hasPaidAccessServer({ firestore, appId: resolvedAppId, uid });
-    const visibleToUserIds = Array.isArray(caseData?.visibleToUserIds) ? caseData.visibleToUserIds : [];
-    const isPublicVisible = caseData?.publicVisible === true;
-    const accessLevel = typeof caseData?.accessLevel === 'string' ? caseData.accessLevel.trim().toLowerCase() : 'paid';
-    const isNotDeleted = caseData?._deleted === false;
-    const opensAtMs = toCursorTimestamp(caseData?.opensAt);
-
-    if (!isNotDeleted) {
+    const accessResult = evaluateTraineeCaseAccess({
+      caseData,
+      uid,
+      hasPaidAccess: isPaid,
+    });
+    if (!accessResult.allowed) {
       await logEvidenceFailure('permission_denied');
-      throw new functions.https.HttpsError('permission-denied', 'Case is not available.');
-    }
-
-    if (opensAtMs && opensAtMs > Date.now()) {
-      await logEvidenceFailure('permission_denied');
-      throw new functions.https.HttpsError('permission-denied', 'Case is not yet available.');
-    }
-
-    if (isPaid) {
-      if (!isPublicVisible && !visibleToUserIds.includes(uid)) {
-        await logEvidenceFailure('permission_denied');
-        throw new functions.https.HttpsError('permission-denied', 'Case is not assigned to trainee.');
-      }
-    } else {
-      if (!(isPublicVisible && accessLevel === 'demo')) {
-        await logEvidenceFailure('permission_denied');
-        throw new functions.https.HttpsError('permission-denied', 'Case is not available for demo access.');
-      }
+      throw traineeAccessErrorForReason(accessResult.reason);
     }
   }
 
   if (!isAuthenticated) {
-    const isPublicVisible = caseData?.publicVisible === true;
-    const accessLevel = typeof caseData?.accessLevel === 'string' ? caseData.accessLevel.trim().toLowerCase() : 'paid';
-    const isNotDeleted = caseData?._deleted === false;
-    const opensAtMs = toCursorTimestamp(caseData?.opensAt);
-    if (!(isPublicVisible && accessLevel === 'demo' && isNotDeleted)) {
+    const accessResult = evaluateAnonymousDemoCaseAccess({ caseData });
+    if (!accessResult.allowed) {
       await logEvidenceFailure('permission_denied');
-      throw new functions.https.HttpsError('permission-denied', 'Case is not available for demo access.');
-    }
-    if (opensAtMs && opensAtMs > Date.now()) {
-      await logEvidenceFailure('permission_denied');
-      throw new functions.https.HttpsError('permission-denied', 'Case is not available for demo access.');
+      throw traineeAccessErrorForReason(accessResult.reason);
     }
   }
 
@@ -2425,14 +2598,11 @@ exports.startCaseAttempt = callable.https.onCall(async (data, context) => {
   const visibleCases = rawCases.filter(({ data: caseData }) => {
     const status = typeof caseData?.status === 'string' ? caseData.status.toLowerCase() : 'assigned';
     if (!allowedStatuses.has(status)) return false;
-    if (allowDemoOnly) {
-      const accessLevel =
-        typeof caseData?.accessLevel === 'string' ? caseData.accessLevel.trim().toLowerCase() : 'paid';
-      return caseData?.publicVisible === true && accessLevel === 'demo';
-    }
-    if (caseData?.publicVisible === true) return true;
-    const visibleToUserIds = Array.isArray(caseData?.visibleToUserIds) ? caseData.visibleToUserIds : [];
-    return visibleToUserIds.includes(uid);
+    return evaluateTraineeCaseAccess({
+      caseData,
+      uid,
+      hasPaidAccess: !allowDemoOnly,
+    }).allowed;
   });
 
   if (visibleCases.length === 0) {
@@ -2491,49 +2661,18 @@ exports.startCaseAttempt = callable.https.onCall(async (data, context) => {
 
   const remainingCount = visibleCases.length - completedCount;
 
-  let backfillCaseId = null;
-  if (remainingCount <= 2) {
+  if (shouldQueuePoolReplenishment(remainingCount)) {
     try {
-      const { caseData, caseKeys, generationPlan } = await buildCaseFromRecipe({
+      await queuePoolReplenishmentJob({
         firestore,
+        admin,
         appId,
         moduleId,
-        createdBy: uid,
+        requestedBy: uid,
+        orgId: requesterOrgId || null,
       });
-
-      const caseRef = firestore.collection(`artifacts/${appId}/public/data/cases`).doc();
-      await caseRef.set(caseData, { merge: true });
-
-      if (caseKeys && Object.keys(caseKeys).length > 0) {
-        await firestore
-          .doc(`artifacts/${appId}/private/data/case_keys/${caseRef.id}`)
-          .set(
-            {
-              items: caseKeys,
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            },
-            { merge: true }
-          );
-      }
-
-      if (generationPlan) {
-        const phaseList = Array.isArray(generationPlan?.phases) ? generationPlan.phases : [];
-        const initialPhaseId =
-          phaseList.length > 0 ? String(phaseList[0]?.id || phaseList[0] || '').trim() : '';
-        await queueGenerationJob({
-          firestore,
-          appId,
-          caseId: caseRef.id,
-          plan: generationPlan,
-          phaseId: initialPhaseId || null,
-          requestedBy: uid,
-          orgId: requesterOrgId || null,
-        });
-      }
-
-      backfillCaseId = caseRef.id;
     } catch (err) {
-      console.error('[startCaseAttempt] Failed to backfill case pool', err);
+      console.error('[startCaseAttempt] Failed to queue pool replenishment', err);
     }
   }
 
@@ -2541,7 +2680,6 @@ exports.startCaseAttempt = callable.https.onCall(async (data, context) => {
     caseId: candidate.id,
     totalCases: visibleCases.length,
     remainingCount,
-    backfillCaseId,
   };
 });
 
@@ -2576,14 +2714,14 @@ exports.scoreCaseAttempt = callable.https.onCall(async (data, context) => {
   }
 
   const caseData = caseSnapshot.data() || {};
-  if (caseData._deleted === true) {
-    throw new functions.https.HttpsError('failed-precondition', 'Case is not available.');
-  }
-
   const hasPaid = await hasPaidAccessServer({ firestore, appId, uid });
-  const isPublicVisible = caseData.publicVisible === true;
-  if (!isPublicVisible && !hasPaid) {
-    throw new functions.https.HttpsError('permission-denied', 'Access to this case is restricted.');
+  const accessResult = evaluateTraineeCaseAccess({
+    caseData,
+    uid,
+    hasPaidAccess: hasPaid,
+  });
+  if (!accessResult.allowed) {
+    throw traineeAccessErrorForReason(accessResult.reason);
   }
 
   const caseKeyItems = await loadCaseKeyItems({
@@ -2767,45 +2905,14 @@ exports.seedCasePool = callable.https.onCall(async (data, context) => {
   const createdIds = [];
 
   for (let i = 0; i < count; i += 1) {
-    const { caseData, caseKeys, generationPlan } = await buildCaseFromRecipe({
+    const caseId = await createGeneratedCase({
       firestore,
       appId,
       moduleId,
       createdBy: uid,
       orgId: requesterOrgId || null,
     });
-
-    const caseRef = firestore.collection(`artifacts/${appId}/public/data/cases`).doc();
-    await caseRef.set(caseData, { merge: true });
-
-    if (caseKeys && Object.keys(caseKeys).length > 0) {
-      await firestore
-        .doc(`artifacts/${appId}/private/data/case_keys/${caseRef.id}`)
-        .set(
-          {
-            items: caseKeys,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          },
-          { merge: true }
-        );
-    }
-
-    if (generationPlan) {
-      const phaseList = Array.isArray(generationPlan?.phases) ? generationPlan.phases : [];
-      const initialPhaseId =
-        phaseList.length > 0 ? String(phaseList[0]?.id || phaseList[0] || '').trim() : '';
-      await queueGenerationJob({
-        firestore,
-        appId,
-        caseId: caseRef.id,
-        plan: generationPlan,
-        phaseId: initialPhaseId || null,
-        requestedBy: uid,
-        orgId: requesterOrgId || null,
-      });
-    }
-
-    createdIds.push(caseRef.id);
+    createdIds.push(caseId);
   }
 
   return {
@@ -3534,6 +3641,93 @@ exports.processCaseDocGenerationJob = onDocumentWritten(
           console.warn('[caseGeneration] Failed to write next phase status', err);
         }
       }
+    }
+
+    return null;
+  }
+);
+
+exports.processCasePoolReplenishmentJob = onDocumentWritten(
+  {
+    document: 'artifacts/{appId}/private/data/case_pool_jobs/{moduleId}',
+    memory: '512MiB',
+    timeoutSeconds: 120,
+  },
+  async (event) => {
+    if (!event?.data?.after?.exists) {
+      return null;
+    }
+
+    const jobRef = event.data.after.ref;
+    const job = event.data.after.data() || {};
+    if (job.status !== 'queued') {
+      return null;
+    }
+
+    const { appId, moduleId } = event.params || {};
+    if (!appId || !moduleId) {
+      await jobRef.set(
+        {
+          status: 'error',
+          lastError: 'Missing appId or moduleId.',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+      return null;
+    }
+
+    const firestore = admin.firestore();
+    let shouldProcess = false;
+    await firestore.runTransaction(async (tx) => {
+      const snap = await tx.get(jobRef);
+      if (!snap.exists) return;
+      const current = snap.data() || {};
+      if (current.status !== 'queued') return;
+      shouldProcess = true;
+      tx.set(
+        jobRef,
+        {
+          status: 'processing',
+          startedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    });
+
+    if (!shouldProcess) {
+      return null;
+    }
+
+    try {
+      const createdCaseId = await createGeneratedCase({
+        firestore,
+        appId,
+        moduleId,
+        createdBy: job.requestedBy || null,
+        orgId: job.orgId || null,
+      });
+
+      await jobRef.set(
+        {
+          status: 'completed',
+          createdCaseId,
+          completedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+    } catch (err) {
+      console.error('[processCasePoolReplenishmentJob] Failed to replenish case pool', err);
+      await jobRef.set(
+        {
+          status: 'error',
+          lastError: err?.message || 'Unknown replenishment error.',
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
     }
 
     return null;
