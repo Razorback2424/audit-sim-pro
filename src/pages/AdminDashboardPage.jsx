@@ -27,6 +27,7 @@ import { listCaseRecipes } from '../generation/recipeRegistry';
 import { fetchRecipe } from '../services/recipeService';
 import { seedCasePool } from '../services/attemptService';
 import { fetchDemoConfig, setDemoCase } from '../services/demoService';
+import demoCaseEligibility from '../shared/demoCaseEligibility';
 import AdvancedToolsMenu from '../components/admin/AdvancedToolsMenu';
 import DashboardMetrics from '../components/admin/DashboardMetrics';
 import SetupAlerts from '../components/admin/SetupAlerts';
@@ -76,6 +77,7 @@ const STATUS_BADGE_VARIANTS = {
 };
 
 const getStatusBadgeClass = (status) => STATUS_BADGE_VARIANTS[status] || STATUS_BADGE_VARIANTS.assigned;
+const { evaluateDemoCaseEligibility } = demoCaseEligibility;
 
 const formatTimestamp = (value) => {
   if (!value) return null;
@@ -225,6 +227,11 @@ export default function AdminDashboardPage() {
     };
   }, [refreshToken]);
 
+  const eligibleDemoCases = useMemo(
+    () => casesState.items.filter((caseData) => evaluateDemoCaseEligibility({ caseData }).eligible),
+    [casesState.items]
+  );
+
   const handleSetDemoCase = useCallback(async () => {
     const trimmed = demoCaseId.trim();
     if (!trimmed) {
@@ -232,6 +239,15 @@ export default function AdminDashboardPage() {
       return;
     }
     if (settingDemo) return;
+    const selectedCase = casesState.items.find((item) => item.id === trimmed);
+    const eligibility = evaluateDemoCaseEligibility({ caseData: selectedCase });
+    if (!selectedCase || !eligibility.eligible) {
+      showModal(
+        'Select a published, open, fully generated case for the demo.',
+        'Demo case unavailable'
+      );
+      return;
+    }
     setSettingDemo(true);
     setDemoError('');
     try {
@@ -267,7 +283,7 @@ export default function AdminDashboardPage() {
     } finally {
       setSettingDemo(false);
     }
-  }, [demoCaseId, demoBackfillPaid, demoQueueDocs, settingDemo, showModal]);
+  }, [casesState.items, demoCaseId, demoBackfillPaid, demoQueueDocs, settingDemo, showModal]);
   const handleSeedPool = useCallback(
     async ({ moduleId, count }) => {
       if (!moduleId) return;
@@ -1175,7 +1191,7 @@ export default function AdminDashboardPage() {
                 list="demo-case-options"
               />
               <datalist id="demo-case-options">
-                {casesState.items.map((caseData) => (
+                {eligibleDemoCases.map((caseData) => (
                   <option key={caseData.id} value={caseData.id}>
                     {caseData.caseName || caseData.title || caseData.id}
                   </option>
@@ -1184,6 +1200,9 @@ export default function AdminDashboardPage() {
               <div className="text-xs text-gray-500">
                 Current demo: {demoConfig?.caseId || 'Not configured'}
                 {demoConfig?.caseName ? ` · ${demoConfig.caseName}` : ''}
+              </div>
+              <div className="text-xs text-gray-500">
+                Only published, open, fully generated cases are eligible for the public demo.
               </div>
             </div>
             <div className="space-y-3">

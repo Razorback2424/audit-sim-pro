@@ -12,6 +12,7 @@ import { subscribeToRecentSubmissionActivity } from '../services/submissionServi
 import { fetchUsersWithProfiles } from '../services/userService';
 import { listCaseRecipes } from '../generation/recipeRegistry';
 import { fetchRecipe } from '../services/recipeService';
+import { fetchDemoConfig, setDemoCase } from '../services/demoService';
 
 const appCoreMocks = {};
 
@@ -40,6 +41,11 @@ jest.mock('../generation/recipeRegistry', () => ({
 
 jest.mock('../services/recipeService', () => ({
   fetchRecipe: jest.fn(),
+}));
+
+jest.mock('../services/demoService', () => ({
+  fetchDemoConfig: jest.fn(),
+  setDemoCase: jest.fn(),
 }));
 
 jest.mock('../AppCore', () => {
@@ -129,9 +135,56 @@ beforeEach(() => {
     },
   ]);
   fetchRecipe.mockResolvedValue(null);
+  fetchDemoConfig.mockResolvedValue(null);
+  setDemoCase.mockResolvedValue({ updatedCount: 1, generationStatus: 'ready' });
 });
 
 test('renders admin dashboard heading', async () => {
   render(<AdminDashboardPage />);
   await screen.findByText(/admin dashboard/i);
+});
+
+test('demo picker only lists eligible cases', async () => {
+  fetchCasesPage.mockResolvedValueOnce({
+    items: [
+      {
+        id: 'ready-case',
+        title: 'Ready Case',
+        _deleted: false,
+        status: 'assigned',
+        referenceDocuments: [{ fileName: 'invoice.pdf', storagePath: 'artifacts/app/case/file.pdf' }],
+        invoiceMappings: [],
+        cashArtifacts: [],
+      },
+      {
+        id: 'draft-case',
+        title: 'Draft Case',
+        _deleted: false,
+        status: 'draft',
+        referenceDocuments: [],
+        invoiceMappings: [],
+        cashArtifacts: [],
+      },
+    ],
+    total: 2,
+    page: 1,
+    requestedPage: 1,
+    pageSize: 12,
+    hasNextPage: false,
+    hasPreviousPage: false,
+    sort: DEFAULT_CASE_SORT,
+    search: '',
+    statusFilters: [],
+    visibilityFilters: [],
+  });
+
+  const { container } = render(<AdminDashboardPage />);
+  await screen.findByText(/only published, open, fully generated cases/i);
+
+  const optionValues = Array.from(container.querySelectorAll('#demo-case-options option')).map((node) =>
+    node.getAttribute('value')
+  );
+
+  expect(optionValues).toContain('ready-case');
+  expect(optionValues).not.toContain('draft-case');
 });

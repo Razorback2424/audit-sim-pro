@@ -14,6 +14,7 @@ const {
   queuePoolReplenishmentJob,
   shouldQueuePoolReplenishment,
 } = require('./poolBackfill');
+const { evaluateDemoCaseEligibility, isCaseReadyForDemo } = require('../../../src/shared/demoCaseEligibility');
 
 const ANSWER_TOLERANCE = 0.01;
 const CLASSIFICATION_KEYS = Object.freeze([
@@ -392,43 +393,8 @@ const stripUndefinedDeep = (value) => {
   return value;
 };
 
-const hasReadyFile = (doc) => {
-  if (!doc || typeof doc !== 'object') return false;
-  return Boolean(doc.downloadURL || doc.storagePath);
-};
-
-const hasPendingGeneratedDoc = (doc) => {
-  if (!doc || typeof doc !== 'object') return false;
-  const hasSpec = Boolean(doc.generationSpec || doc.generationSpecId);
-  return hasSpec && !hasReadyFile(doc);
-};
-
-const hasMissingArtifact = (doc) => {
-  if (!doc || typeof doc !== 'object') return false;
-  const hasFileName = typeof doc.fileName === 'string' && doc.fileName.trim();
-  return hasFileName && !hasReadyFile(doc);
-};
-
 const isCaseReady = (caseData) => {
-  if (!caseData || typeof caseData !== 'object') return false;
-  const referenceDocuments = Array.isArray(caseData.referenceDocuments) ? caseData.referenceDocuments : [];
-  const invoiceMappings = Array.isArray(caseData.invoiceMappings) ? caseData.invoiceMappings : [];
-  const cashArtifacts = Array.isArray(caseData.cashArtifacts) ? caseData.cashArtifacts : [];
-
-  const pendingGenerated = referenceDocuments.some(hasPendingGeneratedDoc) ||
-    invoiceMappings.some(hasPendingGeneratedDoc);
-
-  if (pendingGenerated) return false;
-
-  const missingCashArtifacts = cashArtifacts.some((doc) => {
-    const type = typeof doc?.type === 'string' ? doc.type.trim() : '';
-    if (!type) return false;
-    return hasMissingArtifact(doc);
-  });
-
-  if (missingCashArtifacts) return false;
-
-  return true;
+  return isCaseReadyForDemo(caseData);
 };
 
 const queueGenerationJob = async ({ firestore, appId, caseId, plan, phaseId, requestedBy, orgId }) => {
@@ -2957,8 +2923,20 @@ exports.setDemoCase = callable.https.onCall(async (data, context) => {
       throw new functions.https.HttpsError('not-found', 'Case not found.');
     }
     const caseData = caseSnap.data() || {};
-    if (caseData._deleted === true) {
-      throw new functions.https.HttpsError('failed-precondition', 'Cannot set a deleted case as demo.');
+    const eligibility = evaluateDemoCaseEligibility({ caseData });
+    if (!eligibility.eligible) {
+      const messages = {
+        case_deleted: 'Cannot set a deleted case as demo.',
+        case_draft: 'Only published cases can be set as demo.',
+        case_archived: 'Archived cases cannot be set as demo.',
+        case_not_open: 'Only currently open cases can be set as demo.',
+        case_not_ready: 'Only fully generated, ready cases can be set as demo.',
+        case_missing: 'Case not found.',
+      };
+      throw new functions.https.HttpsError(
+        'failed-precondition',
+        messages[eligibility.reason] || 'Case is not eligible to be set as demo.'
+      );
     }
 
     const demoPatch = {
@@ -3008,33 +2986,8 @@ exports.setDemoCase = callable.https.onCall(async (data, context) => {
       { merge: true }
     );
 
-    let generationJobId = null;
-    let generationStatus = null;
-    if (queueDocuments) {
-      const needsGeneration = !isCaseReady(caseData);
-      if (needsGeneration) {
-        const planSnap = await firestore
-          .doc(`artifacts/${appId}/private/data/case_generation_plans/${caseId}`)
-          .get();
-        const plan = planSnap.exists ? planSnap.data()?.plan : null;
-        if (plan) {
-          const job = await queueGenerationJob({
-            firestore,
-            appId,
-            caseId,
-            plan,
-            requestedBy: context.auth.uid,
-            orgId: null,
-          });
-          generationJobId = job?.jobId || null;
-          generationStatus = job?.status || null;
-        } else {
-          generationStatus = 'missing-plan';
-        }
-      } else {
-        generationStatus = 'ready';
-      }
-    }
+    const generationJobId = null;
+    const generationStatus = queueDocuments ? 'ready' : null;
 
     return {
       demoCaseId: caseId,
