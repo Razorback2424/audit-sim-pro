@@ -410,6 +410,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
   const [selectedDisbursements, setSelectedDisbursements] = useState({});
   const [classificationAmounts, setClassificationAmounts] = useState({});
   const [isLocked, setIsLocked] = useState(false);
+  const [isSubmittingTest, setIsSubmittingTest] = useState(false);
   const [activeEvidenceId, setActiveEvidenceId] = useState(null);
   const [activePaymentId, setActivePaymentId] = useState(null);
   const [activeEvidenceUrl, setActiveEvidenceUrl] = useState(null);
@@ -550,6 +551,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
   const completenessGateResultRef = useRef(completenessGateResult);
   const gateFailuresRef = useRef(gateFailures);
   const attemptStartedAtRef = useRef(null);
+  const clientSubmissionIdRef = useRef(null);
   const selectedIdsRef = useRef([]);
   const classifiedCountRef = useRef(0);
   const isLockedRef = useRef(false);
@@ -2417,6 +2419,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
 
   const handleSubmitTesting = async () => {
     if (!caseData || selectedIds.length === 0) return;
+    if (isSubmittingTest || isLocked) return;
 
     const allocationPayload = {};
     const invalidAllocations = [];
@@ -2502,8 +2505,11 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
       },
     });
 
+    if (!clientSubmissionIdRef.current) {
+      clientSubmissionIdRef.current = getUUID();
+    }
     const submissionPayload = {
-      clientSubmissionId: getUUID(),
+      clientSubmissionId: clientSubmissionIdRef.current,
       caseId,
       caseName: caseTitle,
       selectedPaymentIds: selectedIds,
@@ -2541,6 +2547,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     }
 
     try {
+      setIsSubmittingTest(true);
       if (progressSaveTimeoutRef.current) {
         clearTimeout(progressSaveTimeoutRef.current);
       }
@@ -2577,6 +2584,9 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     } catch (error) {
       console.error('Error saving submission:', error);
       showModal('Error saving submission: ' + error.message, 'Error');
+      clientSubmissionIdRef.current = null;
+    } finally {
+      setIsSubmittingTest(false);
     }
   };
 
@@ -3835,7 +3845,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
                   <Button variant="secondary" onClick={() => updateActiveStep(FLOW_STEPS.SELECTION)} disabled={isLocked}>
                     Back to Selection
                   </Button>
-                  <Button onClick={handleSubmitTesting} disabled={!allClassified || isLocked}>
+                  <Button onClick={handleSubmitTesting} disabled={!allClassified || isLocked || isSubmittingTest} isLoading={isSubmittingTest}>
                     <Send size={18} className="inline mr-2" /> Submit Responses
                   </Button>
                 </div>

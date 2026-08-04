@@ -18,36 +18,39 @@ import { httpsCallable } from 'firebase/functions';
 
 const DEBUG_LOGS = process.env.REACT_APP_DEBUG_LOGS === 'true';
 
+// Fields a trainee draft/module save is allowed to write. Deliberately excludes
+// grade, gradedAt, gradingDetails, virtualSeniorFeedback, scoredBy, and attempts —
+// those are server-owned (see scoreCaseAttempt) and Firestore rules reject any
+// client write that touches them.
+const SAVE_SUBMISSION_ALLOWED_FIELDS = [
+  'selectedPaymentIds',
+  'retrievedDocuments',
+  'disbursementClassifications',
+  'expectedClassifications',
+  'workspaceNotes',
+  'fixedAssetResponses',
+  'outstandingCheckTesting',
+  'attemptSummary',
+  'cashLinkMap',
+  'cashAdjustments',
+  'cashSummary',
+  'cashLedgerStatuses',
+];
+
 export const saveSubmission = async (userId, caseId, data) => {
   const ref = doc(db, FirestorePaths.USER_CASE_SUBMISSION(userId, caseId));
-  // The `data` object already contains a client-side timestamp.
-  // Do not use serverTimestamp() inside an arrayUnion element.
-  const {
-    grade,
-    gradedAt,
-    gradingDetails,
-    virtualSeniorFeedback,
-    status,
-    ...attemptData
-  } = data || {};
+  const { status, ...attemptData } = data || {};
   const docPayload = {
     submittedAt: serverTimestamp(), // This sets the last update time for the document itself.
   };
 
   if (status) docPayload.status = status === 'submitted' ? 'in_progress' : status;
 
-  ['selectedPaymentIds', 'retrievedDocuments', 'disbursementClassifications', 'expectedClassifications', 'workspaceNotes', 'fixedAssetResponses'].forEach(
-    (key) => {
-      if (attemptData[key] !== undefined) {
-        docPayload[key] = attemptData[key];
-      }
+  SAVE_SUBMISSION_ALLOWED_FIELDS.forEach((key) => {
+    if (attemptData[key] !== undefined) {
+      docPayload[key] = attemptData[key];
     }
-  );
-
-  if (grade !== undefined) docPayload.grade = grade;
-  if (gradedAt) docPayload.gradedAt = gradedAt;
-  if (gradingDetails) docPayload.gradingDetails = gradingDetails;
-  if (virtualSeniorFeedback) docPayload.virtualSeniorFeedback = virtualSeniorFeedback;
+  });
 
   await setDoc(
     ref,
