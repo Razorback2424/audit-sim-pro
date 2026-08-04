@@ -7,6 +7,7 @@ import RoleRoute from './routes/RoleRoute';
 import AppLayout from './components/layout/AppLayout';
 import LoginPage from './pages/LoginPage';
 import RegistrationPage from './pages/RegistrationPage';
+import InviteAcceptancePage from './pages/InviteAcceptancePage';
 import RoleSelectionPage from './pages/RoleSelectionPage';
 import UnauthorizedPage from './pages/UnauthorizedPage';
 import AdminDashboardPage from './pages/AdminDashboardPage';
@@ -65,6 +66,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegistrationPage />} />
+      <Route path="/invite/accept" element={<InviteAcceptancePage />} />
       <Route path="/unauthorized" element={<UnauthorizedPage />} />
       <Route path="/" element={<LandingPage />} />
       <Route path="/demo/surl" element={<DemoSurlEntryPage />} />

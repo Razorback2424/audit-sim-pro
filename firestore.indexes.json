@@ -127,6 +127,21 @@
   ],
   "fieldOverrides": [
     {
+      "collectionGroup": "invitations",
+      "fieldPath": "tokenHash",
+      "ttl": false,
+      "indexes": [
+        {
+          "order": "ASCENDING",
+          "queryScope": "COLLECTION"
+        },
+        {
+          "order": "ASCENDING",
+          "queryScope": "COLLECTION_GROUP"
+        }
+      ]
+    },
+    {
       "collectionGroup": "caseSubmissions",
       "fieldPath": "submittedAt",
       "ttl": false,

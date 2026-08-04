@@ -14,6 +14,8 @@ const REQUIRED = [
   'STRIPE_WEBHOOK_SECRET',
   'STRIPE_PRICE_INDIVIDUAL',
   'STRIPE_PRICE_INDIVIDUAL_ANNUAL',
+  'INVITE_EMAIL_ENDPOINT',
+  'INVITE_EMAIL_API_KEY',
 ];
 
 const OPTIONAL = ['FIREBASE_STORAGE_BUCKET', 'STORAGE_BUCKET', 'GCLOUD_PROJECT'];
@@ -106,6 +108,15 @@ if (env.APP_BASE_URL) {
     }
   } catch {
     errors.push('APP_BASE_URL is not a valid URL');
+  }
+}
+
+if (env.INVITE_EMAIL_ENDPOINT) {
+  try {
+    const inviteUrl = new URL(env.INVITE_EMAIL_ENDPOINT);
+    if (inviteUrl.protocol !== 'https:') warnings.push('INVITE_EMAIL_ENDPOINT is not https.');
+  } catch {
+    errors.push('INVITE_EMAIL_ENDPOINT is not a valid URL');
   }
 }
 

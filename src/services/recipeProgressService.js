@@ -1,5 +1,6 @@
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { db, FirestorePaths } from '../AppCore';
+import { doc, getDoc } from 'firebase/firestore';
+import { db, FirestorePaths, functions } from '../AppCore';
+import { httpsCallable } from 'firebase/functions';
 import { toRecipeProgressModel } from '../models/recipeProgress';
 
 export const fetchRecipeProgress = async ({ appId, uid, recipeId }) => {
@@ -15,7 +16,7 @@ export const fetchRecipeProgress = async ({ appId, uid, recipeId }) => {
   return toRecipeProgressModel(snapshot.data(), recipeId);
 };
 
-export const saveRecipeProgress = async ({ appId, uid, recipeId, passedVersion }) => {
+export const saveRecipeProgress = async ({ appId, uid, caseId, recipeId, passedVersion, selectedOptionId }) => {
   if (!appId || !uid || !recipeId) {
     throw new Error('saveRecipeProgress requires appId, uid, and recipeId.');
   }
@@ -24,14 +25,16 @@ export const saveRecipeProgress = async ({ appId, uid, recipeId, passedVersion }
     throw new Error('saveRecipeProgress requires a valid passedVersion.');
   }
 
-  const progressRef = doc(db, FirestorePaths.STUDENT_RECIPE_PROGRESS_DOCUMENT(appId, uid, recipeId));
-  await setDoc(
-    progressRef,
-    {
-      passedVersion: normalizedVersion,
-      passedAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    },
-    { merge: true }
-  );
+  if (!caseId || !selectedOptionId) {
+    throw new Error('saveRecipeProgress requires caseId and selectedOptionId.');
+  }
+  const callable = httpsCallable(functions, 'recordRecipeGateCompletion');
+  const result = await callable({ appId, caseId, recipeId, recipeVersion: normalizedVersion, selectedOptionId });
+  return result?.data || null;
+};
+
+export const recordRecipeGateCompletion = async ({ appId, caseId, recipeId, recipeVersion, selectedOptionId }) => {
+  const callable = httpsCallable(functions, 'recordRecipeGateCompletion');
+  const result = await callable({ appId, caseId, recipeId, recipeVersion, selectedOptionId });
+  return result?.data || null;
 };

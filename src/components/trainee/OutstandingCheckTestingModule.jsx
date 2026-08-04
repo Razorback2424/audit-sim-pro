@@ -643,20 +643,24 @@ export default function OutstandingCheckTestingModule({ caseId, caseData, userId
     };
   }, []);
 
-  const handleEnterSimulation = useCallback(() => {
+  const handleEnterSimulation = useCallback(async (selectedOptionId) => {
     if (isLocked) return;
     if (!gatePassed && recipeGateId && userId) {
-      setRecipeProgress({ recipeId: recipeGateId, passedVersion: recipeVersion, passedAt: null });
-      saveRecipeProgress({ appId, uid: userId, recipeId: recipeGateId, passedVersion: recipeVersion }).catch((error) => {
+      try {
+        await saveRecipeProgress({ appId, uid: userId, caseId, recipeId: recipeGateId, passedVersion: recipeVersion, selectedOptionId });
+      } catch (error) {
         console.error('Failed to save recipe progress:', error);
-      });
+        showModal?.('The knowledge check could not be confirmed. Please try again.', 'Gate Check Error');
+        return;
+      }
+      setRecipeProgress({ recipeId: recipeGateId, passedVersion: recipeVersion, passedAt: null });
     }
     if (!attemptStartedAtRef.current) {
       attemptStartedAtRef.current = Date.now();
     }
     enqueueProgressSave(firstPostInstructionStep);
     setActiveStep(firstPostInstructionStep);
-  }, [gatePassed, recipeGateId, recipeVersion, userId, isLocked, enqueueProgressSave, firstPostInstructionStep]);
+  }, [gatePassed, recipeGateId, recipeVersion, userId, caseId, isLocked, enqueueProgressSave, firstPostInstructionStep, showModal]);
 
   const toggleSelection = (checkNo) => {
     if (isLocked) return;

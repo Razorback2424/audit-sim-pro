@@ -216,7 +216,7 @@ export default function InstructorDashboardPage() {
   );
 
   const handleAddSeats = () => {
-    showModal(<InviteSeatsModal />, 'Add seats', () => null);
+    showModal(<InviteSeatsModal orgId={userProfile?.orgId} />, 'Invite trainees', () => null);
   };
 
   if (role !== ROLES.INSTRUCTOR && role !== ROLES.OWNER) {

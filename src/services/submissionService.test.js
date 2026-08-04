@@ -11,7 +11,6 @@ import {
   getDocs,
   collection,
   serverTimestamp,
-  arrayUnion,
   onSnapshot,
   Timestamp,
 } from 'firebase/firestore';
@@ -23,7 +22,6 @@ jest.mock('firebase/firestore', () => ({
   getDocs: jest.fn(),
   collection: jest.fn(),
   serverTimestamp: jest.fn(() => 'now'),
-  arrayUnion: jest.fn((v) => v),
   collectionGroup: jest.fn(() => 'collectionGroup'),
   query: jest.fn((...args) => ({ type: 'query', args })),
   orderBy: jest.fn((...args) => ({ type: 'orderBy', args })),
@@ -74,8 +72,7 @@ describe('submissionService', () => {
     expect(setDoc).toHaveBeenCalled();
   });
 
-  test('saveSubmission normalizes attempt metadata', async () => {
-    getDoc.mockResolvedValue({ data: () => ({ attempts: [{}, {}] }) });
+  test('saveSubmission does not write finalized attempt history', async () => {
     await saveSubmission('u1', 'c1', {
       caseId: 'c1',
       caseName: 'Case',
@@ -91,17 +88,7 @@ describe('submissionService', () => {
     });
 
     const [, payload] = setDoc.mock.calls[0];
-    expect(arrayUnion).toHaveBeenCalledWith(
-      expect.objectContaining({
-        attemptIndex: 3,
-        attemptType: 'practice',
-        attemptSummary: expect.objectContaining({
-          attemptIndex: 3,
-          attemptType: 'practice',
-          isBaseline: false,
-        }),
-      })
-    );
+    expect(payload.attempts).toBeUndefined();
   });
 
   test('fetchSubmission returns single submission', async () => {

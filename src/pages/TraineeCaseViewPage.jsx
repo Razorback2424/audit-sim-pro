@@ -8,6 +8,7 @@ import { startCaseAttemptFromPool } from '../services/attemptService';
 import { isBillingPaid } from '../services/billingService';
 import { ANALYTICS_EVENTS, trackAnalyticsEvent } from '../services/analyticsService';
 import { getSignedDocumentUrl } from '../services/documentService';
+import getUUID from '../utils/getUUID';
 import { Send, Loader2, ExternalLink, Download } from 'lucide-react';
 import ResultsAnalysis from '../components/trainee/ResultsAnalysis';
 import AuditItemCardFactory from '../components/trainee/AuditItemCardFactory';
@@ -2037,15 +2038,19 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     [enqueueProgressSave]
   );
 
-  const handleEnterSimulation = useCallback(() => {
+  const handleEnterSimulation = useCallback(async (selectedOptionId) => {
     if (isLocked) return;
     if (!gatePassed && recipeGateId) {
-      setRecipeProgress({ recipeId: recipeGateId, passedVersion: recipeVersion, passedAt: null });
       if (canPersist) {
-        saveRecipeProgress({ appId, uid: userId, recipeId: recipeGateId, passedVersion: recipeVersion }).catch((error) => {
+        try {
+          await saveRecipeProgress({ appId, uid: userId, caseId, recipeId: recipeGateId, passedVersion: recipeVersion, selectedOptionId });
+        } catch (error) {
           console.error('Failed to save recipe progress:', error);
-        });
+          showModal('The knowledge check could not be confirmed. Please try again.', 'Gate Check Error');
+          return;
+        }
       }
+      setRecipeProgress({ recipeId: recipeGateId, passedVersion: recipeVersion, passedAt: null });
     }
     if (!attemptStartedAtRef.current) {
       attemptStartedAtRef.current = Date.now();
@@ -2053,7 +2058,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     lastLocalChangeRef.current = Date.now();
     enqueueProgressSave(firstPostInstructionStep);
     setActiveStep(firstPostInstructionStep);
-  }, [gatePassed, recipeGateId, recipeVersion, canPersist, userId, isLocked, enqueueProgressSave, firstPostInstructionStep]);
+  }, [gatePassed, recipeGateId, recipeVersion, canPersist, userId, caseId, isLocked, enqueueProgressSave, firstPostInstructionStep, showModal]);
 
   const updateActiveStep = useCallback(
     (stepKey) => {
@@ -2498,6 +2503,7 @@ export default function TraineeCaseViewPage({ params, demoMode = false }) {
     });
 
     const submissionPayload = {
+      clientSubmissionId: getUUID(),
       caseId,
       caseName: caseTitle,
       selectedPaymentIds: selectedIds,

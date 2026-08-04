@@ -282,6 +282,23 @@ service cloud.firestore {
              gradeFieldUnchanged('scoredBy');
     }
 
+    function submissionAttemptsUnchanged() {
+      return !('attempts' in request.resource.data) ||
+             (('attempts' in resource.data) && request.resource.data.attempts == resource.data.attempts);
+    }
+
+    function profileIdentityUnchanged() {
+      return (!(('role' in request.resource.data)) || request.resource.data.role == resource.data.role) &&
+             (!(('orgId' in request.resource.data)) || request.resource.data.orgId == resource.data.orgId);
+    }
+
+    // Case assignment (visibleToUserIds) is server-owned; instructors may only change it
+    // via the updateCaseAssignments callable (Admin SDK writes bypass these rules).
+    function caseAssignmentFieldLocked() {
+      return !('visibleToUserIds' in request.resource.data) ||
+             (('visibleToUserIds' in resource.data) && request.resource.data.visibleToUserIds == resource.data.visibleToUserIds);
+    }
+
     // Role documents store whether a user is an admin, owner, or trainee
     match /roles/{userId} {
       // Allow users to read their own role document (optional for UI display).
@@ -312,7 +329,8 @@ service cloud.firestore {
           (
             isInstructor() &&
             request.resource.data.orgId == request.auth.token.orgId &&
-            isValidCaseDocument()
+            isValidCaseDocument() &&
+            caseAssignmentFieldLocked()
           ) ||
           (
             traineeCaseCreateAllowed() &&
@@ -325,7 +343,8 @@ service cloud.firestore {
           (
             isInstructor() &&
             resource.data.orgId == request.auth.token.orgId &&
-            isValidCaseDocument()
+            isValidCaseDocument() &&
+            caseAssignmentFieldLocked()
           )
         );
       allow delete: if request.auth != null && isAdmin();
@@ -365,7 +384,9 @@ service cloud.firestore {
 
     match /artifacts/{appId}/users/{userId}/userProfileData/profile {
       allow read: if request.auth != null && (request.auth.uid == userId || isAdmin());
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null && request.auth.uid == userId &&
+                    !('role' in request.resource.data) && !('orgId' in request.resource.data);
+      allow update: if request.auth != null && request.auth.uid == userId && profileIdentityUnchanged();
     }
 
     function isSubmissionOwner(path) {
@@ -380,8 +401,14 @@ service cloud.firestore {
       allow create, update: if request.auth != null &&
                                request.auth.uid == userId &&
                                isTrainee() &&
-                               submissionSystemFieldsUnchanged();
+                               submissionSystemFieldsUnchanged() &&
+                               submissionAttemptsUnchanged();
       allow delete: if false;
+    }
+
+    match /artifacts/{appId}/users/{userId}/caseSubmissions/{caseId}/attempts/{attemptId} {
+      allow read: if request.auth != null && (isAdmin() || request.auth.uid == userId);
+      allow write: if false;
     }
 
     // User billing status (server-writable only)
@@ -395,7 +422,8 @@ service cloud.firestore {
       allow create, update: if request.auth != null &&
                                isSubmissionOwner(path) &&
                                isTrainee() &&
-                               submissionSystemFieldsUnchanged();
+                               submissionSystemFieldsUnchanged() &&
+                               submissionAttemptsUnchanged();
       allow delete: if false;
     }
 
@@ -412,7 +440,8 @@ service cloud.firestore {
 
     // Recipe progress (gate completion) is private to each user
     match /artifacts/{appId}/student_progress/{uid}/recipes/{recipeId} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
     }
 
     // Recipe documents provide module instructions/gates

@@ -9,6 +9,8 @@ const progressPath = `artifacts/${appId}/student_progress/${uid}/cases/${caseId}
 const otherUserProgressPath = `artifacts/${appId}/student_progress/other-user/cases/${caseId}`;
 const demoDraftCasePath = `artifacts/${appId}/public/data/cases/demo-draft`;
 const demoLiveCasePath = `artifacts/${appId}/public/data/cases/demo-live`;
+const orgId = 'org-1';
+const instructorCasePath = `artifacts/${appId}/public/data/cases/instructor-case-1`;
 
 const toBase64Url = (value) =>
   Buffer.from(JSON.stringify(value))
@@ -77,6 +79,7 @@ const assertStatus = (result, expectedStatus, label) => {
 
 const traineeToken = buildAuthToken(uid, { role: 'trainee' });
 const adminToken = buildAuthToken('admin-1', { role: 'admin' });
+const instructorToken = buildAuthToken('instructor-1', { role: 'instructor', orgId });
 
 const createSubmission = {
   update: {
@@ -100,6 +103,27 @@ const mutateProtectedField = {
     },
   },
   currentDocument: { exists: true },
+};
+
+const mutateAttemptHistory = {
+  update: {
+    name: firestoreDocName(submissionPath),
+    fields: {
+      attempts: {
+        arrayValue: {
+          values: [{ mapValue: { fields: { attemptId: { stringValue: 'forged-attempt' } } } }],
+        },
+      },
+    },
+  },
+  currentDocument: { exists: true },
+};
+
+const mutateRecipeProgress = {
+  update: {
+    name: firestoreDocName(`artifacts/${appId}/student_progress/${uid}/recipes/recipe-1`),
+    fields: { passedVersion: { integerValue: '99' } },
+  },
 };
 
 const buildProgressWrite = ({ path, step }) => ({
@@ -141,21 +165,60 @@ const buildCaseWrite = ({ path, status }) => ({
   },
 });
 
+const seedInstructorCase = {
+  update: {
+    name: firestoreDocName(instructorCasePath),
+    fields: {
+      title: { stringValue: 'Instructor Org Case' },
+      status: { stringValue: 'assigned' },
+      publicVisible: { booleanValue: true },
+      accessLevel: { stringValue: 'demo' },
+      _deleted: { booleanValue: false },
+      orgId: { stringValue: orgId },
+    },
+  },
+};
+
+const directCaseAssignmentWrite = {
+  update: {
+    name: firestoreDocName(instructorCasePath),
+    fields: {
+      status: { stringValue: 'assigned' },
+      publicVisible: { booleanValue: false },
+      _deleted: { booleanValue: false },
+      updatedAt: { timestampValue: new Date().toISOString() },
+      createdAt: { timestampValue: new Date().toISOString() },
+      visibleToUserIds: { arrayValue: { values: [{ stringValue: 'unassigned-trainee' }] } },
+    },
+  },
+  currentDocument: { exists: true },
+};
+
 const run = async () => {
   const seedDemoCases = await commitWrites(
     [
       buildCaseWrite({ path: demoDraftCasePath, status: 'draft' }),
       buildCaseWrite({ path: demoLiveCasePath, status: 'assigned' }),
+      seedInstructorCase,
     ],
     adminToken
   );
   assertStatus(seedDemoCases, 200, 'seed demo cases for anonymous access checks');
+
+  const denyDirectCaseAssignment = await commitWrites([directCaseAssignmentWrite], instructorToken);
+  assertStatus(denyDirectCaseAssignment, 403, 'deny instructor direct write of case visibleToUserIds');
 
   const allowCreate = await commitWrites([createSubmission], traineeToken);
   assertStatus(allowCreate, 200, 'allow trainee create without protected fields');
 
   const denyGradeMutation = await commitWrites([mutateProtectedField], traineeToken);
   assertStatus(denyGradeMutation, 403, 'deny trainee mutation of protected grade field');
+
+  const denyAttemptMutation = await commitWrites([mutateAttemptHistory], traineeToken);
+  assertStatus(denyAttemptMutation, 403, 'deny trainee mutation of finalized attempt history');
+
+  const denyRecipeProgressMutation = await commitWrites([mutateRecipeProgress], traineeToken);
+  assertStatus(denyRecipeProgressMutation, 403, 'deny trainee mutation of recipe gate progress');
 
   const allowInstructionProgress = await commitWrites(
     [buildProgressWrite({ path: progressPath, step: 'instruction' })],

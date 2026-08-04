@@ -1,6 +1,7 @@
 import { Timestamp } from 'firebase/firestore';
 import { appId } from '../AppCore';
 import { createCase, updateCase } from '../services/caseService';
+import { updateCaseAssignments } from '../services/caseAssignmentService';
 import { getCurrentUserOrgId } from '../services/userService';
 import getUUID from '../utils/getUUID';
 import { mergeDisbursementDocuments } from '../utils/caseFormTransforms';
@@ -695,7 +696,6 @@ export function createCaseFormSubmitHandler({
           disbursements: preUploadDisbursements,
           invoiceMappings: [],
           referenceDocuments: [],
-          visibleToUserIds: visibleToUserIdsArray,
           publicVisible: resolvedPublicVisible,
           status,
           opensAt: opensAtTs,
@@ -906,7 +906,6 @@ export function createCaseFormSubmitHandler({
         disbursements: disbursementPayload,
         invoiceMappings: finalInvoiceMappings,
         referenceDocuments: finalReferenceDocuments,
-        visibleToUserIds: visibleToUserIdsArray,
         publicVisible: resolvedPublicVisible,
         status,
         opensAt: opensAtTs,
@@ -963,6 +962,7 @@ export function createCaseFormSubmitHandler({
       });
 
       await updateCase(currentCaseId, caseDataPayload);
+      await updateCaseAssignments({ caseId: currentCaseId, userIds: visibleToUserIdsArray });
 
     const uploadedArtifactsCount =
       uploadedMappings.length +

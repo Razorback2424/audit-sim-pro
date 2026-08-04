@@ -76,7 +76,7 @@ const InstructionView = ({
           'Clear for takeoff. Enter the cockpit.',
       });
       onGateAttempt?.({ correct: true, selectedOptionId });
-      onStartSimulation?.();
+      onStartSimulation?.(selectedOptionId);
     } else {
       setFeedback({ type: 'error', message: failureMessage });
       onGateAttempt?.({ correct: false, selectedOptionId });

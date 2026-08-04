@@ -1,4 +1,5 @@
 const { functions, onDocumentWritten, admin, callable } = require('../shared/firebaseAdmin');
+const crypto = require('crypto');
 const { getTemplateRenderer } = require('../../pdfTemplates');
 const { assertNoFieldValueInArrays } = require('../../utils/firestoreGuards');
 const { buildCaseDraftFromRecipe } = require('../../generation/buildCaseDraft');
@@ -2759,12 +2760,23 @@ exports.scoreCaseAttempt = callable.https.onCall(async (data, context) => {
     gradingDetails: _ignoredGradingDetails,
     virtualSeniorFeedback: _ignoredFeedback,
     attemptSummary: _ignoredAttemptSummary,
-    status,
     ...attemptData
   } = submission;
 
+  const clientSubmissionId = typeof submission.clientSubmissionId === 'string'
+    ? submission.clientSubmissionId.trim()
+    : '';
+  const attemptId = clientSubmissionId
+    ? crypto.createHash('sha256').update(`${uid}|${appId}|${caseId}|${clientSubmissionId}`).digest('hex').slice(0, 32)
+    : admin.firestore().collection('_attempt_ids').doc().id;
   const attemptPayload = {
     ...attemptData,
+    attemptId,
+    uid,
+    caseId,
+    caseVersion: caseData.updatedAt || null,
+    recipeVersion: caseData.recipeVersion || caseData.instruction?.version || null,
+    clientSubmissionId: clientSubmissionId || null,
     attemptIndex,
     attemptType,
     submittedAt: admin.firestore.Timestamp.now(),
@@ -2781,7 +2793,7 @@ exports.scoreCaseAttempt = callable.https.onCall(async (data, context) => {
     scoredBy: 'callable',
   };
 
-  if (status) docPayload.status = status;
+  docPayload.status = 'submitted';
 
   [
     'selectedPaymentIds',
@@ -2796,7 +2808,33 @@ exports.scoreCaseAttempt = callable.https.onCall(async (data, context) => {
     }
   });
 
-  await submissionRef.set(docPayload, { merge: true });
+  const duplicateResult = await firestore.runTransaction(async (tx) => {
+    if (!clientSubmissionId) {
+      tx.set(submissionRef, docPayload, { merge: true });
+      return null;
+    }
+    const existingSnap = await tx.get(submissionRef);
+    const existingAttempt = (Array.isArray(existingSnap.data()?.attempts) ? existingSnap.data().attempts : [])
+      .find((attempt) => attempt?.clientSubmissionId === clientSubmissionId);
+    if (existingAttempt) {
+      return {
+        grade: existingSnap.data()?.grade ?? null,
+        gradingDetails: existingSnap.data()?.gradingDetails || null,
+        virtualSeniorFeedback: existingSnap.data()?.virtualSeniorFeedback || [],
+        attemptSummary: existingAttempt.attemptSummary || null,
+        attemptIndex: existingAttempt.attemptIndex || null,
+        attemptType: existingAttempt.attemptType || null,
+        attemptId: existingAttempt.attemptId || attemptId,
+        duplicate: true,
+      };
+    }
+    tx.set(submissionRef, docPayload, { merge: true });
+    return null;
+  });
+
+  if (duplicateResult) {
+    return duplicateResult;
+  }
 
   try {
     const feedbackSignalProps = buildFeedbackSignalProps(gradingOutput.virtualSeniorFeedback);
@@ -2808,6 +2846,7 @@ exports.scoreCaseAttempt = callable.https.onCall(async (data, context) => {
       props: {
         ...feedbackSignalProps,
         attemptIndex,
+        attemptId,
         attemptType,
         criticalIssuesCount: attemptSummary.criticalIssuesCount,
       },
@@ -2824,6 +2863,7 @@ exports.scoreCaseAttempt = callable.https.onCall(async (data, context) => {
     virtualSeniorFeedback: gradingOutput.virtualSeniorFeedback,
     attemptSummary,
     attemptIndex,
+    attemptId,
     attemptType,
   };
 });
