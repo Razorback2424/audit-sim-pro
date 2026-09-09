@@ -16,6 +16,7 @@ const {
   shouldQueuePoolReplenishment,
 } = require('./poolBackfill');
 const { evaluateDemoCaseEligibility, isCaseReadyForDemo } = require('../../../src/shared/demoCaseEligibility');
+const { sanitizeTemplateData } = require('./templateDocValidation');
 
 const ANSWER_TOLERANCE = 0.01;
 const CLASSIFICATION_KEYS = Object.freeze([
@@ -3128,6 +3129,109 @@ exports.generateDebugRefdoc = functions
     const message = err?.message || 'Failed to generate debug reference document.';
     throw new functions.https.HttpsError('internal', message);
   }
+  });
+
+exports.generateTemplateDoc = functions
+  .runWith({ enforceAppCheck: true, memory: '512MB', timeoutSeconds: 60 })
+  .https.onCall(async (data, context) => {
+    try {
+      if (!context.auth) {
+        throw new functions.https.HttpsError('unauthenticated', 'Authentication required.');
+      }
+
+      const appId = data?.appId;
+      const templateId = data?.templateId;
+
+      if (!appId || typeof appId !== 'string') {
+        throw new functions.https.HttpsError('invalid-argument', 'appId is required.');
+      }
+      if (!templateId || typeof templateId !== 'string') {
+        throw new functions.https.HttpsError('invalid-argument', 'templateId is required.');
+      }
+
+      const firestore = admin.firestore();
+      const { resolvedRole } = await resolveRequesterIdentity({
+        context,
+        appId,
+        firestore,
+        logLabel: 'generateTemplateDoc',
+      });
+
+      if (resolvedRole !== 'admin' && resolvedRole !== 'owner') {
+        throw new functions.https.HttpsError('permission-denied', 'Admin access required.');
+      }
+
+      let sanitizedData;
+      try {
+        sanitizedData = sanitizeTemplateData(templateId, data?.data);
+      } catch (err) {
+        throw new functions.https.HttpsError(
+          'invalid-argument',
+          err?.message || 'Invalid document data.'
+        );
+      }
+
+      let renderer;
+      try {
+        renderer = getTemplateRenderer(templateId);
+      } catch (err) {
+        throw new functions.https.HttpsError('not-found', err?.message || `Unknown templateId: ${templateId}`);
+      }
+
+      const { html, css, pdfOptions } = renderer({
+        data: sanitizedData,
+        theme: {},
+        layout: {},
+      });
+      const fullHtml = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>${css}</style>
+</head>
+<body>${html}</body>
+</html>`;
+      const buffer = await renderPdfFromHtml(fullHtml, pdfOptions || {});
+      const maxPdfBytes = 6 * 1024 * 1024;
+      if (!buffer || buffer.length > maxPdfBytes) {
+        throw new functions.https.HttpsError(
+          'resource-exhausted',
+          'Generated PDF is too large to return to the browser.'
+        );
+      }
+
+      const safeTemplate = String(templateId).replace(/[^\w.\-]/g, '_');
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const fileName = `${safeTemplate}-${timestamp}.pdf`;
+      const rowCount = Array.isArray(sanitizedData.rows)
+        ? sanitizedData.rows.length
+        : Array.isArray(sanitizedData.items)
+          ? sanitizedData.items.length
+          : 0;
+      console.info('[generateTemplateDoc] Generated template document', {
+        uid: context.auth.uid,
+        templateId,
+        rowCount,
+        byteLength: buffer.length,
+      });
+
+      return {
+        templateId,
+        fileName,
+        contentType: 'application/pdf',
+        pdfBase64: buffer.toString('base64'),
+      };
+    } catch (err) {
+      console.error('[generateTemplateDoc] Failed to generate template document', err);
+      if (err instanceof functions.https.HttpsError) {
+        throw err;
+      }
+      throw new functions.https.HttpsError(
+        'internal',
+        err?.message || 'Failed to generate template document.'
+      );
+    }
   });
 
 exports.deleteRetakeAttempt = callable.https.onCall(async (data, context) => {
