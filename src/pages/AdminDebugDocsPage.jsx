@@ -155,9 +155,14 @@ export default function AdminDebugDocsPage() {
               Generate, view, and delete standalone reference documents stored under the debug bucket.
             </p>
           </div>
-          <Button onClick={() => navigate('/admin')} variant="secondary" className="text-sm">
-            &larr; Back to Dashboard
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => navigate('/admin/template-studio')} variant="secondary" className="text-sm">
+              Open Document Studio
+            </Button>
+            <Button onClick={() => navigate('/admin')} variant="secondary" className="text-sm">
+              &larr; Back to Dashboard
+            </Button>
+          </div>
         </div>
 
         {errorMessage ? <div className="text-sm text-rose-600">{errorMessage}</div> : null}
