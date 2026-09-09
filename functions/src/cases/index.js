@@ -15,7 +15,7 @@ const {
   queuePoolReplenishmentJob,
   shouldQueuePoolReplenishment,
 } = require('./poolBackfill');
-const { evaluateDemoCaseEligibility, isCaseReadyForDemo } = require('../../../src/shared/demoCaseEligibility');
+const { evaluateDemoCaseEligibility, isCaseReadyForDemo } = require('../shared/demoCaseEligibility');
 const { sanitizeTemplateData } = require('./templateDocValidation');
 
 const ANSWER_TOLERANCE = 0.01;
