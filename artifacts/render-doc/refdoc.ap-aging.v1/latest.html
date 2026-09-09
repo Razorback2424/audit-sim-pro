@@ -1,0 +1,118 @@
+<!doctype html>
+<html><head><meta charset="utf-8" /><style>
+@page { size: Letter; margin: 0.6in; }
+html, body { margin: 0; padding: 0; }
+body { color: #111; font-family: "Times New Roman", Times, serif; }
+
+.page { width: 100%; }
+
+.header { text-align: center; margin-bottom: 24px; }
+.company { font-size: 20px; font-weight: 700; letter-spacing: 0.4px; }
+.title { font-size: 26px; font-weight: 700; margin-top: 6px; }
+.subtitle { font-size: 14px; margin-top: 4px; }
+
+.agingTable {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 12px;
+}
+
+.agingTable th,
+.agingTable td {
+  border: 1px solid #b6b6b6;
+  padding: 6px 8px;
+}
+
+.agingTable thead th {
+  background: #0f172a;
+  color: #ffffff;
+  font-weight: 700;
+  text-align: left;
+}
+
+.agingTable .num { text-align: right; }
+.agingTable tfoot td { font-weight: 700; }
+.agingTable tfoot .totalLabel { text-align: right; }
+</style></head><body>
+    <div class="page">
+      <div class="header">
+        <div class="company">Harbor Point Logistics, Inc.</div>
+        <div class="title">AP Aging Summary</div>
+        <div class="subtitle">As of 20X4-06-30</div>
+      </div>
+
+      <table class="agingTable" role="table" aria-label="AP aging summary">
+        <colgroup>
+          <col />
+          <col />
+          <col />
+          <col />
+          <col />
+          <col />
+          <col />
+          <col />
+          <col />
+        </colgroup>
+        <thead>
+          <tr>
+            <th>Vendor</th>
+            <th>Invoice #</th>
+            <th>Invoice Date</th>
+            <th>Due Date</th>
+            <th class="num">Amount</th>
+            <th class="num">Current</th>
+            <th class="num">1-30</th>
+            <th class="num">31-60</th>
+            <th class="num">90+</th>
+          </tr>
+        </thead>
+        <tbody>
+
+        <tr>
+          <td>Delta Freight Partners</td>
+          <td>DF-8812</td>
+          <td>20X4-06-14</td>
+          <td>20X4-07-14</td>
+          <td class="num">$22,400.00</td>
+          <td class="num">$22,400.00</td>
+          <td class="num">$0.00</td>
+          <td class="num">$0.00</td>
+          <td class="num">$0.00</td>
+        </tr>
+        <tr>
+          <td>Ironline Fabrication</td>
+          <td>IL-4417</td>
+          <td>20X4-05-20</td>
+          <td>20X4-06-19</td>
+          <td class="num">$8,150.40</td>
+          <td class="num">$0.00</td>
+          <td class="num">$8,150.40</td>
+          <td class="num">$0.00</td>
+          <td class="num">$0.00</td>
+        </tr>
+        <tr>
+          <td>Cascade Utilities Co-op</td>
+          <td>CU-0093</td>
+          <td>20X4-03-02</td>
+          <td>20X4-04-01</td>
+          <td class="num">$3,175.66</td>
+          <td class="num">$0.00</td>
+          <td class="num">$0.00</td>
+          <td class="num">$0.00</td>
+          <td class="num">$3,175.66</td>
+        </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <td colspan="4" class="totalLabel">Total</td>
+            <td class="num">$33,726.06</td>
+            <td class="num">$22,400.00</td>
+            <td class="num">$8,150.40</td>
+            <td class="num">$0.00</td>
+            <td class="num">$3,175.66</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </body></html>

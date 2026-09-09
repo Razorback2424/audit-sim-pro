@@ -1,5 +1,5 @@
 import React from 'react';
-import { Users, AlertTriangle, ClipboardList, FolderKanban, FileText, Inbox } from 'lucide-react';
+import { Users, AlertTriangle, ClipboardList, FolderKanban, FileText, FilePenLine, Inbox } from 'lucide-react';
 import { Button } from '../../AppCore';
 
 const ACTIONS = [
@@ -44,6 +44,13 @@ const ACTIONS = [
     description: 'Generate and review standalone reference docs.',
     icon: FileText,
     path: '/admin/debug-docs',
+  },
+  {
+    key: 'template-studio',
+    label: 'Document studio',
+    description: 'Author reference docs from template parameters.',
+    icon: FilePenLine,
+    path: '/admin/template-studio',
   },
 ];
 

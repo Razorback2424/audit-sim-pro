@@ -19,6 +19,7 @@ import AdminCaseManagementPage from './pages/AdminCaseManagementPage';
 import AdminCaseDataAuditPage from './pages/AdminCaseDataAuditPage';
 import AdminCaseProgressPage from './pages/AdminCaseProgressPage';
 import AdminDebugDocsPage from './pages/AdminDebugDocsPage';
+import AdminTemplateStudioPage from './pages/AdminTemplateStudioPage';
 import AdminEntitlementDebugPage from './pages/AdminEntitlementDebugPage';
 import AdminBetaDashboardPage from './pages/AdminBetaDashboardPage';
 import RecipeFormPage from './pages/RecipeFormPage';
@@ -86,6 +87,7 @@ export default function App() {
             <Route path="/admin/cases" element={<AdminCaseManagementPage />} />
             <Route path="/admin/case-data-audit" element={<AdminCaseDataAuditPage />} />
             <Route path="/admin/debug-docs" element={<AdminDebugDocsPage />} />
+            <Route path="/admin/template-studio" element={<AdminTemplateStudioPage />} />
             <Route path="/admin/entitlement-debug" element={<AdminEntitlementDebugPage />} />
             <Route path="/admin/user-management" element={<AdminUserManagementPage />} />
             <Route path="/admin/beta" element={<AdminBetaDashboardPage />} />
