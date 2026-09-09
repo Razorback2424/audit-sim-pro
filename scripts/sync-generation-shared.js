@@ -76,6 +76,16 @@ const main = () => {
     ],
   });
 
+  syncSharedFile({
+    sourceFile: 'templateFieldSpecs.js',
+    destFile: 'templateFieldSpecs.js',
+  });
+
+  syncSharedFile({
+    sourceFile: 'templateDataBuilder.js',
+    destFile: 'templateDataBuilder.js',
+  });
+
   syncRecipeDisplay();
 };
 
